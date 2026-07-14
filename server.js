@@ -49,9 +49,11 @@ DatabaseConnection(admin, "Admin");
 
 // Setup routes
 const userroute = require("./routes/user-auth-routes");
+const healthroute = require("./routes/health-routes");
 
 // Routes
 app.use(`${BASE_PATH}/api/auth`, userroute);
+app.use(`${BASE_PATH}`, healthroute);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
