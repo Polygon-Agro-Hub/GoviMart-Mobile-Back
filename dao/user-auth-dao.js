@@ -78,3 +78,146 @@ exports.loginUser = async (identifier, password) => {
     throw new Error(err.message);
   }
 };
+
+// Search Cities
+exports.searchCitiesDao = async (searchTerm) => {
+  try {
+    const sql = `
+      SELECT 
+        d.id,
+        d.city,
+        d.district,
+        d.province,
+        CASE WHEN MAX(c.id) IS NOT NULL THEN 1 ELSE 0 END AS isAvailable
+      FROM deliverycharge d
+      LEFT JOIN centerowncity c ON c.cityId = d.id
+      WHERE d.city LIKE ?
+      GROUP BY d.id, d.city, d.district, d.province
+      ORDER BY isAvailable DESC, d.city ASC
+      LIMIT 20
+    `;
+
+    const likeTerm = `%${searchTerm}%`;
+
+    const [results] = await db.collectionofficer.promise().query(sql, [likeTerm]);
+    return results.map(row => ({
+      id: row.id,
+      city: row.city,
+      district: row.district || "",
+      province: row.province || "",
+      isAvailable: row.isAvailable === 1 || row.isAvailable === true,
+    }));
+  } catch (err) {
+    console.error("Database error in searchCitiesDao:", err);
+    throw new Error("Database error while searching cities: " + err.message);
+  }
+};
+
+// Get All Cities
+exports.getAllCitiesDao = async () => {
+  try {
+    const sql = `
+      SELECT 
+        d.id,
+        d.city,
+        d.district,
+        d.province,
+        CASE WHEN MAX(c.id) IS NOT NULL THEN 1 ELSE 0 END AS isAvailable
+      FROM deliverycharge d
+      LEFT JOIN centerowncity c ON c.cityId = d.id
+      GROUP BY d.id, d.city, d.district, d.province
+      ORDER BY d.city ASC
+    `;
+
+    const [results] = await db.collectionofficer.promise().query(sql);
+    return results.map(row => ({
+      id: row.id,
+      city: row.city,
+      district: row.district || "",
+      province: row.province || "",
+      isAvailable: row.isAvailable === 1 || row.isAvailable === true,
+    }));
+  } catch (err) {
+    console.error("Database error in getAllCitiesDao:", err);
+    throw new Error("Database error while fetching all cities: " + err.message);
+  }
+};
+
+// Get Last Customer ID
+exports.getMarketPlaceUserLastCusIdDao = async () => {
+  try {
+    const sql = `
+      SELECT cusId
+      FROM marketplaceusers
+      WHERE cusId LIKE 'MAR-%'
+      ORDER BY CAST(SUBSTRING(cusId, 5) AS UNSIGNED) DESC
+      LIMIT 1
+    `;
+    const [results] = await db.marketPlace.promise().query(sql);
+    return results[0] ? results[0].cusId : null;
+  } catch (err) {
+    console.error("Database error in getMarketPlaceUserLastCusIdDao:", err);
+    throw err;
+  }
+};
+
+// Get User By Email
+exports.getUserByEmailDao = async (email) => {
+  try {
+    const sql = "SELECT * FROM marketplaceusers WHERE email = ?";
+    const [results] = await db.marketPlace.promise().query(sql, [email]);
+    return results[0] || null;
+  } catch (err) {
+    console.error("Database error in getUserByEmailDao:", err);
+    throw err;
+  }
+};
+
+// Sign Up User
+exports.signupUserDao = async (user, hashedPassword, nextId) => {
+  try {
+    const sql = `
+      INSERT INTO marketplaceusers 
+      (title, firstName, lastName, phoneCode, phoneNumber, phoneCode2, phoneNumber2, buyerType, email, password, isMarketPlaceUser, isSubscribe, companyName, companyPhoneCode, companyPhone, cusId, nearesCity) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const values = [
+      user.title,
+      user.firstName,
+      user.lastName,
+      user.phoneCode,
+      user.phoneNumber,
+      user.phoneCode2 || null,
+      user.phoneNumber2 || null,
+      user.buyerType,
+      user.email,
+      hashedPassword,
+      1,
+      user.agreeToMarketing ? 1 : 0,
+      user.companyName || null,
+      user.companyPhoneCode || null,
+      user.companyPhoneNumber || null,
+      nextId,
+      user.city || null,
+    ];
+
+    const [results] = await db.marketPlace.promise().query(sql, values);
+    
+    if (results.affectedRows === 1) {
+      return {
+        status: true,
+        message: "User registered successfully.",
+        data: { userId: results.insertId },
+      };
+    } else {
+      return {
+        status: false,
+        message: "User registration failed, no rows affected.",
+      };
+    }
+  } catch (err) {
+    console.error("Database error in signupUserDao:", err);
+    throw err;
+  }
+};

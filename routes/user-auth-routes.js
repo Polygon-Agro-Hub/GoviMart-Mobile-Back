@@ -38,4 +38,138 @@ const loginRateLimiter = require('../middlewares/rateLimiter.middleware');
  */
 router.post('/login', loginRateLimiter, userAuthEp.login);
 
+/**
+ * @openapi
+ * /api/auth/cities:
+ *   get:
+ *     tags:
+ *       - Auth
+ *     summary: Retrieve or search cities
+ *     description: Retrieve all cities sorted alphabetically or search for cities matching an optional query parameter 'q'.
+ *     security: []
+ *     parameters:
+ *       - in: query
+ *         name: q
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: Optional query term to search cities by name.
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved list of cities.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                         example: 1
+ *                       city:
+ *                         type: string
+ *                         example: "Colombo"
+ *                       district:
+ *                         type: string
+ *                         example: "Colombo"
+ *                       province:
+ *                         type: string
+ *                         example: "Western"
+ *                       isAvailable:
+ *                         type: boolean
+ *                         example: true
+ *       500:
+ *         description: Failed to retrieve cities.
+ */
+router.get('/cities', userAuthEp.getCities);
+
+/**
+ * @openapi
+ * /api/auth/signup:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Register a new Marketplace User
+ *     description: Create a new marketplace user profile for either Home (Retail) or Business (Wholesale) purchasing.
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - title
+ *               - firstName
+ *               - lastName
+ *               - phoneCode
+ *               - phoneNumber
+ *               - buyerType
+ *               - email
+ *               - password
+ *               - confirmPassword
+ *             properties:
+ *               title:
+ *                 type: string
+ *                 example: "Mr"
+ *               firstName:
+ *                 type: string
+ *                 example: "Daham"
+ *               lastName:
+ *                 type: string
+ *                 example: "Silva"
+ *               phoneCode:
+ *                 type: string
+ *                 example: "+94"
+ *               phoneNumber:
+ *                 type: string
+ *                 example: "770111999"
+ *               buyerType:
+ *                 type: string
+ *                 enum: [Retail, Wholesale]
+ *                 example: "Retail"
+ *               email:
+ *                 type: string
+ *                 example: "daham@gmail.com"
+ *               password:
+ *                 type: string
+ *                 example: "Password123!"
+ *               confirmPassword:
+ *                 type: string
+ *                 example: "Password123!"
+ *               agreeToMarketing:
+ *                 type: boolean
+ *                 example: true
+ *               agreeToTerms:
+ *                 type: boolean
+ *                 example: true
+ *               companyName:
+ *                 type: string
+ *                 example: "Daham Holdings"
+ *               companyPhoneCode:
+ *                 type: string
+ *                 example: "+94"
+ *               companyPhoneNumber:
+ *                 type: string
+ *                 example: "112345678"
+ *               city:
+ *                 type: string
+ *                 example: "Colombo"
+ *     responses:
+ *       201:
+ *         description: User registered successfully.
+ *       400:
+ *         description: Validation error or Email already in use.
+ *       500:
+ *         description: Database insertion issue or unexpected error.
+ */
+router.post('/signup', userAuthEp.userSignup);
+
 module.exports = router;
