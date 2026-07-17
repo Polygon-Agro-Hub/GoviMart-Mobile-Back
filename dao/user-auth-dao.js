@@ -221,3 +221,47 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
     throw err;
   }
 };
+
+exports.saveOtpDao = async (referenceId, email, otp, expiresAt) => {
+  try {
+    const sql = `
+      INSERT INTO resetpasswordtoken (userId, resetPasswordToken, otpCode, otpEmail, otpExpiresAt)
+      VALUES (NULL, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        otpCode = VALUES(otpCode),
+        otpEmail = VALUES(otpEmail),
+        otpExpiresAt = VALUES(otpExpiresAt)
+    `;
+    const [result] = await db.marketPlace.promise().query(sql, [referenceId, otp, email, expiresAt]);
+    return result;
+  } catch (err) {
+    console.error("Database error in saveOtpDao:", err);
+    throw err;
+  }
+};
+
+exports.getOtpDao = async (referenceId) => {
+  try {
+    const sql = `
+      SELECT otpCode AS otp, otpExpiresAt AS expiresAt, otpEmail AS otpEmail
+      FROM resetpasswordtoken
+      WHERE resetPasswordToken = ? LIMIT 1
+    `;
+    const [results] = await db.marketPlace.promise().query(sql, [referenceId]);
+    return results.length > 0 ? results[0] : null;
+  } catch (err) {
+    console.error("Database error in getOtpDao:", err);
+    throw err;
+  }
+};
+
+exports.deleteOtpDao = async (referenceId) => {
+  try {
+    const sql = "DELETE FROM resetpasswordtoken WHERE resetPasswordToken = ?";
+    const [result] = await db.marketPlace.promise().query(sql, [referenceId]);
+    return result;
+  } catch (err) {
+    console.error("Database error in deleteOtpDao:", err);
+    throw err;
+  }
+};

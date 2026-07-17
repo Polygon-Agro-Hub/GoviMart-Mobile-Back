@@ -172,4 +172,74 @@ router.get('/cities', userAuthEp.getCities);
  */
 router.post('/signup', userAuthEp.userSignup);
 
+/**
+ * @openapi
+ * /api/auth/verify-signup:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Verify OTP and complete sign up
+ *     description: Validate the sent 5-digit verification code and save the user to the database.
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - code
+ *               - referenceId
+ *               - signupToken
+ *             properties:
+ *               code:
+ *                 type: string
+ *                 example: "12345"
+ *               referenceId:
+ *                 type: string
+ *                 example: "a8f30c12-32b4-4062-85a2-c11c12d45ef7"
+ *               signupToken:
+ *                 type: string
+ *                 example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+ *     responses:
+ *       201:
+ *         description: User registered successfully.
+ *       400:
+ *         description: Verification failed or expired.
+ *       500:
+ *         description: Database or internal server error.
+ */
+router.post('/verify-signup', userAuthEp.verifySignup);
+
+/**
+ * @openapi
+ * /api/auth/resend-signup-otp:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Resend verification code
+ *     description: Decodes the signupToken to retrieve user signup information, sends a new OTP, and returns a new referenceId and signupToken.
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - signupToken
+ *             properties:
+ *               signupToken:
+ *                 type: string
+ *                 example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+ *     responses:
+ *       200:
+ *         description: Verification code resent successfully.
+ *       400:
+ *         description: Token invalid or expired.
+ *       500:
+ *         description: Internal server error.
+ */
+router.post('/resend-signup-otp', userAuthEp.resendSignupOtp);
+
 module.exports = router;

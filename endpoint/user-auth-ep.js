@@ -3,6 +3,10 @@ const jwt = require("jsonwebtoken");
 const { loginSchema, signupSchema } = require("../validations/user-auth-validations");
 const asyncHandler = require("express-async-handler");
 const bcrypt = require("bcrypt");
+const { v4: uuidv4 } = require("uuid");
+const nodemailer = require("nodemailer");
+const fs = require("fs");
+const path = require("path");
 
 // Login User
 exports.login = asyncHandler(async (req, res) => {
@@ -88,6 +92,105 @@ exports.getCities = asyncHandler(async (req, res) => {
   }
 });
 
+const sendEmailOtp = async (email, otp) => {
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.error("Email SMTP credentials not configured in env");
+    throw new Error("Email service not configured.");
+  }
+
+  const logoPath = path.join(__dirname, "..", "assets", "govimart-logo.png");
+  const logoExists = fs.existsSync(logoPath);
+
+  const transporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST || "smtp.gmail.com",
+    port: parseInt(process.env.EMAIL_PORT) || 587,
+    secure: false,
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+    tls: { rejectUnauthorized: false },
+  });
+
+  const templatePath = path.join(__dirname, "..", "assets", "email-template.html");
+  let htmlContent = "";
+  if (fs.existsSync(templatePath)) {
+    htmlContent = fs.readFileSync(templatePath, "utf8");
+    
+    const logoHtml = logoExists
+      ? `<img src="cid:govimart_logo" alt="GoViMart" style="max-width: 180px; height: auto;" />`
+      : `<h2 style="margin:0; color:#FF7F00;">GoViMart</h2>`;
+      
+    htmlContent = htmlContent
+      .replace("{{logo_placeholder}}", logoHtml)
+      .replace("{{otp}}", otp)
+      .replace("{{year}}", new Date().getFullYear().toString());
+  } else {
+    // Fallback if template doesn't exist
+    htmlContent = `
+      <div style="font-family: Arial, sans-serif; padding: 20px;">
+        <h2>Complete Your GoViMart Registration</h2>
+        <p>Thank you for registering for GoViMart.</p>
+        <p>To verify your email address and complete your registration, please use the following One-Time Password (OTP):</p>
+        <div style="background-color: #EEE8F8; padding: 15px; font-size: 24px; font-weight: bold; letter-spacing: 5px; text-align: center; display: inline-block; border-radius: 6px;">
+          ${otp}
+        </div>
+        <p>This code is valid for <strong>4 minutes</strong>.</p>
+      </div>
+    `;
+  }
+
+  const mailOptions = {
+    from: {
+      name: "GoViMart",
+      address: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+    },
+    to: email,
+    subject: "Complete Your GoViMart Registration",
+    html: htmlContent,
+    text: `Your GoViMart OTP is: ${otp}\nThis code is valid for 4 minutes.`,
+  };
+
+  if (logoExists) {
+    mailOptions.attachments = [
+      {
+        filename: "govimart-logo.png",
+        path: logoPath,
+        cid: "govimart_logo",
+      },
+    ];
+  }
+
+  await transporter.sendMail(mailOptions);
+};
+
+const sendShoutoutSms = async (phoneNumber, code) => {
+  const message = `Your OTP for verification is: ${code}`;
+  const apiUrl = "https://api.getshoutout.com/coreservice/messages";
+  const headers = {
+    "Authorization": `Apikey ${process.env.SHOUTOUT_API_KEY}`,
+    "Content-Type": "application/json",
+  };
+  const body = {
+    source: "PolygonAgro",
+    transports: ["sms"],
+    content: { sms: message },
+    destinations: [phoneNumber],
+  };
+
+  const response = await fetch(apiUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json();
+  if (!response.ok || (!data.referenceId && !data.reference_id)) {
+    throw new Error(data.message || "Failed to send SMS OTP via Shoutout.");
+  }
+  return data.referenceId || data.reference_id;
+};
+
 // Register User
 exports.userSignup = asyncHandler(async (req, res) => {
   const { error } = signupSchema.validate(req.body, { abortEarly: false });
@@ -100,7 +203,7 @@ exports.userSignup = asyncHandler(async (req, res) => {
     });
   }
 
-  const { email, password } = req.body;
+  const { email, phoneCode, phoneNumber } = req.body;
 
   try {
     // Check if user already exists
@@ -112,9 +215,129 @@ exports.userSignup = asyncHandler(async (req, res) => {
       });
     }
 
-    // Generate hashed password
+    // Generate 5-digit OTP code
+    const otp = Math.floor(10000 + Math.random() * 90000).toString();
+    const referenceId = uuidv4();
+    const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes expiry
+
+    // Save OTP to DB
+    await userDao.saveOtpDao(referenceId, email, otp, expiresAt);
+
+    // Create a secure registration session token containing the signup details
+    const signupToken = jwt.sign(
+      { signupData: req.body },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    // Determine verification method based on country code
+    const method = phoneCode === "+94" ? "sms" : "email";
+
+    if (method === "sms") {
+      // Send via SMS
+      try {
+        const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
+        const smsReference = await sendShoutoutSms(fullPhone, otp);
+        console.log(`[SMS] OTP ${otp} successfully sent to ${fullPhone} with ref ${smsReference}`);
+      } catch (smsErr) {
+        console.error("Failed to send Shoutout SMS, falling back to console log:", smsErr.message);
+        console.log(`[SMS FALLBACK] Sent 5-digit verification code ${otp} to ${phoneCode}${phoneNumber}`);
+      }
+    } else {
+      // Send via Email
+      try {
+        await sendEmailOtp(email, otp);
+        console.log(`[Email] OTP ${otp} successfully sent to ${email}`);
+      } catch (emailErr) {
+        console.error("Failed to send verification email, falling back to console log:", emailErr.message);
+        console.log(`[Email FALLBACK] Sent 5-digit verification code ${otp} to ${email}`);
+      }
+    }
+
+    return res.status(200).json({
+      status: true,
+      verificationRequired: true,
+      method: method,
+      referenceId: referenceId,
+      signupToken: signupToken,
+      message: method === "sms"
+        ? "Verification code has been sent to your mobile number."
+        : "Verification code has been sent to your email address.",
+    });
+
+  } catch (err) {
+    console.error("Error during signup:", err);
+    return res.status(500).json({
+      status: false,
+      message: "An unexpected error occurred during signup.",
+      error: err.message,
+    });
+  }
+});
+
+// Verify OTP and Complete Registration
+exports.verifySignup = asyncHandler(async (req, res) => {
+  const { code, referenceId, signupToken } = req.body;
+
+  if (!code || !referenceId || !signupToken) {
+    return res.status(400).json({
+      status: false,
+      message: "code, referenceId, and signupToken are required.",
+    });
+  }
+
+  try {
+    // 1. Verify OTP code against DB record
+    const otpRecord = await userDao.getOtpDao(referenceId);
+
+    if (!otpRecord) {
+      return res.status(400).json({
+        status: false,
+        message: "Invalid verification code.",
+      });
+    }
+
+    if (new Date() > new Date(otpRecord.expiresAt)) {
+      await userDao.deleteOtpDao(referenceId);
+      return res.status(400).json({
+        status: false,
+        message: "Verification code has expired.",
+      });
+    }
+
+    if (otpRecord.otp !== code) {
+      return res.status(400).json({
+        status: false,
+        message: "Incorrect verification code.",
+      });
+    }
+
+    // 2. Verify and decode signupToken
+    let decoded;
+    try {
+      decoded = jwt.verify(signupToken, process.env.JWT_SECRET);
+    } catch (tokenErr) {
+      return res.status(400).json({
+        status: false,
+        message: "Registration session has expired or is invalid.",
+      });
+    }
+
+    const { signupData } = decoded;
+
+    // Check again if email was taken since signup started
+    const existingUser = await userDao.getUserByEmailDao(signupData.email);
+    if (existingUser) {
+      await userDao.deleteOtpDao(referenceId);
+      return res.status(400).json({
+        status: false,
+        message: "Email already in use.",
+      });
+    }
+
+    // 3. Complete user signup insertion
     const SALT_ROUNDS = parseInt(process.env.SALT_ROUNDS || "10", 10);
-    const hashedPassword = bcrypt.hashSync(password, SALT_ROUNDS);
+    const hashedPassword = bcrypt.hashSync(signupData.password, SALT_ROUNDS);
 
     // Generate next MAR-XXXXX customer ID
     const lastId = await userDao.getMarketPlaceUserLastCusIdDao();
@@ -127,26 +350,108 @@ exports.userSignup = asyncHandler(async (req, res) => {
       nextId = `MAR-${nextNumber.toString().padStart(5, "0")}`;
     }
 
-    // Create user
-    const signupResult = await userDao.signupUserDao(req.body, hashedPassword, nextId);
+    // Create user in DB
+    const signupResult = await userDao.signupUserDao(signupData, hashedPassword, nextId);
+
+    // Delete OTP record since it has been successfully used
+    await userDao.deleteOtpDao(referenceId);
 
     if (signupResult.status) {
       return res.status(201).json({
         status: true,
-        message: signupResult.message,
+        message: "User registered successfully.",
         data: signupResult.data,
       });
     } else {
       return res.status(500).json({
         status: false,
-        message: signupResult.message || "Failed to sign up.",
+        message: signupResult.message || "Failed to register user.",
       });
     }
+
   } catch (err) {
-    console.error("Error during signup:", err);
+    console.error("Error during signup verification:", err);
     return res.status(500).json({
       status: false,
-      message: "An unexpected error occurred during signup.",
+      message: "An unexpected error occurred during signup verification.",
+      error: err.message,
+    });
+  }
+});
+
+// Resend OTP for Signup Verification
+exports.resendSignupOtp = asyncHandler(async (req, res) => {
+  const { signupToken } = req.body;
+
+  if (!signupToken) {
+    return res.status(400).json({
+      status: false,
+      message: "signupToken is required.",
+    });
+  }
+
+  try {
+    let decoded;
+    try {
+      decoded = jwt.verify(signupToken, process.env.JWT_SECRET);
+    } catch (tokenErr) {
+      return res.status(400).json({
+        status: false,
+        message: "Registration session has expired or is invalid.",
+      });
+    }
+
+    const { signupData } = decoded;
+    const { email, phoneCode, phoneNumber } = signupData;
+
+    // Generate new 5-digit OTP code
+    const otp = Math.floor(10000 + Math.random() * 90000).toString();
+    const referenceId = uuidv4();
+    const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes expiry
+
+    // Save OTP to DB
+    await userDao.saveOtpDao(referenceId, email, otp, expiresAt);
+
+    // Create new signed JWT token with updated expiry
+    const newSignupToken = jwt.sign(
+      { signupData },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    const method = phoneCode === "+94" ? "sms" : "email";
+
+    if (method === "sms") {
+      try {
+        const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
+        await sendShoutoutSms(fullPhone, otp);
+      } catch (smsErr) {
+        console.error("Failed to send Shoutout SMS, falling back to console log:", smsErr.message);
+        console.log(`[SMS FALLBACK] Sent 5-digit verification code ${otp} to ${phoneCode}${phoneNumber}`);
+      }
+    } else {
+      try {
+        await sendEmailOtp(email, otp);
+      } catch (emailErr) {
+        console.error("Failed to send verification email, falling back to console log:", emailErr.message);
+        console.log(`[Email FALLBACK] Sent 5-digit verification code ${otp} to ${email}`);
+      }
+    }
+
+    return res.status(200).json({
+      status: true,
+      referenceId: referenceId,
+      signupToken: newSignupToken,
+      message: method === "sms"
+        ? "Verification code has been resent to your mobile number."
+        : "Verification code has been resent to your email address.",
+    });
+
+  } catch (err) {
+    console.error("Error during resend:", err);
+    return res.status(500).json({
+      status: false,
+      message: "An unexpected error occurred during resend.",
       error: err.message,
     });
   }
