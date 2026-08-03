@@ -37,7 +37,9 @@ exports.loginUser = async (identifier, password) => {
         phoneNumber, 
         password, 
         image, 
-        isMarketPlaceUser
+        isMarketPlaceUser,
+        firstTimeUser,
+        buyerType
       FROM marketplaceusers
       WHERE (email = ? 
         OR phoneNumber = ? 
@@ -73,6 +75,8 @@ exports.loginUser = async (identifier, password) => {
       email: user.email,
       phoneNumber: user.phoneNumber,
       image: user.image,
+      firstTimeUser: user.firstTimeUser,
+      buyerType: user.buyerType,
     };
   } catch (err) {
     throw new Error(err.message);

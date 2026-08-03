@@ -58,6 +58,8 @@ exports.login = asyncHandler(async (req, res) => {
         email: result.email,
         phoneNumber: result.phoneNumber,
         image: result.image,
+        firstTimeUser: result.firstTimeUser,
+        buyerType: result.buyerType,
       },
     });
   } catch (err) {

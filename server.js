@@ -50,6 +50,8 @@ DatabaseConnection(admin, "Admin");
 // Setup routes
 const userroute = require("./routes/user-auth-routes");
 const healthroute = require("./routes/health-routes");
+const customerroute = require("./routes/customer-routes");
+const homeroute = require("./routes/home-routes");
 
 // Routes
 app.use(`${BASE_PATH}/test`, (req, res) => {
@@ -57,6 +59,8 @@ app.use(`${BASE_PATH}/test`, (req, res) => {
 });
 
 app.use(`${BASE_PATH}/api/auth`, userroute);
+app.use(`${BASE_PATH}/api/customer`, customerroute);
+app.use(`${BASE_PATH}/api/home`, homeroute);
 app.use(`${BASE_PATH}`, healthroute);
 
 
