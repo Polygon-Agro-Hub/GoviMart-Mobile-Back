@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const userAuthEp = require('../endpoint/user-auth-ep');
 const loginRateLimiter = require('../middlewares/rateLimiter.middleware');
+const authMiddleware = require('../middlewares/auth.middleware');
 
 /**
  * @openapi
@@ -241,5 +242,42 @@ router.post('/verify-signup', userAuthEp.verifySignup);
  *         description: Internal server error.
  */
 router.post('/resend-signup-otp', userAuthEp.resendSignupOtp);
+
+/**
+ * @openapi
+ * /api/auth/update-password:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Update User Password
+ *     description: Update the dashboard user's password and flag it as updated.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - currentPassword
+ *               - newPassword
+ *               - confirmNewPassword
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *               newPassword:
+ *                 type: string
+ *               confirmNewPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Password updated successfully.
+ *       400:
+ *         description: Validation or match error.
+ *       401:
+ *         description: Unauthorized.
+ */
+router.post('/update-password', authMiddleware, userAuthEp.updatePassword);
 
 module.exports = router;

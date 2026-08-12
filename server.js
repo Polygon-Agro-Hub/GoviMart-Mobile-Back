@@ -11,7 +11,7 @@ const {
 
 const app = express();
 
-const BASE_PATH = "/govimart";
+const BASE_PATH = "/polygon";
 
 const corsOptions = {
   origin: process.env.CLIENT_ORIGIN || "http://localhost:8081",
