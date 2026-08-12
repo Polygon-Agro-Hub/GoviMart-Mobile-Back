@@ -11,7 +11,7 @@ const {
 
 const app = express();
 
-const BASE_PATH = "/govimart";
+const BASE_PATH = "/polygon";
 
 const corsOptions = {
   origin: process.env.CLIENT_ORIGIN || "http://localhost:8081",
@@ -50,10 +50,19 @@ DatabaseConnection(admin, "Admin");
 // Setup routes
 const userroute = require("./routes/user-auth-routes");
 const healthroute = require("./routes/health-routes");
+const customerroute = require("./routes/customer-routes");
+const homeroute = require("./routes/home-routes");
 
 // Routes
+app.use(`${BASE_PATH}/test`, (req, res) => {
+  res.send("Server is running!");
+});
+
 app.use(`${BASE_PATH}/api/auth`, userroute);
+app.use(`${BASE_PATH}/api/customer`, customerroute);
+app.use(`${BASE_PATH}/api/home`, homeroute);
 app.use(`${BASE_PATH}`, healthroute);
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {

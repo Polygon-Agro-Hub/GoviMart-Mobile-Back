@@ -36,14 +36,19 @@ exports.loginUser = async (identifier, password) => {
         email, 
         phoneNumber, 
         password, 
+        nic,
         image, 
-        isMarketPlaceUser
+        isMarketPlaceUser,
+        firstTimeUser,
+        buyerType,
+        isDashUser,
+        isPswUpdateed
       FROM marketplaceusers
       WHERE (email = ? 
         OR phoneNumber = ? 
         OR phoneNumber = ? 
         OR phoneNumber = ?)
-        AND isMarketPlaceUser = 1
+        AND (isMarketPlaceUser = 1 OR isDashUser = 1)
     `;
 
     const [results] = await db.marketPlace.promise().query(sql, [
@@ -59,7 +64,22 @@ exports.loginUser = async (identifier, password) => {
 
     const user = results[0];
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    let isPasswordValid = false;
+    try {
+      if (user.password) {
+        isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid && /^[0-9]{9}[vVxX]$/.test(password)) {
+          isPasswordValid = await bcrypt.compare(password.toUpperCase(), user.password);
+        }
+      }
+    } catch (e) {
+      // Ignored
+    }
+
+    // Fallback: Plain-text password check
+    if (!isPasswordValid && password === user.password) {
+      isPasswordValid = true;
+    }
 
     if (!isPasswordValid) {
       throw new Error("Invalid mobile number/email or password");
@@ -73,6 +93,10 @@ exports.loginUser = async (identifier, password) => {
       email: user.email,
       phoneNumber: user.phoneNumber,
       image: user.image,
+      firstTimeUser: user.firstTimeUser,
+      buyerType: user.buyerType,
+      isDashUser: user.isDashUser,
+      isPswUpdateed: user.isPswUpdateed,
     };
   } catch (err) {
     throw new Error(err.message);
@@ -178,8 +202,8 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
   try {
     const sql = `
       INSERT INTO marketplaceusers 
-      (title, firstName, lastName, phoneCode, phoneNumber, phoneCode2, phoneNumber2, buyerType, email, password, isMarketPlaceUser, isSubscribe, companyName, companyPhoneCode, companyPhone, cusId, nearesCity) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (title, firstName, lastName, phoneCode, phoneNumber, phoneCode2, phoneNumber2, buyerType, email, nic, password, isMarketPlaceUser, isSubscribe, companyName, companyPhoneCode, companyPhone, cusId, nearesCity) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const values = [
@@ -192,6 +216,7 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
       user.phoneNumber2 || null,
       user.buyerType,
       user.email,
+      user.nic,
       hashedPassword,
       1,
       user.agreeToMarketing ? 1 : 0,
@@ -262,6 +287,28 @@ exports.deleteOtpDao = async (referenceId) => {
     return result;
   } catch (err) {
     console.error("Database error in deleteOtpDao:", err);
+    throw err;
+  }
+};
+
+exports.getUserPasswordByIdDao = async (userId) => {
+  try {
+    const sql = "SELECT id, password, nic FROM marketplaceusers WHERE id = ? LIMIT 1";
+    const [results] = await db.marketPlace.promise().query(sql, [userId]);
+    return results[0] || null;
+  } catch (err) {
+    console.error("Database error in getUserPasswordByIdDao:", err);
+    throw err;
+  }
+};
+
+exports.updatePasswordDao = async (userId, hashedPassword) => {
+  try {
+    const sql = "UPDATE marketplaceusers SET password = ?, isPswUpdateed = 1 WHERE id = ?";
+    const [result] = await db.marketPlace.promise().query(sql, [hashedPassword, userId]);
+    return result.affectedRows === 1;
+  } catch (err) {
+    console.error("Database error in updatePasswordDao:", err);
     throw err;
   }
 };
