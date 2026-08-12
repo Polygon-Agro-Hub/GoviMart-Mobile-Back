@@ -182,8 +182,8 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
   try {
     const sql = `
       INSERT INTO marketplaceusers 
-      (title, firstName, lastName, phoneCode, phoneNumber, phoneCode2, phoneNumber2, buyerType, email, password, isMarketPlaceUser, isSubscribe, companyName, companyPhoneCode, companyPhone, cusId, nearesCity) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (title, firstName, lastName, phoneCode, phoneNumber, phoneCode2, phoneNumber2, buyerType, email, nic, password, isMarketPlaceUser, isSubscribe, companyName, companyPhoneCode, companyPhone, cusId, nearesCity) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const values = [
@@ -196,6 +196,7 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
       user.phoneNumber2 || null,
       user.buyerType,
       user.email,
+      user.nic,
       hashedPassword,
       1,
       user.agreeToMarketing ? 1 : 0,
