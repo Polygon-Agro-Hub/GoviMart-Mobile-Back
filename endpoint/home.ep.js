@@ -1,4 +1,4 @@
-const homeDao = require("../dao/home-dao");
+const homeDao = require("../dao/home.dao");
 
 exports.getAllSlides = async (req, res) => {
   try {

@@ -1,4 +1,4 @@
-const customerDao = require("../dao/customer-dao");
+const customerDao = require("../dao/customer.dao");
 
 exports.getCustomerProfile = async (req, res) => {
   try {
