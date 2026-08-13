@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const authMiddleware = require("../middlewares/auth.middleware");
-const customerEp = require("../endpoint/customer-ep");
+const customerEp = require("../endpoint/customer.ep");
 
 // Get customer profile info
 router.get("/profile", authMiddleware, customerEp.getCustomerProfile);
@@ -29,5 +29,19 @@ router.post("/marketplace/delete-excluded", authMiddleware, customerEp.deleteExc
 
 // Update firstTimeUser status
 router.post("/update-user-status", authMiddleware, customerEp.updateUserStatus);
+
+// Get User Account Details with Credit Balance
+
+// Get User Saved All Addresses
+
+// Add User Address
+
+// Update User Address
+
+// Delete User Address
+
+// Update User Details
+
+// Delete User Account
 
 module.exports = router;

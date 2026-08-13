@@ -1,6 +1,6 @@
-const userDao = require("../dao/user-auth-dao");
+const userDao = require("../dao/auth.dao");
 const jwt = require("jsonwebtoken");
-const { loginSchema, signupSchema } = require("../validations/user-auth-validations");
+const { loginSchema, signupSchema } = require("../validations/auth.validations");
 const asyncHandler = require("express-async-handler");
 const bcrypt = require("bcrypt");
 const { v4: uuidv4 } = require("uuid");

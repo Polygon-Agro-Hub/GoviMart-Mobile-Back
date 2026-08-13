@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const userAuthEp = require('../endpoint/user-auth-ep');
-const loginRateLimiter = require('../middlewares/rateLimiter.middleware');
+const userAuthEp = require('../endpoint/auth.ep');
+const loginRateLimiter = require('../middlewares/ratelimiter.middleware');
 const authMiddleware = require('../middlewares/auth.middleware');
 
 /**
