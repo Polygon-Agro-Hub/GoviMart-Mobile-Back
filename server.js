@@ -53,10 +53,12 @@ const userroute = require("./routes/auth.routes");
 const healthroute = require("./routes/health.routes");
 const customerroute = require("./routes/customer.routes");
 const homeroute = require("./routes/home.routes");
+const complaintroute = require("./routes/complaint.routes");
 
 app.use(`${BASE_PATH}/api/auth`, userroute);
 app.use(`${BASE_PATH}/api/customer`, customerroute);
 app.use(`${BASE_PATH}/api/home`, homeroute);
+app.use(`${BASE_PATH}/api/complaint`, complaintroute);
 app.use(`${BASE_PATH}`, healthroute);
 
 
