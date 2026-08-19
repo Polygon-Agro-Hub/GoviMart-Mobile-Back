@@ -1,4 +1,8 @@
 const customerDao = require("../dao/customer.dao");
+const authDao = require("../dao/auth.dao");
+const userAuthEp = require("./auth.ep");
+const jwt = require("jsonwebtoken");
+const { v4: uuidv4 } = require("uuid");
 
 exports.getCustomerProfile = async (req, res) => {
   try {
@@ -324,6 +328,191 @@ exports.deleteUserAccount = async (req, res) => {
       .json({ status: true, message: "Account deleted successfully" });
   } catch (error) {
     console.error("Delete account error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
+// ---------- Send OTP to verify a new phone number ----------
+exports.sendPhoneChangeOtp = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { phoneCode, phoneNumber } = req.body;
+
+    if (!phoneCode || !phoneNumber) {
+      return res
+        .status(400)
+        .json({ status: false, message: "phoneCode and phoneNumber are required." });
+    }
+
+    const normalizedPhone = String(phoneNumber).replace(/[^0-9]/g, "");
+    if (normalizedPhone.length < 9 || normalizedPhone.length > 10) {
+      return res
+        .status(400)
+        .json({ status: false, message: "Invalid phone number." });
+    }
+
+    // Reject numbers already used by another account
+    const taken = await customerDao.isPhoneTakenDao(userId, normalizedPhone);
+    if (taken) {
+      return res.status(400).json({
+        status: false,
+        message: "This phone number is already in use by another account.",
+      });
+    }
+
+    // Generate 5-digit OTP
+    const otp = Math.floor(10000 + Math.random() * 90000).toString();
+    const referenceId = uuidv4();
+    const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes
+
+    await authDao.saveOtpDao(referenceId, req.user.email || null, otp, expiresAt);
+
+    // Stateless session token carrying the intended new phone
+    const phoneChangeToken = jwt.sign(
+      { userId, phoneCode, phoneNumber: normalizedPhone },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    const method = "sms";
+    try {
+      const fullPhone = `${phoneCode}${normalizedPhone}`
+        .replace(/\+/g, "")
+        .replace(/\s+/g, "");
+      await userAuthEp.sendShoutoutSms(fullPhone, otp);
+      console.log(`[SMS] Phone change OTP ${otp} sent to ${fullPhone}`);
+    } catch (smsErr) {
+      console.error("Failed to send Shoutout SMS, falling back to console log:", smsErr.message);
+      console.log(`[SMS FALLBACK] Sent 5-digit verification code ${otp} to ${phoneCode}${normalizedPhone}`);
+    }
+
+    return res.status(200).json({
+      status: true,
+      method,
+      referenceId,
+      signupToken: phoneChangeToken,
+      message: "Verification code has been sent to your new mobile number.",
+    });
+  } catch (error) {
+    console.error("Send phone change OTP error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
+// ---------- Verify phone change OTP and update the number ----------
+exports.verifyPhoneChange = async (req, res) => {
+  try {
+    const { code, referenceId, signupToken, accountDetails } = req.body;
+
+    if (!code || !referenceId || !signupToken) {
+      return res.status(400).json({
+        status: false,
+        message: "code, referenceId and signupToken are required.",
+      });
+    }
+
+    const otpRecord = await authDao.getOtpDao(referenceId);
+    if (!otpRecord) {
+      return res.status(400).json({ status: false, message: "Invalid verification code." });
+    }
+    if (new Date() > new Date(otpRecord.expiresAt)) {
+      await authDao.deleteOtpDao(referenceId);
+      return res.status(400).json({ status: false, message: "Verification code has expired." });
+    }
+    if (otpRecord.otp !== code) {
+      return res.status(400).json({ status: false, message: "Incorrect verification code." });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(signupToken, process.env.JWT_SECRET);
+    } catch (tokenErr) {
+      return res.status(400).json({
+        status: false,
+        message: "Verification session has expired or is invalid.",
+      });
+    }
+
+    const { userId, phoneCode, phoneNumber } = decoded;
+
+    const updateResult = await customerDao.updateUserPhoneDao(
+      userId,
+      phoneCode,
+      phoneNumber
+    );
+    if (!updateResult || updateResult.affectedRows === 0) {
+      return res.status(404).json({ status: false, message: "User not found." });
+    }
+
+    // Apply the rest of the edited account details (name, email, company, etc.)
+    if (accountDetails && typeof accountDetails === "object") {
+      await customerDao.updateUserDetailsDao(userId, accountDetails);
+    }
+
+    await authDao.deleteOtpDao(referenceId);
+
+    return res.status(200).json({
+      status: true,
+      message: "Your mobile number has been updated successfully.",
+    });
+  } catch (error) {
+    console.error("Verify phone change error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
+// ---------- Resend phone change OTP ----------
+exports.resendPhoneChangeOtp = async (req, res) => {
+  try {
+    const { signupToken } = req.body;
+
+    if (!signupToken) {
+      return res.status(400).json({ status: false, message: "signupToken is required." });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(signupToken, process.env.JWT_SECRET);
+    } catch (tokenErr) {
+      return res.status(400).json({
+        status: false,
+        message: "Verification session has expired or is invalid.",
+      });
+    }
+
+    const { userId, phoneCode, phoneNumber } = decoded;
+
+    const otp = Math.floor(10000 + Math.random() * 90000).toString();
+    const referenceId = uuidv4();
+    const expiresAt = new Date(Date.now() + 4 * 60 * 1000);
+
+    await authDao.saveOtpDao(referenceId, req.user?.email || null, otp, expiresAt);
+
+    const newSignupToken = jwt.sign(
+      { userId, phoneCode, phoneNumber },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    try {
+      const fullPhone = `${phoneCode}${phoneNumber}`
+        .replace(/\+/g, "")
+        .replace(/\s+/g, "");
+      await userAuthEp.sendShoutoutSms(fullPhone, otp);
+      console.log(`[SMS] Phone change OTP ${otp} resent to ${fullPhone}`);
+    } catch (smsErr) {
+      console.error("Failed to send Shoutout SMS, falling back to console log:", smsErr.message);
+      console.log(`[SMS FALLBACK] Sent 5-digit verification code ${otp} to ${phoneCode}${phoneNumber}`);
+    }
+
+    return res.status(200).json({
+      status: true,
+      referenceId,
+      signupToken: newSignupToken,
+      message: "Verification code has been resent to your new mobile number.",
+    });
+  } catch (error) {
+    console.error("Resend phone change OTP error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 };

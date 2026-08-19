@@ -51,4 +51,13 @@ router.put("/update-details", authMiddleware, customerEp.updateUserDetails);
 // Delete User Account
 router.delete("/delete-account", authMiddleware, customerEp.deleteUserAccount);
 
+// Send OTP to verify a new phone number
+router.post("/send-phone-change-otp", authMiddleware, customerEp.sendPhoneChangeOtp);
+
+// Verify phone change OTP and update the number
+router.post("/verify-phone-change-otp", authMiddleware, customerEp.verifyPhoneChange);
+
+// Resend phone change OTP
+router.post("/resend-phone-change-otp", authMiddleware, customerEp.resendPhoneChangeOtp);
+
 module.exports = router;

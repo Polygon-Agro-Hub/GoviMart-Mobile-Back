@@ -244,6 +244,7 @@ exports.addAddressDao = async (customerId, addressData) => {
     buildingType,
     saveAs,
     title,
+    fullName,
     phonecode1,
     phone1,
     phonecode2,
@@ -274,6 +275,7 @@ exports.addAddressDao = async (customerId, addressData) => {
         customerId,
         saveAs,
         title,
+        fullName,
         phonecode1,
         phone1,
         phonecode2,
@@ -305,6 +307,7 @@ exports.addAddressDao = async (customerId, addressData) => {
       customerId,
       saveAs,
       title,
+      fullName,
       phonecode1,
       phone1,
       phonecode2,
@@ -353,6 +356,7 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
       .query(query, [
         saveAs,
         title,
+        fullName,
         phonecode1,
         phone1,
         phonecode2,
@@ -459,5 +463,27 @@ exports.updateUserDetailsDao = async (userId, userData) => {
 exports.deleteUserAccountDao = async (userId) => {
   const query = `DELETE FROM marketplaceusers WHERE id = ?`;
   const [result] = await db.marketPlace.promise().query(query, [userId]);
+  return result;
+};
+
+// Check if a phone number already belongs to another user
+exports.isPhoneTakenDao = async (userId, phoneNumber) => {
+  const query = `
+    SELECT id FROM marketplaceusers
+    WHERE phoneNumber = ? AND id != ?
+    LIMIT 1
+  `;
+  const [results] = await db.marketPlace.promise().query(query, [phoneNumber, userId]);
+  return results.length > 0;
+};
+
+// Update only the user's phone number (after OTP verification)
+exports.updateUserPhoneDao = async (userId, phoneCode, phoneNumber) => {
+  const query = `
+    UPDATE marketplaceusers
+    SET phoneCode = ?, phoneNumber = ?
+    WHERE id = ?
+  `;
+  const [result] = await db.marketPlace.promise().query(query, [phoneCode, phoneNumber, userId]);
   return result;
 };

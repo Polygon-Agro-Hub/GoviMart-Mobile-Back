@@ -548,3 +548,7 @@ exports.updatePassword = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// Exported OTP delivery helpers (reused by customer phone-change flow)
+exports.sendEmailOtp = sendEmailOtp;
+exports.sendShoutoutSms = sendShoutoutSms;
