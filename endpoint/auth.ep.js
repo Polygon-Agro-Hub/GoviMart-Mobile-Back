@@ -1,6 +1,6 @@
-const userDao = require("../dao/user-auth-dao");
+const userDao = require("../dao/auth.dao");
 const jwt = require("jsonwebtoken");
-const { loginSchema, signupSchema } = require("../validations/user-auth-validations");
+const { loginSchema, signupSchema } = require("../validations/auth.validations");
 const asyncHandler = require("express-async-handler");
 const bcrypt = require("bcrypt");
 const { v4: uuidv4 } = require("uuid");
@@ -60,6 +60,8 @@ exports.login = asyncHandler(async (req, res) => {
         image: result.image,
         firstTimeUser: result.firstTimeUser,
         buyerType: result.buyerType,
+        isDashUser: result.isDashUser,
+        isPswUpdated: result.isPswUpdateed,
       },
     });
   } catch (err) {
@@ -100,7 +102,7 @@ const sendEmailOtp = async (email, otp) => {
     throw new Error("Email service not configured.");
   }
 
-  const logoPath = path.join(__dirname, "..", "assets", "govimart-logo.png");
+  const logoPath = path.join(__dirname, "..", "assets", "polygon-logo.png");
   const logoExists = fs.existsSync(logoPath);
 
   const transporter = nodemailer.createTransport({
@@ -120,8 +122,8 @@ const sendEmailOtp = async (email, otp) => {
     htmlContent = fs.readFileSync(templatePath, "utf8");
     
     const logoHtml = logoExists
-      ? `<img src="cid:govimart_logo" alt="GoViMart" style="max-width: 180px; height: auto;" />`
-      : `<h2 style="margin:0; color:#FF7F00;">GoViMart</h2>`;
+      ? `<img src="cid:polygon_logo" alt="Polygon" style="max-width: 180px; height: auto;" />`
+      : `<h2 style="margin:0; color:#FF7F00;">Polygon</h2>`;
       
     htmlContent = htmlContent
       .replace("{{logo_placeholder}}", logoHtml)
@@ -131,8 +133,8 @@ const sendEmailOtp = async (email, otp) => {
     // Fallback if template doesn't exist
     htmlContent = `
       <div style="font-family: Arial, sans-serif; padding: 20px;">
-        <h2>Complete Your GoViMart Registration</h2>
-        <p>Thank you for registering for GoViMart.</p>
+        <h2>Complete Your Polygon Registration</h2>
+        <p>Thank you for registering for Polygon.</p>
         <p>To verify your email address and complete your registration, please use the following One-Time Password (OTP):</p>
         <div style="background-color: #EEE8F8; padding: 15px; font-size: 24px; font-weight: bold; letter-spacing: 5px; text-align: center; display: inline-block; border-radius: 6px;">
           ${otp}
@@ -144,21 +146,21 @@ const sendEmailOtp = async (email, otp) => {
 
   const mailOptions = {
     from: {
-      name: "GoViMart",
+      name: "Polygon",
       address: process.env.EMAIL_FROM || process.env.EMAIL_USER,
     },
     to: email,
-    subject: "Complete Your GoViMart Registration",
+    subject: "Complete Your Polygon Registration",
     html: htmlContent,
-    text: `Your GoViMart OTP is: ${otp}\nThis code is valid for 4 minutes.`,
+    text: `Your Polygon OTP is: ${otp}\nThis code is valid for 4 minutes.`,
   };
 
   if (logoExists) {
     mailOptions.attachments = [
       {
-        filename: "govimart-logo.png",
+        filename: "polygon-logo.png",
         path: logoPath,
-        cid: "govimart_logo",
+        cid: "polygon_logo",
       },
     ];
   }
@@ -458,3 +460,95 @@ exports.resendSignupOtp = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// Update Password
+exports.updatePassword = asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword, confirmNewPassword } = req.body;
+  const userId = req.user.id;
+
+  if (!currentPassword || !newPassword || !confirmNewPassword) {
+    return res.status(400).json({
+      status: false,
+      message: "All fields are required.",
+    });
+  }
+
+  if (newPassword !== confirmNewPassword) {
+    return res.status(400).json({
+      status: false,
+      message: "Confirm password does not match new password.",
+    });
+  }
+
+  // Validate new password strength
+  if (newPassword.length < 8) {
+    return res.status(400).json({
+      status: false,
+      message: "Password must be at least 8 characters long.",
+    });
+  }
+
+  const hasLetter = /[a-zA-Z]/.test(newPassword);
+  const hasNumber = /[0-9]/.test(newPassword);
+  const hasSymbol = /[!@#$%^&*(),.?":{}|<>]/.test(newPassword);
+
+  if (!hasLetter || !hasNumber || !hasSymbol) {
+    return res.status(400).json({
+      status: false,
+      message: "Password must contain a mix of letters, numbers, and symbols.",
+    });
+  }
+
+  try {
+    const user = await userDao.getUserPasswordByIdDao(userId);
+    if (!user) {
+      return res.status(404).json({
+        status: false,
+        message: "User not found.",
+      });
+    }
+
+    let isPasswordValid = false;
+    if (user.password) {
+      isPasswordValid = bcrypt.compareSync(currentPassword, user.password);
+      if (!isPasswordValid && /^[0-9]{9}[vVxX]$/.test(currentPassword)) {
+        isPasswordValid = bcrypt.compareSync(currentPassword.toUpperCase(), user.password);
+      }
+    }
+
+    if (!isPasswordValid) {
+      return res.status(400).json({
+        status: false,
+        message: "Invalid current password.",
+      });
+    }
+
+    const SALT_ROUNDS = parseInt(process.env.SALT_ROUNDS || "10", 10);
+    const hashedPassword = bcrypt.hashSync(newPassword, SALT_ROUNDS);
+
+    const success = await userDao.updatePasswordDao(userId, hashedPassword);
+
+    if (success) {
+      return res.status(200).json({
+        status: true,
+        message: "Password updated successfully.",
+      });
+    } else {
+      return res.status(500).json({
+        status: false,
+        message: "Failed to update password. Please try again.",
+      });
+    }
+  } catch (err) {
+    console.error("Error updating password:", err);
+    return res.status(500).json({
+      status: false,
+      message: "An error occurred while updating the password.",
+      error: err.message,
+    });
+  }
+});
+
+// Exported OTP delivery helpers (reused by customer phone-change flow)
+exports.sendEmailOtp = sendEmailOtp;
+exports.sendShoutoutSms = sendShoutoutSms;

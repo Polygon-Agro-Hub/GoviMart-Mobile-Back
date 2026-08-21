@@ -11,7 +11,7 @@ const {
 
 const app = express();
 
-const BASE_PATH = "/govimart";
+const BASE_PATH = "/polygon";
 
 const corsOptions = {
   origin: process.env.CLIENT_ORIGIN || "http://localhost:8081",
@@ -19,6 +19,7 @@ const corsOptions = {
   credentials: true,
 };
 
+// Middleware
 app.use(cors(corsOptions));
 app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
@@ -48,19 +49,18 @@ DatabaseConnection(marketPlace, "MarketPlace");
 DatabaseConnection(admin, "Admin");
 
 // Setup routes
-const userroute = require("./routes/user-auth-routes");
-const healthroute = require("./routes/health-routes");
-const customerroute = require("./routes/customer-routes");
-const homeroute = require("./routes/home-routes");
-
-// Routes
-app.use(`${BASE_PATH}/test`, (req, res) => {
-  res.send("Server is running!");
-});
+const userroute = require("./routes/auth.routes");
+const healthroute = require("./routes/health.routes");
+const customerroute = require("./routes/customer.routes");
+const homeroute = require("./routes/home.routes");
+const complaintroute = require("./routes/complaint.routes");
+const productroute = require("./routes/product.routes")
 
 app.use(`${BASE_PATH}/api/auth`, userroute);
 app.use(`${BASE_PATH}/api/customer`, customerroute);
 app.use(`${BASE_PATH}/api/home`, homeroute);
+app.use(`${BASE_PATH}/api/complaint`, complaintroute);
+app.use(`${BASE_PATH}/api/product`, productroute);
 app.use(`${BASE_PATH}`, healthroute);
 
 

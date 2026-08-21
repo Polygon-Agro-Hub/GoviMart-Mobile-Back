@@ -1,4 +1,4 @@
-name: Deploy to Vercel UAT for Govimart api
+name: Deploy to Vercel UAT for Polygon api
 
 on:
   push:

@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const authMiddleware = require("../middlewares/auth.middleware");
-const customerEp = require("../endpoint/customer-ep");
+const customerEp = require("../endpoint/customer.ep");
 
 // Get customer profile info
 router.get("/profile", authMiddleware, customerEp.getCustomerProfile);
@@ -29,5 +29,35 @@ router.post("/marketplace/delete-excluded", authMiddleware, customerEp.deleteExc
 
 // Update firstTimeUser status
 router.post("/update-user-status", authMiddleware, customerEp.updateUserStatus);
+
+// Get User Saved All Addresses
+router.get('/fetch-saved-addresses', authMiddleware, customerEp.getSavedAddresses);
+
+// Get User Account Details with Credit Balance
+router.get("/account-details", authMiddleware, customerEp.getAccountDetails);
+
+// Add User Address
+router.post("/add-address", authMiddleware, customerEp.addAddress);
+
+// Update User Address
+router.put("/update-address/:addressId", authMiddleware, customerEp.updateAddress);
+
+// Delete User Address
+router.delete("/delete-address/:addressId", authMiddleware, customerEp.deleteAddress);
+
+// Update User Details
+router.put("/update-details", authMiddleware, customerEp.updateUserDetails);
+
+// Delete User Account
+router.delete("/delete-account", authMiddleware, customerEp.deleteUserAccount);
+
+// Send OTP to verify a new phone number
+router.post("/send-phone-change-otp", authMiddleware, customerEp.sendPhoneChangeOtp);
+
+// Verify phone change OTP and update the number
+router.post("/verify-phone-change-otp", authMiddleware, customerEp.verifyPhoneChange);
+
+// Resend phone change OTP
+router.post("/resend-phone-change-otp", authMiddleware, customerEp.resendPhoneChangeOtp);
 
 module.exports = router;
