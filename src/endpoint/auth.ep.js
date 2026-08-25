@@ -38,6 +38,13 @@ exports.login = asyncHandler(async (req, res) => {
       expiresIn: "8h",
     });
 
+    // Create Refresh Token
+    const refreshToken = jwt.sign(
+      { id: result.id, email: result.email, phoneNumber: result.phoneNumber },
+      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
+      { expiresIn: "30d" }
+    );
+
     // Send token as HTTP-only cookie
     res.cookie("authToken", token, {
       httpOnly: true,
@@ -53,6 +60,7 @@ exports.login = asyncHandler(async (req, res) => {
       data: {
         id: result.id,
         token,
+        refreshToken,
         firstName: result.firstName,
         lastName: result.lastName,
         email: result.email,
@@ -581,6 +589,47 @@ exports.logout = asyncHandler(async (req, res) => {
     success: true,
     message: "Logout successful",
   });
+});
+
+// Refresh Access Token
+exports.refreshToken = asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) {
+    return res.status(400).json({
+      success: false,
+      message: "Refresh token is required.",
+    });
+  }
+
+  try {
+    const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+    const decoded = jwt.verify(refreshToken, secret);
+
+    const payload = {
+      id: decoded.id,
+      email: decoded.email,
+      phoneNumber: decoded.phoneNumber,
+      iat: Math.floor(Date.now() / 1000),
+    };
+
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: "8h",
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Token refreshed successfully",
+      data: {
+        token,
+      },
+    });
+  } catch (err) {
+    console.error("Token refresh failed:", err.message);
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired refresh token.",
+    });
+  }
 });
 
 // Exported OTP delivery helpers (reused by customer phone-change flow)
