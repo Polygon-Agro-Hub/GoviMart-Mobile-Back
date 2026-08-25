@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const userAuthEp = require('../endpoint/auth.ep');
-const loginRateLimiter = require('../middlewares/ratelimiter.middleware');
+const loginRateLimiter = require('../middlewares/rateLimiter.middleware');
 const authMiddleware = require('../middlewares/auth.middleware');
 
 /**
@@ -279,5 +279,19 @@ router.post('/resend-signup-otp', userAuthEp.resendSignupOtp);
  *         description: Unauthorized.
  */
 router.post('/update-password', authMiddleware, userAuthEp.updatePassword);
+
+/**
+ * @openapi
+ * /api/auth/logout:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Logout Marketplace User
+ *     description: Clear the session cookie and invalidate user session.
+ *     responses:
+ *       200:
+ *         description: Logout successful.
+ */
+router.post('/logout', userAuthEp.logout);
 
 module.exports = router;
