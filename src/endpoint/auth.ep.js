@@ -42,7 +42,7 @@ exports.login = asyncHandler(async (req, res) => {
     const refreshToken = jwt.sign(
       { id: result.id, email: result.email, phoneNumber: result.phoneNumber },
       process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
-      { expiresIn: "30d" }
+      { expiresIn: "2d" }
     );
 
     // Send token as HTTP-only cookie
