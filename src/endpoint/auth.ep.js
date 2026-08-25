@@ -548,6 +548,29 @@ exports.updatePassword = asyncHandler(async (req, res) => {
 
 // Logout User
 exports.logout = asyncHandler(async (req, res) => {
+  let token = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.split(" ")[1];
+  } else if (req.cookies && req.cookies.authToken) {
+    token = req.cookies.authToken;
+  }
+
+  if (token) {
+    const { blacklistedTokens } = require("../middlewares/auth.middleware");
+    let expiresAt = Date.now() + 8 * 60 * 60 * 1000; // default 8 hours fallback
+    try {
+      const decoded = jwt.decode(token);
+      if (decoded && decoded.exp) {
+        expiresAt = decoded.exp * 1000;
+      }
+    } catch (e) {
+      console.error("Error decoding token on logout:", e);
+    }
+    blacklistedTokens.set(token, expiresAt);
+    console.log(`🔒 Token successfully blacklisted until: ${new Date(expiresAt).toISOString()}`);
+  }
+
   res.clearCookie("authToken", {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
