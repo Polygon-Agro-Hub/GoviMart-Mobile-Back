@@ -280,4 +280,18 @@ router.post('/resend-signup-otp', userAuthEp.resendSignupOtp);
  */
 router.post('/update-password', authMiddleware, userAuthEp.updatePassword);
 
+/**
+ * @openapi
+ * /api/auth/logout:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Logout Marketplace User
+ *     description: Clear the session cookie and invalidate user session.
+ *     responses:
+ *       200:
+ *         description: Logout successful.
+ */
+router.post('/logout', userAuthEp.logout);
+
 module.exports = router;

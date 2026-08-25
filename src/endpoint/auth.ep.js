@@ -120,11 +120,11 @@ const sendEmailOtp = async (email, otp) => {
   let htmlContent = "";
   if (fs.existsSync(templatePath)) {
     htmlContent = fs.readFileSync(templatePath, "utf8");
-    
+
     const logoHtml = logoExists
       ? `<img src="cid:polygon_logo" alt="Polygon" style="max-width: 180px; height: auto;" />`
       : `<h2 style="margin:0; color:#FF7F00;">Polygon</h2>`;
-      
+
     htmlContent = htmlContent
       .replace("{{logo_placeholder}}", logoHtml)
       .replace("{{otp}}", otp)
@@ -544,6 +544,20 @@ exports.updatePassword = asyncHandler(async (req, res) => {
       error: err.message,
     });
   }
+});
+
+// Logout User
+exports.logout = asyncHandler(async (req, res) => {
+  res.clearCookie("authToken", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Strict",
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: "Logout successful",
+  });
 });
 
 // Exported OTP delivery helpers (reused by customer phone-change flow)
