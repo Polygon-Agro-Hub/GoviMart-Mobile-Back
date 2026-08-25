@@ -242,19 +242,18 @@ exports.userSignup = asyncHandler(async (req, res) => {
       try {
         const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
         const smsReference = await sendShoutoutSms(fullPhone, otp);
-        console.log(`[SMS] OTP ${otp} successfully sent to ${fullPhone} with ref ${smsReference}`);
+        console.log(`[SMS] OTP successfully sent to ${fullPhone} with ref ${smsReference}`);
       } catch (smsErr) {
-        console.error("Failed to send Shoutout SMS, falling back to console log:", smsErr.message);
-        console.log(`[SMS FALLBACK] Sent 5-digit verification code ${otp} to ${phoneCode}${phoneNumber}`);
+        console.error("Failed to send Shoutout SMS:", smsErr.message);
+
       }
     } else {
       // Send via Email
       try {
         await sendEmailOtp(email, otp);
-        console.log(`[Email] OTP ${otp} successfully sent to ${email}`);
+        console.log(`[Email] OTP successfully sent to ${email}`);
       } catch (emailErr) {
-        console.error("Failed to send verification email, falling back to console log:", emailErr.message);
-        console.log(`[Email FALLBACK] Sent 5-digit verification code ${otp} to ${email}`);
+        console.error("Failed to send verification email:", emailErr.message);
       }
     }
 
@@ -430,15 +429,13 @@ exports.resendSignupOtp = asyncHandler(async (req, res) => {
         const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
         await sendShoutoutSms(fullPhone, otp);
       } catch (smsErr) {
-        console.error("Failed to send Shoutout SMS, falling back to console log:", smsErr.message);
-        console.log(`[SMS FALLBACK] Sent 5-digit verification code ${otp} to ${phoneCode}${phoneNumber}`);
+        console.error("Failed to send Shoutout SMS on resend:", smsErr.message);
       }
     } else {
       try {
         await sendEmailOtp(email, otp);
       } catch (emailErr) {
-        console.error("Failed to send verification email, falling back to console log:", emailErr.message);
-        console.log(`[Email FALLBACK] Sent 5-digit verification code ${otp} to ${email}`);
+        console.error("Failed to send verification email on resend:", emailErr.message);
       }
     }
 

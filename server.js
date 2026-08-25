@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 require("dotenv").config();
+
 const {
   plantcare,
   collectionofficer,
@@ -68,7 +69,11 @@ app.use(`${BASE_PATH}`, healthroute);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  if (process.env.NODE_ENV !== "production") {
+    console.error(err.stack);
+  } else {
+    console.error(`[Error] ${err.message}`);
+  }
   res.status(500).send("Something broke!!");
 });
 
