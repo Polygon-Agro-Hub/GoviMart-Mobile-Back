@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const userAuthEp = require('../endpoint/auth.ep');
-const loginRateLimiter = require('../middlewares/ratelimiter.middleware');
+const loginRateLimiter = require('../middlewares/rateLimiter.middleware');
 const authMiddleware = require('../middlewares/auth.middleware');
 
 /**
@@ -279,5 +279,48 @@ router.post('/resend-signup-otp', userAuthEp.resendSignupOtp);
  *         description: Unauthorized.
  */
 router.post('/update-password', authMiddleware, userAuthEp.updatePassword);
+
+/**
+ * @openapi
+ * /api/auth/logout:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Logout Marketplace User
+ *     description: Clear the session cookie and invalidate user session.
+ *     responses:
+ *       200:
+ *         description: Logout successful.
+ */
+router.post('/logout', userAuthEp.logout);
+
+/**
+ * @openapi
+ * /api/auth/refresh-token:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Refresh Access Token
+ *     description: Generate a new access token using a valid refresh token.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - refreshToken
+ *             properties:
+ *               refreshToken:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Token refreshed successfully.
+ *       400:
+ *         description: Refresh token missing.
+ *       401:
+ *         description: Invalid or expired refresh token.
+ */
+router.post('/refresh-token', userAuthEp.refreshToken);
 
 module.exports = router;

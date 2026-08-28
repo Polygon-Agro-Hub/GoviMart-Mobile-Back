@@ -38,6 +38,13 @@ exports.login = asyncHandler(async (req, res) => {
       expiresIn: "8h",
     });
 
+    // Create Refresh Token
+    const refreshToken = jwt.sign(
+      { id: result.id, email: result.email, phoneNumber: result.phoneNumber },
+      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
+      { expiresIn: "2d" }
+    );
+
     // Send token as HTTP-only cookie
     res.cookie("authToken", token, {
       httpOnly: true,
@@ -53,6 +60,7 @@ exports.login = asyncHandler(async (req, res) => {
       data: {
         id: result.id,
         token,
+        refreshToken,
         firstName: result.firstName,
         lastName: result.lastName,
         email: result.email,
@@ -120,11 +128,11 @@ const sendEmailOtp = async (email, otp) => {
   let htmlContent = "";
   if (fs.existsSync(templatePath)) {
     htmlContent = fs.readFileSync(templatePath, "utf8");
-    
+
     const logoHtml = logoExists
       ? `<img src="cid:polygon_logo" alt="Polygon" style="max-width: 180px; height: auto;" />`
       : `<h2 style="margin:0; color:#FF7F00;">Polygon</h2>`;
-      
+
     htmlContent = htmlContent
       .replace("{{logo_placeholder}}", logoHtml)
       .replace("{{otp}}", otp)
@@ -242,19 +250,18 @@ exports.userSignup = asyncHandler(async (req, res) => {
       try {
         const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
         const smsReference = await sendShoutoutSms(fullPhone, otp);
-        console.log(`[SMS] OTP ${otp} successfully sent to ${fullPhone} with ref ${smsReference}`);
+        console.log(`[SMS] OTP successfully sent to ${fullPhone} with ref ${smsReference}`);
       } catch (smsErr) {
-        console.error("Failed to send Shoutout SMS, falling back to console log:", smsErr.message);
-        console.log(`[SMS FALLBACK] Sent 5-digit verification code ${otp} to ${phoneCode}${phoneNumber}`);
+        console.error("Failed to send Shoutout SMS:", smsErr.message);
+
       }
     } else {
       // Send via Email
       try {
         await sendEmailOtp(email, otp);
-        console.log(`[Email] OTP ${otp} successfully sent to ${email}`);
+        console.log(`[Email] OTP successfully sent to ${email}`);
       } catch (emailErr) {
-        console.error("Failed to send verification email, falling back to console log:", emailErr.message);
-        console.log(`[Email FALLBACK] Sent 5-digit verification code ${otp} to ${email}`);
+        console.error("Failed to send verification email:", emailErr.message);
       }
     }
 
@@ -430,15 +437,13 @@ exports.resendSignupOtp = asyncHandler(async (req, res) => {
         const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
         await sendShoutoutSms(fullPhone, otp);
       } catch (smsErr) {
-        console.error("Failed to send Shoutout SMS, falling back to console log:", smsErr.message);
-        console.log(`[SMS FALLBACK] Sent 5-digit verification code ${otp} to ${phoneCode}${phoneNumber}`);
+        console.error("Failed to send Shoutout SMS on resend:", smsErr.message);
       }
     } else {
       try {
         await sendEmailOtp(email, otp);
       } catch (emailErr) {
-        console.error("Failed to send verification email, falling back to console log:", emailErr.message);
-        console.log(`[Email FALLBACK] Sent 5-digit verification code ${otp} to ${email}`);
+        console.error("Failed to send verification email on resend:", emailErr.message);
       }
     }
 
@@ -548,3 +553,85 @@ exports.updatePassword = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// Logout User
+exports.logout = asyncHandler(async (req, res) => {
+  let token = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.split(" ")[1];
+  } else if (req.cookies && req.cookies.authToken) {
+    token = req.cookies.authToken;
+  }
+
+  if (token) {
+    const { blacklistedTokens } = require("../middlewares/auth.middleware");
+    let expiresAt = Date.now() + 8 * 60 * 60 * 1000; // default 8 hours fallback
+    try {
+      const decoded = jwt.decode(token);
+      if (decoded && decoded.exp) {
+        expiresAt = decoded.exp * 1000;
+      }
+    } catch (e) {
+      console.error("Error decoding token on logout:", e);
+    }
+    blacklistedTokens.set(token, expiresAt);
+    console.log(`🔒 Token successfully blacklisted until: ${new Date(expiresAt).toISOString()}`);
+  }
+
+  res.clearCookie("authToken", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Strict",
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: "Logout successful",
+  });
+});
+
+// Refresh Access Token
+exports.refreshToken = asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) {
+    return res.status(400).json({
+      success: false,
+      message: "Refresh token is required.",
+    });
+  }
+
+  try {
+    const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+    const decoded = jwt.verify(refreshToken, secret);
+
+    const payload = {
+      id: decoded.id,
+      email: decoded.email,
+      phoneNumber: decoded.phoneNumber,
+      iat: Math.floor(Date.now() / 1000),
+    };
+
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: "8h",
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Token refreshed successfully",
+      data: {
+        token,
+      },
+    });
+  } catch (err) {
+    console.error("Token refresh failed:", err.message);
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired refresh token.",
+    });
+  }
+});
+
+// Exported OTP delivery helpers (reused by customer phone-change flow)
+exports.sendEmailOtp = sendEmailOtp;
+exports.sendShoutoutSms = sendShoutoutSms;

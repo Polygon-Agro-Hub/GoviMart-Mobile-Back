@@ -1,0 +1,489 @@
+const db = require("../startup/database");
+
+exports.getCustomerProfileDao = async (userId) => {
+  const query =
+    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName FROM marketplaceusers WHERE id = ?";
+  const [results] = await db.marketPlace.promise().query(query, [userId]);
+  return results;
+};
+
+exports.getSuggestionsDao = async () => {
+  const query = `
+    SELECT DISTINCT 
+      mi.id,
+      mi.displayName,
+      cv.image
+    FROM marketplaceitems mi
+    JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
+    WHERE mi.category = 'Retail'
+    ORDER BY mi.displayName ASC
+  `;
+  const [results] = await db.marketPlace.promise().query(query);
+  return results;
+};
+
+exports.getIncludeItemsDao = async (userId) => {
+  const query = `
+    SELECT DISTINCT 
+      mi.id,
+      mi.displayName, 
+      cv.image
+    FROM preferlist pl 
+    JOIN marketplaceitems mi ON pl.mpItemId = mi.id
+    JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
+    WHERE pl.userId = ? AND mi.category = 'Retail'
+    ORDER BY mi.displayName ASC
+  `;
+  const [results] = await db.marketPlace.promise().query(query, [userId]);
+  return results;
+};
+
+exports.addIncludeItemsDao = async (userId, items) => {
+  const placeholders = items.map(() => "?").join(",");
+  const isIds = typeof items[0] === "number";
+  const field = isIds ? "mi.id" : "mi.displayName";
+
+  const query = `
+    INSERT IGNORE INTO preferlist (userId, mpItemId)
+    SELECT ?, mi.id
+    FROM marketplaceitems mi
+    WHERE mi.category = 'Retail' AND ${field} IN (${placeholders})
+  `;
+  const [results] = await db.marketPlace
+    .promise()
+    .query(query, [userId, ...items]);
+  return results;
+};
+
+exports.deleteIncludeItemsDao = async (userId, items) => {
+  const placeholders = items.map(() => "?").join(",");
+  const isIds = typeof items[0] === "number";
+  const field = isIds ? "mi.id" : "mi.displayName";
+
+  const query = `
+    DELETE pl FROM preferlist pl
+    JOIN marketplaceitems mi ON pl.mpItemId = mi.id
+    WHERE pl.userId = ? AND ${field} IN (${placeholders})
+  `;
+  const [results] = await db.marketPlace
+    .promise()
+    .query(query, [userId, ...items]);
+  return results;
+};
+
+exports.getExcludeItemsDao = async (userId) => {
+  const query = `
+    SELECT DISTINCT 
+      mi.id,
+      mi.displayName, 
+      cv.image
+    FROM excludelist el 
+    JOIN marketplaceitems mi ON el.mpItemId = mi.id
+    JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
+    WHERE el.userId = ? AND mi.category = 'Retail'
+    ORDER BY mi.displayName ASC
+  `;
+  const [results] = await db.marketPlace.promise().query(query, [userId]);
+  return results;
+};
+
+exports.addExcludeItemsDao = async (userId, items) => {
+  const placeholders = items.map(() => "?").join(",");
+  const isIds = typeof items[0] === "number";
+  const field = isIds ? "mi.id" : "mi.displayName";
+
+  const query = `
+    INSERT IGNORE INTO excludelist (userId, mpItemId)
+    SELECT ?, mi.id
+    FROM marketplaceitems mi
+    WHERE mi.category = 'Retail' AND ${field} IN (${placeholders})
+  `;
+  const [results] = await db.marketPlace
+    .promise()
+    .query(query, [userId, ...items]);
+  return results;
+};
+
+exports.deleteExcludeItemsDao = async (userId, items) => {
+  const placeholders = items.map(() => "?").join(",");
+  const isIds = typeof items[0] === "number";
+  const field = isIds ? "mi.id" : "mi.displayName";
+
+  const query = `
+    DELETE el FROM excludelist el
+    JOIN marketplaceitems mi ON el.mpItemId = mi.id
+    WHERE el.userId = ? AND ${field} IN (${placeholders})
+  `;
+  const [results] = await db.marketPlace
+    .promise()
+    .query(query, [userId, ...items]);
+  return results;
+};
+
+exports.updateUserStatusDao = async (userId) => {
+  const query = `
+    UPDATE marketplaceusers
+    SET firstTimeUser = 1
+    WHERE id = ? AND firstTimeUser = 0
+  `;
+  const [result] = await db.marketPlace.promise().query(query, [userId]);
+  return result;
+};
+
+exports.getSavedAddressesByCustomerIdDao = async (customerId) => {
+  const apartmentQuery = `
+    SELECT 
+      id,
+      'Apartment' as buildingType,
+      saveAs,
+      billingTitle as title,
+      billingName as fullName,
+      billingPhoneCode1 as phonecode1,
+      billingPhone1 as phone1,
+      billingPhoneCode2 as phonecode2,
+      billingPhone2 as phone2,
+      longitude,
+      latitude,
+      buildingNo,
+      buildingName,
+      unitNo,
+      floorNo,
+      houseNo,
+      streetName,
+      city
+    FROM apartment
+    WHERE customerId = ?
+  `;
+
+  const houseQuery = `
+    SELECT 
+      id,
+      'House' as buildingType,
+      saveAs,
+      billingTitle as title,
+      billingName as fullName,
+      billingPhoneCode1 as phonecode1,
+      billingPhone1 as phone1,
+      billingPhoneCode2 as phonecode2,
+      billingPhone2 as phone2,
+      longitude,
+      latitude,
+      NULL as buildingNo,
+      NULL as buildingName,
+      NULL as unitNo,
+      NULL as floorNo,
+      houseNo,
+      streetName,
+      city
+    FROM house
+    WHERE customerId = ?
+  `;
+
+  const [apartmentResults] = await db.marketPlace
+    .promise()
+    .query(apartmentQuery, [customerId]);
+  const [houseResults] = await db.marketPlace
+    .promise()
+    .query(houseQuery, [customerId]);
+
+  const combined = [
+    ...apartmentResults.map((r) => ({
+      ...r,
+      addressKey: `apartment_${r.id}`,
+    })),
+    ...houseResults.map((r) => ({
+      ...r,
+      addressKey: `house_${r.id}`,
+    })),
+  ];
+
+  combined.sort((a, b) => {
+    const aName = (a.saveAs || "").trim();
+    const bName = (b.saveAs || "").trim();
+
+    if (!aName && !bName) return 0;
+    if (!aName) return 1;
+    if (!bName) return -1;
+
+    return aName.localeCompare(bName, undefined, { sensitivity: "base" });
+  });
+
+  return combined;
+};
+
+exports.getAccountDetailsDao = async (userId) => {
+  const query = `
+    SELECT 
+      id,
+      cusId,
+      title,
+      firstName,
+      lastName,
+      phoneCode,
+      phoneNumber,
+      phoneCode2,
+      phoneNumber2,
+      nic,
+      buyerType,
+      email,
+      companyPhoneCode,
+      companyPhone,
+      companyName,
+      rateofCus,
+      creditBalance,
+      nearesCity
+    FROM marketplaceusers
+    WHERE id = ?
+  `;
+  const [results] = await db.marketPlace.promise().query(query, [userId]);
+  return results;
+};
+
+exports.addAddressDao = async (customerId, addressData) => {
+  const {
+    buildingType,
+    saveAs,
+    title,
+    fullName,
+    phonecode1,
+    phone1,
+    phonecode2,
+    phone2,
+    longitude,
+    latitude,
+    buildingNo,
+    buildingName,
+    unitNo,
+    floorNo,
+    houseNo,
+    streetName,
+    city,
+  } = addressData;
+
+  if (buildingType === "Apartment") {
+    const query = `
+      INSERT INTO apartment (
+        customerId, saveAs, billingTitle, billingName,
+        billingPhoneCode1, billingPhone1, billingPhoneCode2, billingPhone2,
+        longitude, latitude, buildingNo, buildingName, unitNo, floorNo,
+        houseNo, streetName, city
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const [result] = await db.marketPlace
+      .promise()
+      .query(query, [
+        customerId,
+        saveAs,
+        title,
+        fullName,
+        phonecode1,
+        phone1,
+        phonecode2,
+        phone2,
+        longitude,
+        latitude,
+        buildingNo,
+        buildingName,
+        unitNo,
+        floorNo,
+        houseNo,
+        streetName,
+        city,
+      ]);
+    return { insertId: result.insertId, buildingType };
+  }
+
+  // House
+  const query = `
+    INSERT INTO house (
+      customerId, saveAs, billingTitle, billingName,
+      billingPhoneCode1, billingPhone1, billingPhoneCode2, billingPhone2,
+      longitude, latitude, houseNo, streetName, city
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+  const [result] = await db.marketPlace
+    .promise()
+    .query(query, [
+      customerId,
+      saveAs,
+      title,
+      fullName,
+      phonecode1,
+      phone1,
+      phonecode2,
+      phone2,
+      longitude,
+      latitude,
+      houseNo,
+      streetName,
+      city,
+    ]);
+  return { insertId: result.insertId, buildingType };
+};
+
+exports.updateAddressDao = async (addressId, customerId, addressData) => {
+  const {
+    buildingType,
+    saveAs,
+    title,
+    fullName,
+    phonecode1,
+    phone1,
+    phonecode2,
+    phone2,
+    longitude,
+    latitude,
+    buildingNo,
+    buildingName,
+    unitNo,
+    floorNo,
+    houseNo,
+    streetName,
+    city,
+  } = addressData;
+
+  if (buildingType === "Apartment") {
+    const query = `
+      UPDATE apartment
+      SET saveAs = ?, billingTitle = ?, billingName = ?,
+          billingPhoneCode1 = ?, billingPhone1 = ?, billingPhoneCode2 = ?, billingPhone2 = ?,
+          longitude = ?, latitude = ?, buildingNo = ?, buildingName = ?, unitNo = ?, floorNo = ?,
+          houseNo = ?, streetName = ?, city = ?
+      WHERE id = ? AND customerId = ?
+    `;
+    const [result] = await db.marketPlace
+      .promise()
+      .query(query, [
+        saveAs,
+        title,
+        fullName,
+        phonecode1,
+        phone1,
+        phonecode2,
+        phone2,
+        longitude,
+        latitude,
+        buildingNo,
+        buildingName,
+        unitNo,
+        floorNo,
+        houseNo,
+        streetName,
+        city,
+        addressId,
+        customerId,
+      ]);
+    return result;
+  }
+
+  // House
+  const query = `
+    UPDATE house
+    SET saveAs = ?, billingTitle = ?, billingName = ?,
+        billingPhoneCode1 = ?, billingPhone1 = ?, billingPhoneCode2 = ?, billingPhone2 = ?,
+        longitude = ?, latitude = ?, houseNo = ?, streetName = ?, city = ?
+    WHERE id = ? AND customerId = ?
+  `;
+  const [result] = await db.marketPlace
+    .promise()
+    .query(query, [
+      saveAs,
+      title,
+      fullName,
+      phonecode1,
+      phone1,
+      phonecode2,
+      phone2,
+      longitude,
+      latitude,
+      houseNo,
+      streetName,
+      city,
+      addressId,
+      customerId,
+    ]);
+  return result;
+};
+
+exports.deleteAddressDao = async (addressId, customerId, buildingType) => {
+  const table = buildingType === "Apartment" ? "apartment" : "house";
+  const query = `DELETE FROM ${table} WHERE id = ? AND customerId = ?`;
+  const [result] = await db.marketPlace
+    .promise()
+    .query(query, [addressId, customerId]);
+  return result;
+};
+
+exports.updateUserDetailsDao = async (userId, userData) => {
+  const {
+    title,
+    firstName,
+    lastName,
+    phoneCode,
+    phoneNumber,
+    phoneCode2,
+    phoneNumber2,
+    nic,
+    email,
+    companyPhoneCode,
+    companyPhone,
+    companyName,
+    buyerType,
+  } = userData;
+
+  const query = `
+    UPDATE marketplaceusers
+    SET title = ?, firstName = ?, lastName = ?,
+        phoneCode = ?, phoneNumber = ?, phoneCode2 = ?, phoneNumber2 = ?,
+        nic = ?, email = ?, companyPhoneCode = ?, companyPhone = ?,
+        companyName = ?, buyerType = ?
+    WHERE id = ?
+  `;
+  const [result] = await db.marketPlace
+    .promise()
+    .query(query, [
+      title,
+      firstName,
+      lastName,
+      phoneCode,
+      phoneNumber,
+      phoneCode2,
+      phoneNumber2,
+      nic,
+      email,
+      companyPhoneCode,
+      companyPhone,
+      companyName,
+      buyerType,
+      userId,
+    ]);
+  return result;
+};
+
+exports.deleteUserAccountDao = async (userId) => {
+  const query = `DELETE FROM marketplaceusers WHERE id = ?`;
+  const [result] = await db.marketPlace.promise().query(query, [userId]);
+  return result;
+};
+
+// Check if a phone number already belongs to another user
+exports.isPhoneTakenDao = async (userId, phoneNumber) => {
+  const query = `
+    SELECT id FROM marketplaceusers
+    WHERE phoneNumber = ? AND id != ?
+    LIMIT 1
+  `;
+  const [results] = await db.marketPlace.promise().query(query, [phoneNumber, userId]);
+  return results.length > 0;
+};
+
+// Update only the user's phone number (after OTP verification)
+exports.updateUserPhoneDao = async (userId, phoneCode, phoneNumber) => {
+  const query = `
+    UPDATE marketplaceusers
+    SET phoneCode = ?, phoneNumber = ?
+    WHERE id = ?
+  `;
+  const [result] = await db.marketPlace.promise().query(query, [phoneCode, phoneNumber, userId]);
+  return result;
+};

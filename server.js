@@ -2,12 +2,13 @@ const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 require("dotenv").config();
+
 const {
   plantcare,
   collectionofficer,
   marketPlace,
   admin,
-} = require("./startup/database");
+} = require("./src/startup/database");
 
 const app = express();
 
@@ -49,20 +50,30 @@ DatabaseConnection(marketPlace, "MarketPlace");
 DatabaseConnection(admin, "Admin");
 
 // Setup routes
-const userroute = require("./routes/auth.routes");
-const healthroute = require("./routes/health.routes");
-const customerroute = require("./routes/customer.routes");
-const homeroute = require("./routes/home.routes");
+const userroute = require("./src/routes/auth.routes");
+const healthroute = require("./src/routes/health.routes");
+const customerroute = require("./src/routes/customer.routes");
+const homeroute = require("./src/routes/home.routes");
+const complaintroute = require("./src/routes/complaint.routes");
+const productroute = require("./src/routes/product.routes")
+const orderroute = require("./src/routes/order.routes")
 
 app.use(`${BASE_PATH}/api/auth`, userroute);
 app.use(`${BASE_PATH}/api/customer`, customerroute);
 app.use(`${BASE_PATH}/api/home`, homeroute);
+app.use(`${BASE_PATH}/api/complaint`, complaintroute);
+app.use(`${BASE_PATH}/api/product`, productroute);
+app.use(`${BASE_PATH}/api/order`, orderroute);
 app.use(`${BASE_PATH}`, healthroute);
 
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  if (process.env.NODE_ENV !== "production") {
+    console.error(err.stack);
+  } else {
+    console.error(`[Error] ${err.message}`);
+  }
   res.status(500).send("Something broke!!");
 });
 
