@@ -12,4 +12,7 @@ router.get("/package-details/:packageId", productEp.getPackageDetails);
 //Get all banners
 router.get("/slides", productEp.getAllSlides);
 
-module.exports = router;
+// Check availability of cart items (products + packages) by their IDs
+router.post("/check-availability", productEp.checkAvailability);
+
+module.exports = router;

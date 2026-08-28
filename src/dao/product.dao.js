@@ -243,6 +243,55 @@ exports.getAllProductDao = (search) => {
   });
 };
 
+/**
+ * Given arrays of marketplace item IDs and package IDs,
+ * returns a map of id → boolean indicating whether each is still available.
+ */
+exports.checkAvailabilityDao = (productIds, packageIds) => {
+  return new Promise((resolve, reject) => {
+    const result = { products: {}, packages: {} };
+    let pending = 0;
+
+    const done = (err) => {
+      if (err) return reject(err);
+      pending -= 1;
+      if (pending === 0) resolve(result);
+    };
+
+    // Check products (marketplaceitems table)
+    if (productIds && productIds.length > 0) {
+      pending += 1;
+      const placeholders = productIds.map(() => "?").join(", ");
+      const sql = `SELECT id FROM marketplaceitems WHERE id IN (${placeholders})`;
+      db.marketPlace.query(sql, productIds, (err, rows) => {
+        if (err) return done(err);
+        const existingIds = new Set(rows.map((r) => Number(r.id)));
+        productIds.forEach((id) => {
+          result.products[id] = existingIds.has(Number(id));
+        });
+        done(null);
+      });
+    }
+
+    // Check packages (marketplacepackages — only Enabled + isValid ones count as available)
+    if (packageIds && packageIds.length > 0) {
+      pending += 1;
+      const placeholders = packageIds.map(() => "?").join(", ");
+      const sql = `SELECT id FROM marketplacepackages WHERE id IN (${placeholders}) AND status = 'Enabled' AND isValid = 1`;
+      db.marketPlace.query(sql, packageIds, (err, rows) => {
+        if (err) return done(err);
+        const existingIds = new Set(rows.map((r) => Number(r.id)));
+        packageIds.forEach((id) => {
+          result.packages[id] = existingIds.has(Number(id));
+        });
+        done(null);
+      });
+    }
+
+    // Both arrays empty — resolve immediately
+    if (pending === 0) resolve(result);
+  });
+};
 exports.getAllPackageItemsDao = (packageId) => {
   return new Promise((resolve, reject) => {
     const sql = `

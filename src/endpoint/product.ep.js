@@ -119,3 +119,33 @@ exports.getAllSlides = async (req, res) => {
     res.status(500).json({ status: false, error: "Failed to fetch slides" });
   }
 };
+
+/**
+ * POST /api/product/check-availability
+ * Body: { productIds: number[], packageIds: number[] }
+ * Returns which IDs are still active/available in the database.
+ */
+exports.checkAvailability = async (req, res) => {
+  try {
+    const { productIds = [], packageIds = [] } = req.body;
+
+    if (!Array.isArray(productIds) || !Array.isArray(packageIds)) {
+      return res.status(400).json({
+        status: false,
+        message: "productIds and packageIds must be arrays",
+      });
+    }
+
+    const result = await ProductDao.checkAvailabilityDao(productIds, packageIds);
+
+    return res.status(200).json({
+      status: true,
+      products: result.products,
+      packages: result.packages,
+    });
+  } catch (err) {
+    console.error("Error checking availability:", err);
+    res.status(500).json({ status: false, error: "Failed to check availability" });
+  }
+};
+
