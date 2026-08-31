@@ -466,14 +466,64 @@ exports.deleteUserAccountDao = async (userId) => {
   return result;
 };
 
-// Check if a phone number already belongs to another user
+// Check if a phone number already belongs to another user (across phoneNumber, phoneNumber2, companyPhone)
 exports.isPhoneTakenDao = async (userId, phoneNumber) => {
+  if (!phoneNumber) return false;
+  const raw = String(phoneNumber || "").trim();
+  const cleanNum = raw.replace(/[^0-9]/g, "");
+  const candidates = new Set([raw, cleanNum]);
+
+  if (cleanNum.length === 9 && cleanNum.startsWith("7")) {
+    candidates.add(cleanNum);
+    candidates.add("0" + cleanNum);
+    candidates.add("+94" + cleanNum);
+    candidates.add("94" + cleanNum);
+  } else if (cleanNum.length === 10 && cleanNum.startsWith("07")) {
+    const suffix = cleanNum.substring(1);
+    candidates.add(suffix);
+    candidates.add(cleanNum);
+    candidates.add("+94" + suffix);
+    candidates.add("94" + suffix);
+  } else if (cleanNum.length === 11 && cleanNum.startsWith("947")) {
+    const suffix = cleanNum.substring(2);
+    candidates.add(suffix);
+    candidates.add("0" + suffix);
+    candidates.add("+" + cleanNum);
+    candidates.add(cleanNum);
+  }
+
+  const phoneList = Array.from(candidates).filter(Boolean);
+  if (phoneList.length === 0) return false;
+  const placeholders = phoneList.map(() => "?").join(", ");
   const query = `
     SELECT id FROM marketplaceusers
-    WHERE phoneNumber = ? AND id != ?
+    WHERE (phoneNumber IN (${placeholders}) OR phoneNumber2 IN (${placeholders}) OR companyPhone IN (${placeholders}))
+      AND id != ?
     LIMIT 1
   `;
-  const [results] = await db.marketPlace.promise().query(query, [phoneNumber, userId]);
+  const [results] = await db.marketPlace.promise().query(query, [
+    ...phoneList,
+    ...phoneList,
+    ...phoneList,
+    userId,
+  ]);
+  return results.length > 0;
+};
+
+// Check if an NIC already belongs to another user
+exports.isNicTakenDao = async (userId, nic) => {
+  if (!nic) return false;
+  const rawNic = String(nic).trim();
+  const upperNic = rawNic.toUpperCase();
+  const lowerNic = rawNic.toLowerCase();
+  const candidates = [...new Set([rawNic, upperNic, lowerNic])];
+  const placeholders = candidates.map(() => "?").join(", ");
+  const query = `
+    SELECT id FROM marketplaceusers
+    WHERE nic IN (${placeholders}) AND id != ?
+    LIMIT 1
+  `;
+  const [results] = await db.marketPlace.promise().query(query, [...candidates, userId]);
   return results.length > 0;
 };
 

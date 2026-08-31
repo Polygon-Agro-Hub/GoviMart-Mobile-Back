@@ -299,6 +299,14 @@ exports.deleteAddress = asyncHandler(async (req, res) => {
 exports.updateUserDetails = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
+
+    if (req.body.nic) {
+      const isNicTaken = await customerDao.isNicTakenDao(userId, req.body.nic);
+      if (isNicTaken) {
+        return res.status(400).json({ status: false, message: "NIC Number already exists" });
+      }
+    }
+
     const result = await customerDao.updateUserDetailsDao(userId, req.body);
 
     if (result.affectedRows === 0) {
