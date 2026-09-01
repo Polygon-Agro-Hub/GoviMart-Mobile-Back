@@ -48,6 +48,9 @@ router.delete("/delete-address/:addressId", authMiddleware, customerEp.deleteAdd
 // Update User Details
 router.put("/update-details", authMiddleware, customerEp.updateUserDetails);
 
+// Get Delete Account Status (Credit Balance & Active Orders)
+router.get("/delete-account-status", authMiddleware, customerEp.getDeleteAccountStatus);
+
 // Delete User Account
 router.delete("/delete-account", authMiddleware, customerEp.deleteUserAccount);
 

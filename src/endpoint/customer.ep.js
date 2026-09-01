@@ -322,10 +322,38 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
   }
 });
 
+// ---------- Get Delete Account Status ----------
+exports.getDeleteAccountStatus = asyncHandler(async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const statusData = await customerDao.getDeleteAccountStatusDao(userId);
+    return res.status(200).json({ status: true, data: statusData });
+  } catch (error) {
+    console.error("Get delete account status error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+});
+
 // ---------- Delete User Account ----------
 exports.deleteUserAccount = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
+    const statusData = await customerDao.getDeleteAccountStatusDao(userId);
+
+    if (statusData.hasNegativeCredit) {
+      return res.status(400).json({
+        status: false,
+        message: "You have a negative credit balance on your account. Please clear the outstanding balance before deleting your account.",
+      });
+    }
+
+    if (statusData.hasProcessingOrders) {
+      return res.status(400).json({
+        status: false,
+        message: "You have processing orders. Once all of them are completed, you may delete your account.",
+      });
+    }
+
     const result = await customerDao.deleteUserAccountDao(userId);
 
     if (result.affectedRows === 0) {
@@ -383,15 +411,29 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
       { expiresIn: "15m" }
     );
 
-    const method = "sms";
-    try {
-      const fullPhone = `${phoneCode}${normalizedPhone}`
-        .replace(/\+/g, "")
-        .replace(/\s+/g, "");
-      await userAuthEp.sendShoutoutSms(fullPhone, otp);
-      console.log(`[SMS] Phone change OTP sent to ${fullPhone}`);
-    } catch (smsErr) {
-      console.error("Failed to send Shoutout SMS for phone change:", smsErr.message);
+    // Determine method: SMS for Sri Lanka (+94), email for all other countries
+    const method = phoneCode === "+94" ? "sms" : "email";
+
+    if (method === "sms") {
+      try {
+        const fullPhone = `${phoneCode}${normalizedPhone}`
+          .replace(/\+/g, "")
+          .replace(/\s+/g, "");
+        await userAuthEp.sendShoutoutSms(fullPhone, otp);
+        console.log(`[SMS] Phone change OTP sent to ${fullPhone}`);
+      } catch (smsErr) {
+        console.error("Failed to send Shoutout SMS for phone change:", smsErr.message);
+      }
+    } else {
+      try {
+        const userEmail = req.user.email;
+        if (userEmail) {
+          await userAuthEp.sendEmailOtp(userEmail, otp);
+          console.log(`[Email] Phone change OTP sent to ${userEmail}`);
+        }
+      } catch (emailErr) {
+        console.error("Failed to send email OTP for phone change:", emailErr.message);
+      }
     }
 
     return res.status(200).json({
@@ -399,7 +441,9 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
       method,
       referenceId,
       signupToken: phoneChangeToken,
-      message: "Verification code has been sent to your new mobile number.",
+      message: method === "sms"
+        ? "Verification code has been sent to your new mobile number."
+        : "Verification code has been sent to your email address.",
     });
   } catch (error) {
     console.error("Send phone change OTP error:", error);
@@ -502,21 +546,38 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
       { expiresIn: "15m" }
     );
 
-    try {
-      const fullPhone = `${phoneCode}${phoneNumber}`
-        .replace(/\+/g, "")
-        .replace(/\s+/g, "");
-      await userAuthEp.sendShoutoutSms(fullPhone, otp);
-      console.log(`[SMS] Phone change OTP resent to ${fullPhone}`);
-    } catch (smsErr) {
-      console.error("Failed to send Shoutout SMS on phone change resend:", smsErr.message);
+    const method = phoneCode === "+94" ? "sms" : "email";
+
+    if (method === "sms") {
+      try {
+        const fullPhone = `${phoneCode}${phoneNumber}`
+          .replace(/\+/g, "")
+          .replace(/\s+/g, "");
+        await userAuthEp.sendShoutoutSms(fullPhone, otp);
+        console.log(`[SMS] Phone change OTP resent to ${fullPhone}`);
+      } catch (smsErr) {
+        console.error("Failed to send Shoutout SMS on phone change resend:", smsErr.message);
+      }
+    } else {
+      try {
+        const userEmail = req.user?.email;
+        if (userEmail) {
+          await userAuthEp.sendEmailOtp(userEmail, otp);
+          console.log(`[Email] Phone change OTP resent to ${userEmail}`);
+        }
+      } catch (emailErr) {
+        console.error("Failed to send email OTP on phone change resend:", emailErr.message);
+      }
     }
 
     return res.status(200).json({
       status: true,
+      method,
       referenceId,
       signupToken: newSignupToken,
-      message: "Verification code has been resent to your new mobile number.",
+      message: method === "sms"
+        ? "Verification code has been resent to your new mobile number."
+        : "Verification code has been resent to your email address.",
     });
   } catch (error) {
     console.error("Resend phone change OTP error:", error);

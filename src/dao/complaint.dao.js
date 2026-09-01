@@ -1,6 +1,6 @@
 const db = require("../startup/database");
 
-// Get All Complain Categories for App ID 9
+// Get All Complain Categories for appName = 'GoViMart'
 exports.getComplainCategoriesDao = async () => {
   try {
     const sql = `
@@ -13,7 +13,8 @@ exports.getComplainCategoriesDao = async () => {
         cc.categoryTamil,
         cc.modifyBy
       FROM agro_world_admin.complaincategory cc
-      WHERE cc.appId = 9
+      JOIN agro_world_admin.systemapplications sa ON sa.id = cc.appId
+      WHERE sa.appName = 'GoViMart'
       ORDER BY cc.categoryEnglish ASC
     `;
 

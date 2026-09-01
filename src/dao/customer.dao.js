@@ -415,48 +415,43 @@ exports.deleteAddressDao = async (addressId, customerId, buildingType) => {
 };
 
 exports.updateUserDetailsDao = async (userId, userData) => {
-  const {
-    title,
-    firstName,
-    lastName,
-    phoneCode,
-    phoneNumber,
-    phoneCode2,
-    phoneNumber2,
-    nic,
-    email,
-    companyPhoneCode,
-    companyPhone,
-    companyName,
-    buyerType,
-  } = userData;
+  const allowedKeys = [
+    "title",
+    "firstName",
+    "lastName",
+    "phoneCode",
+    "phoneNumber",
+    "phoneCode2",
+    "phoneNumber2",
+    "nic",
+    "email",
+    "companyPhoneCode",
+    "companyPhone",
+    "companyName",
+    "buyerType",
+  ];
 
+  const fieldsToUpdate = [];
+  const values = [];
+
+  for (const key of allowedKeys) {
+    if (userData[key] !== undefined) {
+      fieldsToUpdate.push(`${key} = ?`);
+      values.push(userData[key]);
+    }
+  }
+
+  if (fieldsToUpdate.length === 0) {
+    return { affectedRows: 0 };
+  }
+
+  values.push(userId);
   const query = `
     UPDATE marketplaceusers
-    SET title = ?, firstName = ?, lastName = ?,
-        phoneCode = ?, phoneNumber = ?, phoneCode2 = ?, phoneNumber2 = ?,
-        nic = ?, email = ?, companyPhoneCode = ?, companyPhone = ?,
-        companyName = ?, buyerType = ?
+    SET ${fieldsToUpdate.join(", ")}
     WHERE id = ?
   `;
-  const [result] = await db.marketPlace
-    .promise()
-    .query(query, [
-      title,
-      firstName,
-      lastName,
-      phoneCode,
-      phoneNumber,
-      phoneCode2,
-      phoneNumber2,
-      nic,
-      email,
-      companyPhoneCode,
-      companyPhone,
-      companyName,
-      buyerType,
-      userId,
-    ]);
+  const [result] = await db.marketPlace.promise().query(query, values);
   return result;
 };
 
@@ -536,4 +531,28 @@ exports.updateUserPhoneDao = async (userId, phoneCode, phoneNumber) => {
   `;
   const [result] = await db.marketPlace.promise().query(query, [phoneCode, phoneNumber, userId]);
   return result;
+};
+
+// Check delete account eligibility (credit balance and processing orders)
+exports.getDeleteAccountStatusDao = async (userId) => {
+  const userQuery = `SELECT creditBalance FROM marketplaceusers WHERE id = ?`;
+  const [userResults] = await db.marketPlace.promise().query(userQuery, [userId]);
+  const creditBalance = userResults.length > 0 ? Number(userResults[0].creditBalance || 0) : 0;
+
+  const ordersQuery = `
+    SELECT COUNT(o.id) AS processingCount
+    FROM orders o
+    JOIN processorders po ON po.orderId = o.id
+    WHERE o.userId = ?
+      AND (po.status IS NULL OR po.status NOT IN ('Delivered', 'Picked up','Return','Return Received','Cancelled'))
+  `;
+  const [ordersResults] = await db.marketPlace.promise().query(ordersQuery, [userId]);
+  const processingCount = ordersResults.length > 0 ? Number(ordersResults[0].processingCount || 0) : 0;
+
+  return {
+    creditBalance,
+    hasNegativeCredit: creditBalance < 0,
+    processingCount,
+    hasProcessingOrders: processingCount > 0,
+  };
 };
