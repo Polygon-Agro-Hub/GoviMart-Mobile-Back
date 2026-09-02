@@ -166,11 +166,11 @@ exports.checkAvailabilityDao = (productIds, packageIds) => {
       if (pending === 0) resolve(result);
     };
 
-    // Check products (marketplaceitems table)
+    // Check products (marketplaceitems table — only isEnable = 1 count as available)
     if (productIds && productIds.length > 0) {
       pending += 1;
       const placeholders = productIds.map(() => "?").join(", ");
-      const sql = `SELECT id FROM marketplaceitems WHERE id IN (${placeholders})`;
+      const sql = `SELECT id FROM marketplaceitems WHERE id IN (${placeholders}) AND isEnable = 1`;
       db.marketPlace.query(sql, productIds, (err, rows) => {
         if (err) return done(err);
         const existingIds = new Set(rows.map((r) => Number(r.id)));

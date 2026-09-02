@@ -2,7 +2,7 @@ const db = require("../startup/database");
 
 exports.getCustomerProfileDao = async (userId) => {
   const query =
-    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName FROM marketplaceusers WHERE id = ?";
+    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName, creditBalance FROM marketplaceusers WHERE id = ?";
   const [results] = await db.marketPlace.promise().query(query, [userId]);
   return results;
 };
@@ -536,4 +536,28 @@ exports.updateUserPhoneDao = async (userId, phoneCode, phoneNumber) => {
   `;
   const [result] = await db.marketPlace.promise().query(query, [phoneCode, phoneNumber, userId]);
   return result;
+};
+
+// Update user credit balance (clear balance or adjust)
+exports.updateCreditBalanceDao = async (userId, creditBalance) => {
+  const query = `
+    UPDATE marketplaceusers
+    SET creditBalance = creditBalance + ?
+    WHERE id = ?
+  `;
+  const [result] = await db.marketPlace.promise().query(query, [creditBalance, userId]);
+  if (result.affectedRows === 0) {
+    throw new Error("User not found");
+  }
+
+  const [rows] = await db.marketPlace.promise().query(
+    "SELECT creditBalance FROM marketplaceusers WHERE id = ?",
+    [userId]
+  );
+
+  return {
+    userId,
+    creditBalance: parseFloat(rows[0]?.creditBalance || 0),
+    affectedRows: result.affectedRows,
+  };
 };
