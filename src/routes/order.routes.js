@@ -4,6 +4,12 @@ const orderEp = require("../endpoint/order.ep");
 const authMiddleware = require("../middlewares/auth.middleware");
 
 router.get("/order-history", authMiddleware, orderEp.getRetailOrderHistory);
+router.get("/pickup-centers", authMiddleware, orderEp.getPickupCenters);
+router.get("/delivery-cities", authMiddleware, orderEp.getDeliveryCities);
+router.get("/coupons", authMiddleware, orderEp.getAvailableCoupons);
+router.post("/check-coupon", authMiddleware, orderEp.checkCouponAvalability);
+router.post("/create-order", authMiddleware, orderEp.createOrder);
+
 router.get("/:orderId", authMiddleware, orderEp.getRetailOrderById);
 router.get('/packages/:orderId', authMiddleware, orderEp.getOrderPackages);
 router.get("/additional-items/:orderId", authMiddleware, orderEp.getOrderAdditionalItems);

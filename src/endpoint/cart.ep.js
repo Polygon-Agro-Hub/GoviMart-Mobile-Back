@@ -64,7 +64,7 @@ exports.getUserCart = asyncHandler(async (req, res) => {
     unit: prod.unit || "g",
     minimumWeight: prod.unit === "kg" ? 1 : 500,
     step: prod.unit === "kg" ? 0.5 : 100,
-    isUnavailable: prod.isEnable === 0,
+    isUnavailable: prod.isEnable !== 1,
   }));
 
   return res.status(200).json({

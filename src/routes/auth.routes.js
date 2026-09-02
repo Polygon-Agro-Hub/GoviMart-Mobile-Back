@@ -323,4 +323,8 @@ router.post('/logout', userAuthEp.logout);
  */
 router.post('/refresh-token', userAuthEp.refreshToken);
 
+// Update / Clear Credit Balance (matches Web API /api/auth/update-credit-balance)
+const customerEp = require('../endpoint/customer.ep');
+router.put('/update-credit-balance', authMiddleware, customerEp.updateCreditBalance);
+
 module.exports = router;

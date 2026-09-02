@@ -523,3 +523,37 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
     return res.status(500).json({ status: false, message: error.message });
   }
 });
+
+// ---------- Update Credit Balance (Clear Balance) ----------
+exports.updateCreditBalance = asyncHandler(async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { creditBalance } = req.body;
+
+    if (creditBalance === undefined || creditBalance === null) {
+      return res.status(400).json({
+        status: false,
+        message: "creditBalance is required",
+      });
+    }
+
+    const amountToAdd = parseFloat(creditBalance);
+    if (isNaN(amountToAdd) || amountToAdd <= 0) {
+      return res.status(400).json({
+        status: false,
+        message: "Valid creditBalance amount is required",
+      });
+    }
+
+    const result = await customerDao.updateCreditBalanceDao(userId, amountToAdd);
+
+    return res.status(200).json({
+      status: true,
+      message: "Credit balance updated successfully",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Update credit balance error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+});
