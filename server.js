@@ -58,6 +58,7 @@ const complaintroute = require("./src/routes/complaint.routes");
 const productroute = require("./src/routes/product.routes");
 const orderroute = require("./src/routes/order.routes");
 const cartroute = require("./src/routes/cart.routes");
+const paymentroute = require("./src/routes/payment.routes");
 
 app.use(`${BASE_PATH}/api/auth`, userroute);
 app.use(`${BASE_PATH}/api/customer`, customerroute);
@@ -66,6 +67,7 @@ app.use(`${BASE_PATH}/api/complaint`, complaintroute);
 app.use(`${BASE_PATH}/api/product`, productroute);
 app.use(`${BASE_PATH}/api/order`, orderroute);
 app.use(`${BASE_PATH}/api/cart`, cartroute);
+app.use(`${BASE_PATH}/api/payment`, paymentroute);
 app.use(`${BASE_PATH}`, healthroute);
 
 // Error handling middleware

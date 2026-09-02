@@ -60,4 +60,7 @@ router.post("/verify-phone-change-otp", authMiddleware, customerEp.verifyPhoneCh
 // Resend phone change OTP
 router.post("/resend-phone-change-otp", authMiddleware, customerEp.resendPhoneChangeOtp);
 
+// Update / Clear Credit Balance
+router.put("/update-credit-balance", authMiddleware, customerEp.updateCreditBalance);
+
 module.exports = router;
