@@ -38,6 +38,13 @@ exports.login = asyncHandler(async (req, res) => {
       expiresIn: "8h",
     });
 
+    // Create Refresh Token
+    const refreshToken = jwt.sign(
+      { id: result.id, email: result.email, phoneNumber: result.phoneNumber },
+      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
+      { expiresIn: "2d" }
+    );
+
     // Send token as HTTP-only cookie
     res.cookie("authToken", token, {
       httpOnly: true,
@@ -53,6 +60,7 @@ exports.login = asyncHandler(async (req, res) => {
       data: {
         id: result.id,
         token,
+        refreshToken,
         firstName: result.firstName,
         lastName: result.lastName,
         email: result.email,
@@ -120,11 +128,11 @@ const sendEmailOtp = async (email, otp) => {
   let htmlContent = "";
   if (fs.existsSync(templatePath)) {
     htmlContent = fs.readFileSync(templatePath, "utf8");
-    
+
     const logoHtml = logoExists
       ? `<img src="cid:polygon_logo" alt="Polygon" style="max-width: 180px; height: auto;" />`
       : `<h2 style="margin:0; color:#FF7F00;">Polygon</h2>`;
-      
+
     htmlContent = htmlContent
       .replace("{{logo_placeholder}}", logoHtml)
       .replace("{{otp}}", otp)
@@ -207,7 +215,16 @@ exports.userSignup = asyncHandler(async (req, res) => {
     });
   }
 
-  const { email, phoneCode, phoneNumber } = req.body;
+  const {
+    email,
+    phoneCode,
+    phoneNumber,
+    phoneNumber2,
+    phoneCode2,
+    nic,
+    companyPhoneNumber,
+    companyPhoneCode,
+  } = req.body;
 
   try {
     // Check if user already exists
@@ -216,6 +233,56 @@ exports.userSignup = asyncHandler(async (req, res) => {
       return res.status(400).json({
         status: false,
         message: "Email already in use.",
+      });
+    }
+
+    // Check if phone number already exists in phoneNumber, phoneNumber2, or companyPhone
+    const existingPhone = await userDao.getUserByPhoneDao(phoneCode, phoneNumber);
+    if (existingPhone) {
+      return res.status(400).json({
+        status: false,
+        message: "Mobile Number already exists",
+      });
+    }
+
+    // Check secondary phone number if provided
+    if (phoneNumber2) {
+      const existingPhone2 = await userDao.getUserByPhoneDao(phoneCode2 || phoneCode, phoneNumber2);
+      if (existingPhone2) {
+        return res.status(400).json({
+          status: false,
+          message: "Secondary Mobile Number already exists",
+        });
+      }
+    }
+
+    // Check company phone number if provided
+    if (companyPhoneNumber) {
+      const existingCompanyPhone = await userDao.getUserByPhoneDao(companyPhoneCode || phoneCode, companyPhoneNumber);
+      if (existingCompanyPhone) {
+        return res.status(400).json({
+          status: false,
+          message: "Company Phone Number already exists",
+        });
+      }
+
+      // Check if personal mobile and company phone are the same
+      const cleanCustomerPhone = String(phoneNumber).replace(/[^0-9]/g, "").replace(/^0+/, "").replace(/^94/, "");
+      const cleanCompanyPhone = String(companyPhoneNumber).replace(/[^0-9]/g, "").replace(/^0+/, "").replace(/^94/, "");
+      if (cleanCustomerPhone === cleanCompanyPhone) {
+        return res.status(400).json({
+          status: false,
+          message: "Customer Mobile Number and Company Number cannot be the same",
+        });
+      }
+    }
+
+    // Check if NIC already exists
+    const existingNic = await userDao.getUserByNicDao(nic);
+    if (existingNic) {
+      return res.status(400).json({
+        status: false,
+        message: "NIC Number already exists",
       });
     }
 
@@ -242,19 +309,18 @@ exports.userSignup = asyncHandler(async (req, res) => {
       try {
         const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
         const smsReference = await sendShoutoutSms(fullPhone, otp);
-        console.log(`[SMS] OTP ${otp} successfully sent to ${fullPhone} with ref ${smsReference}`);
+        console.log(`[SMS] OTP successfully sent to ${fullPhone} with ref ${smsReference}`);
       } catch (smsErr) {
-        console.error("Failed to send Shoutout SMS, falling back to console log:", smsErr.message);
-        console.log(`[SMS FALLBACK] Sent 5-digit verification code ${otp} to ${phoneCode}${phoneNumber}`);
+        console.error("Failed to send Shoutout SMS:", smsErr.message);
+
       }
     } else {
       // Send via Email
       try {
         await sendEmailOtp(email, otp);
-        console.log(`[Email] OTP ${otp} successfully sent to ${email}`);
+        console.log(`[Email] OTP successfully sent to ${email}`);
       } catch (emailErr) {
-        console.error("Failed to send verification email, falling back to console log:", emailErr.message);
-        console.log(`[Email FALLBACK] Sent 5-digit verification code ${otp} to ${email}`);
+        console.error("Failed to send verification email:", emailErr.message);
       }
     }
 
@@ -336,6 +402,50 @@ exports.verifySignup = asyncHandler(async (req, res) => {
       return res.status(400).json({
         status: false,
         message: "Email already in use.",
+      });
+    }
+
+    // Check again if phone was taken since signup started
+    const existingPhone = await userDao.getUserByPhoneDao(signupData.phoneCode, signupData.phoneNumber);
+    if (existingPhone) {
+      await userDao.deleteOtpDao(referenceId);
+      return res.status(400).json({
+        status: false,
+        message: "Mobile Number already exists",
+      });
+    }
+
+    // Check again if secondary phone was taken
+    if (signupData.phoneNumber2) {
+      const existingPhone2 = await userDao.getUserByPhoneDao(signupData.phoneCode2 || signupData.phoneCode, signupData.phoneNumber2);
+      if (existingPhone2) {
+        await userDao.deleteOtpDao(referenceId);
+        return res.status(400).json({
+          status: false,
+          message: "Secondary Mobile Number already exists",
+        });
+      }
+    }
+
+    // Check again if company phone was taken
+    if (signupData.companyPhoneNumber) {
+      const existingCompanyPhone = await userDao.getUserByPhoneDao(signupData.companyPhoneCode || signupData.phoneCode, signupData.companyPhoneNumber);
+      if (existingCompanyPhone) {
+        await userDao.deleteOtpDao(referenceId);
+        return res.status(400).json({
+          status: false,
+          message: "Company Phone Number already exists",
+        });
+      }
+    }
+
+    // Check again if NIC was taken since signup started
+    const existingNic = await userDao.getUserByNicDao(signupData.nic);
+    if (existingNic) {
+      await userDao.deleteOtpDao(referenceId);
+      return res.status(400).json({
+        status: false,
+        message: "NIC Number already exists",
       });
     }
 
@@ -430,15 +540,13 @@ exports.resendSignupOtp = asyncHandler(async (req, res) => {
         const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
         await sendShoutoutSms(fullPhone, otp);
       } catch (smsErr) {
-        console.error("Failed to send Shoutout SMS, falling back to console log:", smsErr.message);
-        console.log(`[SMS FALLBACK] Sent 5-digit verification code ${otp} to ${phoneCode}${phoneNumber}`);
+        console.error("Failed to send Shoutout SMS on resend:", smsErr.message);
       }
     } else {
       try {
         await sendEmailOtp(email, otp);
       } catch (emailErr) {
-        console.error("Failed to send verification email, falling back to console log:", emailErr.message);
-        console.log(`[Email FALLBACK] Sent 5-digit verification code ${otp} to ${email}`);
+        console.error("Failed to send verification email on resend:", emailErr.message);
       }
     }
 
@@ -545,6 +653,84 @@ exports.updatePassword = asyncHandler(async (req, res) => {
       status: false,
       message: "An error occurred while updating the password.",
       error: err.message,
+    });
+  }
+});
+
+// Logout User
+exports.logout = asyncHandler(async (req, res) => {
+  let token = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.split(" ")[1];
+  } else if (req.cookies && req.cookies.authToken) {
+    token = req.cookies.authToken;
+  }
+
+  if (token) {
+    const { blacklistedTokens } = require("../middlewares/auth.middleware");
+    let expiresAt = Date.now() + 8 * 60 * 60 * 1000; // default 8 hours fallback
+    try {
+      const decoded = jwt.decode(token);
+      if (decoded && decoded.exp) {
+        expiresAt = decoded.exp * 1000;
+      }
+    } catch (e) {
+      console.error("Error decoding token on logout:", e);
+    }
+    blacklistedTokens.set(token, expiresAt);
+    console.log(`🔒 Token successfully blacklisted until: ${new Date(expiresAt).toISOString()}`);
+  }
+
+  res.clearCookie("authToken", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Strict",
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: "Logout successful",
+  });
+});
+
+// Refresh Access Token
+exports.refreshToken = asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) {
+    return res.status(400).json({
+      success: false,
+      message: "Refresh token is required.",
+    });
+  }
+
+  try {
+    const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+    const decoded = jwt.verify(refreshToken, secret);
+
+    const payload = {
+      id: decoded.id,
+      email: decoded.email,
+      phoneNumber: decoded.phoneNumber,
+      iat: Math.floor(Date.now() / 1000),
+    };
+
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: "8h",
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Token refreshed successfully",
+      data: {
+        token,
+      },
+    });
+  } catch (err) {
+    console.error("Token refresh failed:", err.message);
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired refresh token.",
     });
   }
 });

@@ -197,6 +197,76 @@ exports.getUserByEmailDao = async (email) => {
   }
 };
 
+// Get User By Phone across phoneNumber, phoneNumber2, and companyPhone
+exports.getUserByPhoneDao = async (phoneCode, phoneNumber) => {
+  try {
+    const raw = String(phoneNumber || "").trim();
+    if (!raw) return null;
+    const cleanNum = raw.replace(/[^0-9]/g, "");
+    const candidates = new Set([raw, cleanNum]);
+
+    if (phoneCode === "+94" || cleanNum.startsWith("7") || cleanNum.startsWith("07") || cleanNum.startsWith("947")) {
+      if (cleanNum.length === 9 && cleanNum.startsWith("7")) {
+        candidates.add(cleanNum);
+        candidates.add("0" + cleanNum);
+        candidates.add("+94" + cleanNum);
+        candidates.add("94" + cleanNum);
+      } else if (cleanNum.length === 10 && cleanNum.startsWith("07")) {
+        const suffix = cleanNum.substring(1);
+        candidates.add(suffix);
+        candidates.add(cleanNum);
+        candidates.add("+94" + suffix);
+        candidates.add("94" + suffix);
+      } else if (cleanNum.length === 11 && cleanNum.startsWith("947")) {
+        const suffix = cleanNum.substring(2);
+        candidates.add(suffix);
+        candidates.add("0" + suffix);
+        candidates.add("+" + cleanNum);
+        candidates.add(cleanNum);
+      }
+    }
+
+    const phoneList = Array.from(candidates).filter(Boolean);
+    if (phoneList.length === 0) return null;
+    const placeholders = phoneList.map(() => "?").join(", ");
+    const sql = `
+      SELECT * FROM marketplaceusers 
+      WHERE phoneNumber IN (${placeholders}) 
+         OR phoneNumber2 IN (${placeholders}) 
+         OR companyPhone IN (${placeholders}) 
+      LIMIT 1
+    `;
+    const [results] = await db.marketPlace.promise().query(sql, [
+      ...phoneList,
+      ...phoneList,
+      ...phoneList,
+    ]);
+    return results[0] || null;
+  } catch (err) {
+    console.error("Database error in getUserByPhoneDao:", err);
+    throw err;
+  }
+};
+
+// Get User By NIC
+exports.getUserByNicDao = async (nic) => {
+  try {
+    const rawNic = String(nic || "").trim();
+    if (!rawNic) return null;
+    const upperNic = rawNic.toUpperCase();
+    const lowerNic = rawNic.toLowerCase();
+    const candidates = [...new Set([rawNic, upperNic, lowerNic])];
+
+    const placeholders = candidates.map(() => "?").join(", ");
+    const sql = `SELECT * FROM marketplaceusers WHERE nic IN (${placeholders}) LIMIT 1`;
+    const [results] = await db.marketPlace.promise().query(sql, candidates);
+    return results[0] || null;
+  } catch (err) {
+    console.error("Database error in getUserByNicDao:", err);
+    throw err;
+  }
+};
+
 // Sign Up User
 exports.signupUserDao = async (user, hashedPassword, nextId) => {
   try {
@@ -219,7 +289,7 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
       user.nic,
       hashedPassword,
       1,
-      user.agreeToMarketing ? 1 : 0,
+      0,
       user.companyName || null,
       user.companyPhoneCode || null,
       user.companyPhoneNumber || null,
@@ -228,7 +298,7 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
     ];
 
     const [results] = await db.marketPlace.promise().query(sql, values);
-    
+
     if (results.affectedRows === 1) {
       return {
         status: true,

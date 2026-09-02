@@ -3,8 +3,9 @@ const authDao = require("../dao/auth.dao");
 const userAuthEp = require("./auth.ep");
 const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
+const asyncHandler = require("express-async-handler");
 
-exports.getCustomerProfile = async (req, res) => {
+exports.getCustomerProfile = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
     const results = await customerDao.getCustomerProfileDao(userId);
@@ -16,9 +17,9 @@ exports.getCustomerProfile = async (req, res) => {
     console.error("Profile fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
-exports.getSuggestions = async (req, res) => {
+exports.getSuggestions = asyncHandler(async (req, res) => {
   try {
     const results = await customerDao.getSuggestionsDao();
     return res.status(200).json({
@@ -30,9 +31,9 @@ exports.getSuggestions = async (req, res) => {
     console.error("Suggestions fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
-exports.getIncludeItems = async (req, res) => {
+exports.getIncludeItems = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
     const results = await customerDao.getIncludeItemsDao(userId);
@@ -44,9 +45,9 @@ exports.getIncludeItems = async (req, res) => {
     console.error("Include items fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
-exports.addIncludeItems = async (req, res) => {
+exports.addIncludeItems = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
     const { items } = req.body;
@@ -63,9 +64,9 @@ exports.addIncludeItems = async (req, res) => {
     console.error("Include items save error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
-exports.deleteIncluded = async (req, res) => {
+exports.deleteIncluded = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
     const { items } = req.body;
@@ -82,9 +83,9 @@ exports.deleteIncluded = async (req, res) => {
     console.error("Include items delete error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
-exports.getExcludeItems = async (req, res) => {
+exports.getExcludeItems = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
     const results = await customerDao.getExcludeItemsDao(userId);
@@ -96,9 +97,9 @@ exports.getExcludeItems = async (req, res) => {
     console.error("Exclude items fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
-exports.addExcludeItems = async (req, res) => {
+exports.addExcludeItems = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
     const { items } = req.body;
@@ -115,9 +116,9 @@ exports.addExcludeItems = async (req, res) => {
     console.error("Exclude items save error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
-exports.deleteExcluded = async (req, res) => {
+exports.deleteExcluded = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
     const { items } = req.body;
@@ -134,9 +135,9 @@ exports.deleteExcluded = async (req, res) => {
     console.error("Exclude items delete error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
-exports.updateUserStatus = async (req, res) => {
+exports.updateUserStatus = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
     const result = await customerDao.updateUserStatusDao(userId);
@@ -149,9 +150,9 @@ exports.updateUserStatus = async (req, res) => {
     console.error("Update status error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
-exports.getSavedAddresses = async (req, res) => {
+exports.getSavedAddresses = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.userId;
 
@@ -188,9 +189,9 @@ exports.getSavedAddresses = async (req, res) => {
       error: error.message,
     });
   }
-};
+});
 
-exports.getAccountDetails = async (req, res) => {
+exports.getAccountDetails = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
     const results = await customerDao.getAccountDetailsDao(userId);
@@ -202,10 +203,10 @@ exports.getAccountDetails = async (req, res) => {
     console.error("Account details fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
 // ---------- Add User Address ----------
-exports.addAddress = async (req, res) => {
+exports.addAddress = asyncHandler(async (req, res) => {
   try {
     const customerId = req.user.id;
     const { buildingType } = req.body;
@@ -224,10 +225,10 @@ exports.addAddress = async (req, res) => {
     console.error("Add address error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
 // ---------- Update User Address ----------
-exports.updateAddress = async (req, res) => {
+exports.updateAddress = asyncHandler(async (req, res) => {
   try {
     const customerId = req.user.id;
     const { addressId } = req.params;
@@ -258,10 +259,10 @@ exports.updateAddress = async (req, res) => {
     console.error("Update address error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
 // ---------- Delete User Address ----------
-exports.deleteAddress = async (req, res) => {
+exports.deleteAddress = asyncHandler(async (req, res) => {
   try {
     const customerId = req.user.id;
     const { addressId } = req.params;
@@ -292,12 +293,20 @@ exports.deleteAddress = async (req, res) => {
     console.error("Delete address error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
 // ---------- Update User Details ----------
-exports.updateUserDetails = async (req, res) => {
+exports.updateUserDetails = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
+
+    if (req.body.nic) {
+      const isNicTaken = await customerDao.isNicTakenDao(userId, req.body.nic);
+      if (isNicTaken) {
+        return res.status(400).json({ status: false, message: "NIC Number already exists" });
+      }
+    }
+
     const result = await customerDao.updateUserDetailsDao(userId, req.body);
 
     if (result.affectedRows === 0) {
@@ -311,10 +320,10 @@ exports.updateUserDetails = async (req, res) => {
     console.error("Update user details error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
 // ---------- Delete User Account ----------
-exports.deleteUserAccount = async (req, res) => {
+exports.deleteUserAccount = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
     const result = await customerDao.deleteUserAccountDao(userId);
@@ -330,10 +339,10 @@ exports.deleteUserAccount = async (req, res) => {
     console.error("Delete account error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
 // ---------- Send OTP to verify a new phone number ----------
-exports.sendPhoneChangeOtp = async (req, res) => {
+exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
     const { phoneCode, phoneNumber } = req.body;
@@ -380,10 +389,9 @@ exports.sendPhoneChangeOtp = async (req, res) => {
         .replace(/\+/g, "")
         .replace(/\s+/g, "");
       await userAuthEp.sendShoutoutSms(fullPhone, otp);
-      console.log(`[SMS] Phone change OTP ${otp} sent to ${fullPhone}`);
+      console.log(`[SMS] Phone change OTP sent to ${fullPhone}`);
     } catch (smsErr) {
-      console.error("Failed to send Shoutout SMS, falling back to console log:", smsErr.message);
-      console.log(`[SMS FALLBACK] Sent 5-digit verification code ${otp} to ${phoneCode}${normalizedPhone}`);
+      console.error("Failed to send Shoutout SMS for phone change:", smsErr.message);
     }
 
     return res.status(200).json({
@@ -397,10 +405,10 @@ exports.sendPhoneChangeOtp = async (req, res) => {
     console.error("Send phone change OTP error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
 // ---------- Verify phone change OTP and update the number ----------
-exports.verifyPhoneChange = async (req, res) => {
+exports.verifyPhoneChange = asyncHandler(async (req, res) => {
   try {
     const { code, referenceId, signupToken, accountDetails } = req.body;
 
@@ -459,10 +467,10 @@ exports.verifyPhoneChange = async (req, res) => {
     console.error("Verify phone change error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
 
 // ---------- Resend phone change OTP ----------
-exports.resendPhoneChangeOtp = async (req, res) => {
+exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
   try {
     const { signupToken } = req.body;
 
@@ -499,10 +507,9 @@ exports.resendPhoneChangeOtp = async (req, res) => {
         .replace(/\+/g, "")
         .replace(/\s+/g, "");
       await userAuthEp.sendShoutoutSms(fullPhone, otp);
-      console.log(`[SMS] Phone change OTP ${otp} resent to ${fullPhone}`);
+      console.log(`[SMS] Phone change OTP resent to ${fullPhone}`);
     } catch (smsErr) {
-      console.error("Failed to send Shoutout SMS, falling back to console log:", smsErr.message);
-      console.log(`[SMS FALLBACK] Sent 5-digit verification code ${otp} to ${phoneCode}${phoneNumber}`);
+      console.error("Failed to send Shoutout SMS on phone change resend:", smsErr.message);
     }
 
     return res.status(200).json({
@@ -515,4 +522,4 @@ exports.resendPhoneChangeOtp = async (req, res) => {
     console.error("Resend phone change OTP error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
-};
+});
