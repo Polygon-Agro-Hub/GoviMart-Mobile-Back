@@ -85,17 +85,26 @@ app.use((err, req, res, next) => {
 
 // Create HTTP server & initialize Socket.IO
 const server = http.createServer(app);
-initSocket(server);
+const io = initSocket(server);
+
+// Attach io instance to express app
+app.set("io", io);
+
+// Attach io and app to server instance
+server.io = io;
+server.app = app;
 
 // Start server
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
-  console.log(`📍 Base Path: ${BASE_PATH}`);
-  console.log(`💓 Health Check URL: ${BASE_PATH}/health`);
-  console.log(`🔌 Socket.IO initialized`);
-});
+if (!process.env.VERCEL) {
+  server.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+    console.log(`📍 Base Path: ${BASE_PATH}`);
+    console.log(`💓 Health Check URL: ${BASE_PATH}/health`);
+    console.log(`🔌 Socket.IO initialized`);
+  });
+}
 
-module.exports = { app, server };
+module.exports = server;
 
