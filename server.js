@@ -62,16 +62,21 @@ const cartroute = require("./src/routes/cart.routes");
 const paymentroute = require("./src/routes/payment.routes");
 const notificationroute = require("./src/routes/notification.routes");
 
-app.use(`${BASE_PATH}/api/auth`, userroute);
-app.use(`${BASE_PATH}/api/customer`, customerroute);
-app.use(`${BASE_PATH}/api/home`, homeroute);
-app.use(`${BASE_PATH}/api/complaint`, complaintroute);
-app.use(`${BASE_PATH}/api/product`, productroute);
-app.use(`${BASE_PATH}/api/order`, orderroute);
-app.use(`${BASE_PATH}/api/cart`, cartroute);
-app.use(`${BASE_PATH}/api/payment`, paymentroute);
-app.use(`${BASE_PATH}/api/notification`, notificationroute);
-app.use(`${BASE_PATH}`, healthroute);
+const registerRoutes = (prefix) => {
+  app.use(`${prefix}/api/auth`, userroute);
+  app.use(`${prefix}/api/customer`, customerroute);
+  app.use(`${prefix}/api/home`, homeroute);
+  app.use(`${prefix}/api/complaint`, complaintroute);
+  app.use(`${prefix}/api/product`, productroute);
+  app.use(`${prefix}/api/order`, orderroute);
+  app.use(`${prefix}/api/cart`, cartroute);
+  app.use(`${prefix}/api/payment`, paymentroute);
+  app.use(`${prefix}/api/notification`, notificationroute);
+  app.use(`${prefix}`, healthroute);
+};
+
+registerRoutes(BASE_PATH);
+registerRoutes("");
 
 // Error handling middleware
 app.use((err, req, res, next) => {
