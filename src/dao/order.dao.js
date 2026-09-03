@@ -568,14 +568,14 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
         END AS deliveryType
       FROM orders o
       LEFT JOIN processorders p ON o.id = p.orderId
-      
-      WHERE p.id = ? AND o.userId = ?
+      WHERE (p.id = ? OR o.id = ?) AND o.userId = ?
+      ORDER BY p.id DESC
     `;
 
         const houseSql = `SELECT * FROM orderhouse WHERE orderId = ?`;
         const apartmentSql = `SELECT * FROM orderapartment WHERE orderId = ?`;
 
-        db.collectionofficer.query(orderSql, [orderId, userId], (err, orders) => {
+        db.collectionofficer.query(orderSql, [orderId, orderId, userId], (err, orders) => {
             if (err) return reject("Error fetching order: " + err);
             if (!orders || orders.length === 0) return reject("Order not found or unauthorized");
 
@@ -690,11 +690,11 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
       JOIN marketplacepackages mp ON op.packageId = mp.id
       JOIN packagedetails pd ON mp.id = pd.packageId
       JOIN producttypes pt ON pd.productTypeId = pt.id
-      WHERE op.orderId = ?
+      WHERE op.orderId = ? OR op.orderId IN (SELECT id FROM processorders WHERE orderId = ?)
       ORDER BY op.id
     `;
 
-        db.collectionofficer.query(sql, [orderId], (err, results) => {
+        db.collectionofficer.query(sql, [orderId, orderId], (err, results) => {
             if (err) {
                 return reject(new Error("Database error: " + err.message));
             }
@@ -768,17 +768,14 @@ exports.getOrderAdditionalItemsDao = async (processOrderId) => {
         cv.id as cropVarietyId,
         cv.cropGroupId
       FROM orderadditionalitems oai
-      JOIN processorders po ON po.orderId = oai.orderId
+      LEFT JOIN processorders po ON (po.id = oai.proOrderId OR po.orderId = oai.orderId)
       JOIN marketplaceitems mi ON oai.productId = mi.id
       LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-      WHERE po.id = ?
+      WHERE po.id = ? OR oai.orderId = ? OR oai.proOrderId = ?
       ORDER BY oai.id
     `;
 
-        console.log("Executing corrected query:", sql);
-        console.log("With processOrderId:", processOrderId);
-
-        db.collectionofficer.query(sql, [processOrderId], (err, results) => {
+        db.collectionofficer.query(sql, [processOrderId, processOrderId, processOrderId], (err, results) => {
             if (err) {
                 console.error("Database error:", err);
                 return reject(new Error("Database error: " + err.message));
