@@ -51,7 +51,7 @@ exports.loginUser = async (identifier, password) => {
         AND (isMarketPlaceUser = 1 OR isDashUser = 1)
     `;
 
-    const [results] = await db.marketPlace.promise().query(sql, [
+    const [results] = await db.collectionofficer.promise().query(sql, [
       identifier, // email
       phone1,     // phone normalized 1
       phone2,     // phone normalized 2
@@ -167,6 +167,32 @@ exports.getAllCitiesDao = async () => {
   }
 };
 
+// Update City Availability (adds/removes mapping in centerowncity) and emits socket update
+exports.updateCityAvailabilityDao = async (cityId, isAvailable, companyCenterId = 1) => {
+  try {
+    if (isAvailable) {
+      const checkSql = `SELECT id FROM centerowncity WHERE cityId = ?`;
+      const [existing] = await db.collectionofficer.promise().query(checkSql, [cityId]);
+      if (!existing || existing.length === 0) {
+        const insertSql = `INSERT INTO centerowncity (companyCenterId, cityId) VALUES (?, ?)`;
+        await db.collectionofficer.promise().query(insertSql, [companyCenterId, cityId]);
+      }
+    } else {
+      const deleteSql = `DELETE FROM centerowncity WHERE cityId = ?`;
+      await db.collectionofficer.promise().query(deleteSql, [cityId]);
+    }
+
+    const updatedCities = await exports.getAllCitiesDao();
+    const { emitCityAvailabilityUpdate } = require("../socket/socket");
+    emitCityAvailabilityUpdate(updatedCities);
+
+    return updatedCities;
+  } catch (err) {
+    console.error("Database error in updateCityAvailabilityDao:", err);
+    throw new Error("Database error while updating city availability: " + err.message);
+  }
+};
+
 // Get Last Customer ID
 exports.getMarketPlaceUserLastCusIdDao = async () => {
   try {
@@ -177,7 +203,7 @@ exports.getMarketPlaceUserLastCusIdDao = async () => {
       ORDER BY CAST(SUBSTRING(cusId, 5) AS UNSIGNED) DESC
       LIMIT 1
     `;
-    const [results] = await db.marketPlace.promise().query(sql);
+    const [results] = await db.collectionofficer.promise().query(sql);
     return results[0] ? results[0].cusId : null;
   } catch (err) {
     console.error("Database error in getMarketPlaceUserLastCusIdDao:", err);
@@ -189,10 +215,80 @@ exports.getMarketPlaceUserLastCusIdDao = async () => {
 exports.getUserByEmailDao = async (email) => {
   try {
     const sql = "SELECT * FROM marketplaceusers WHERE email = ?";
-    const [results] = await db.marketPlace.promise().query(sql, [email]);
+    const [results] = await db.collectionofficer.promise().query(sql, [email]);
     return results[0] || null;
   } catch (err) {
     console.error("Database error in getUserByEmailDao:", err);
+    throw err;
+  }
+};
+
+// Get User By Phone across phoneNumber, phoneNumber2, and companyPhone
+exports.getUserByPhoneDao = async (phoneCode, phoneNumber) => {
+  try {
+    const raw = String(phoneNumber || "").trim();
+    if (!raw) return null;
+    const cleanNum = raw.replace(/[^0-9]/g, "");
+    const candidates = new Set([raw, cleanNum]);
+
+    if (phoneCode === "+94" || cleanNum.startsWith("7") || cleanNum.startsWith("07") || cleanNum.startsWith("947")) {
+      if (cleanNum.length === 9 && cleanNum.startsWith("7")) {
+        candidates.add(cleanNum);
+        candidates.add("0" + cleanNum);
+        candidates.add("+94" + cleanNum);
+        candidates.add("94" + cleanNum);
+      } else if (cleanNum.length === 10 && cleanNum.startsWith("07")) {
+        const suffix = cleanNum.substring(1);
+        candidates.add(suffix);
+        candidates.add(cleanNum);
+        candidates.add("+94" + suffix);
+        candidates.add("94" + suffix);
+      } else if (cleanNum.length === 11 && cleanNum.startsWith("947")) {
+        const suffix = cleanNum.substring(2);
+        candidates.add(suffix);
+        candidates.add("0" + suffix);
+        candidates.add("+" + cleanNum);
+        candidates.add(cleanNum);
+      }
+    }
+
+    const phoneList = Array.from(candidates).filter(Boolean);
+    if (phoneList.length === 0) return null;
+    const placeholders = phoneList.map(() => "?").join(", ");
+    const sql = `
+      SELECT * FROM marketplaceusers 
+      WHERE phoneNumber IN (${placeholders}) 
+         OR phoneNumber2 IN (${placeholders}) 
+         OR companyPhone IN (${placeholders}) 
+      LIMIT 1
+    `;
+    const [results] = await db.collectionofficer.promise().query(sql, [
+      ...phoneList,
+      ...phoneList,
+      ...phoneList,
+    ]);
+    return results[0] || null;
+  } catch (err) {
+    console.error("Database error in getUserByPhoneDao:", err);
+    throw err;
+  }
+};
+
+// Get User By NIC
+exports.getUserByNicDao = async (nic) => {
+  try {
+    const rawNic = String(nic || "").trim();
+    if (!rawNic) return null;
+    const upperNic = rawNic.toUpperCase();
+    const lowerNic = rawNic.toLowerCase();
+    const candidates = [...new Set([rawNic, upperNic, lowerNic])];
+
+    const placeholders = candidates.map(() => "?").join(", ");
+    const sql = `SELECT * FROM marketplaceusers WHERE nic IN (${placeholders}) LIMIT 1`;
+    const [results] = await db.collectionofficer.promise().query(sql, candidates);
+    return results[0] || null;
+  } catch (err) {
+    console.error("Database error in getUserByNicDao:", err);
     throw err;
   }
 };
@@ -219,7 +315,7 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
       user.nic,
       hashedPassword,
       1,
-      user.agreeToMarketing ? 1 : 0,
+      0,
       user.companyName || null,
       user.companyPhoneCode || null,
       user.companyPhoneNumber || null,
@@ -227,8 +323,8 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
       user.city || null,
     ];
 
-    const [results] = await db.marketPlace.promise().query(sql, values);
-    
+    const [results] = await db.collectionofficer.promise().query(sql, values);
+
     if (results.affectedRows === 1) {
       return {
         status: true,
@@ -257,7 +353,7 @@ exports.saveOtpDao = async (referenceId, email, otp, expiresAt) => {
         otpEmail = VALUES(otpEmail),
         otpExpiresAt = VALUES(otpExpiresAt)
     `;
-    const [result] = await db.marketPlace.promise().query(sql, [referenceId, otp, email, expiresAt]);
+    const [result] = await db.collectionofficer.promise().query(sql, [referenceId, otp, email, expiresAt]);
     return result;
   } catch (err) {
     console.error("Database error in saveOtpDao:", err);
@@ -272,7 +368,7 @@ exports.getOtpDao = async (referenceId) => {
       FROM resetpasswordtoken
       WHERE resetPasswordToken = ? LIMIT 1
     `;
-    const [results] = await db.marketPlace.promise().query(sql, [referenceId]);
+    const [results] = await db.collectionofficer.promise().query(sql, [referenceId]);
     return results.length > 0 ? results[0] : null;
   } catch (err) {
     console.error("Database error in getOtpDao:", err);
@@ -283,7 +379,7 @@ exports.getOtpDao = async (referenceId) => {
 exports.deleteOtpDao = async (referenceId) => {
   try {
     const sql = "DELETE FROM resetpasswordtoken WHERE resetPasswordToken = ?";
-    const [result] = await db.marketPlace.promise().query(sql, [referenceId]);
+    const [result] = await db.collectionofficer.promise().query(sql, [referenceId]);
     return result;
   } catch (err) {
     console.error("Database error in deleteOtpDao:", err);
@@ -294,7 +390,7 @@ exports.deleteOtpDao = async (referenceId) => {
 exports.getUserPasswordByIdDao = async (userId) => {
   try {
     const sql = "SELECT id, password, nic FROM marketplaceusers WHERE id = ? LIMIT 1";
-    const [results] = await db.marketPlace.promise().query(sql, [userId]);
+    const [results] = await db.collectionofficer.promise().query(sql, [userId]);
     return results[0] || null;
   } catch (err) {
     console.error("Database error in getUserPasswordByIdDao:", err);
@@ -305,7 +401,7 @@ exports.getUserPasswordByIdDao = async (userId) => {
 exports.updatePasswordDao = async (userId, hashedPassword) => {
   try {
     const sql = "UPDATE marketplaceusers SET password = ?, isPswUpdateed = 1 WHERE id = ?";
-    const [result] = await db.marketPlace.promise().query(sql, [hashedPassword, userId]);
+    const [result] = await db.collectionofficer.promise().query(sql, [hashedPassword, userId]);
     return result.affectedRows === 1;
   } catch (err) {
     console.error("Database error in updatePasswordDao:", err);

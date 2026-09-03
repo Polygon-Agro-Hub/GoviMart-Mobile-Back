@@ -1,6 +1,6 @@
 const db = require("../startup/database");
 
-exports.getProductsByCategoryDao = (category, search) => {
+exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
   return new Promise((resolve, reject) => {
     let sql = `
       SELECT 
@@ -9,6 +9,7 @@ exports.getProductsByCategoryDao = (category, search) => {
         m.normalPrice,
         m.discountedPrice,
         m.discount,
+        m.comPrice,
         m.promo,
         m.unitType,
         m.startValue,
@@ -26,10 +27,10 @@ exports.getProductsByCategoryDao = (category, search) => {
       FROM marketplaceitems m
       JOIN plant_care.cropvariety v ON m.varietyId = v.id
       JOIN plant_care.cropgroup c ON v.cropGroupId = c.id
-      WHERE m.category = 'Retail'
+      WHERE LOWER(m.category) = LOWER(?)
     `;
 
-    const params = [];
+    const params = [buyerType || "Retail"];
 
     if (category && (!search || search.trim() === "")) {
       let categoryCondition = "";
@@ -43,7 +44,7 @@ exports.getProductsByCategoryDao = (category, search) => {
       } else if (category === "Spices") {
         categoryCondition = ` AND c.category = ?`;
         params.push("Spices");
-      } else if (category === "Fruits") {
+      } else if (category === "Fruits" || category === "Fruit") {
         categoryCondition = ` AND c.category = ?`;
         params.push("Fruit");
       } else {
@@ -64,7 +65,7 @@ exports.getProductsByCategoryDao = (category, search) => {
 
     sql += ` ORDER BY m.displayName ASC`;
 
-    db.marketPlace.query(sql, params, (err, results) => {
+    db.collectionofficer.query(sql, params, (err, results) => {
       if (err) {
         reject(err);
       } else {
@@ -104,7 +105,7 @@ exports.getProductsByCategoryDao = (category, search) => {
 
 exports.getAllSlidesDao = () => {
   return new Promise((resolve, reject) => {
-    db.marketPlace.query(
+    db.collectionofficer.query(
       "SELECT * FROM banners  ORDER BY createdAt DESC",
       (err, results) => {
         if (err) return reject(err);
@@ -114,102 +115,9 @@ exports.getAllSlidesDao = () => {
   });
 };
 
-// Updated DAO Function
+// Updated DAO Function for Wholesale
 exports.getProductsByCategoryDaoWholesale = (category, search) => {
-  return new Promise((resolve, reject) => {
-    let sql = `
-      SELECT 
-        m.id,
-        m.displayName,
-        m.normalPrice,
-        m.discountedPrice,
-        m.discount,
-        m.promo,
-        m.unitType,
-        m.startValue,
-        m.changeby,
-        m.displayType,
-        m.tags,
-        v.varietyNameEnglish,
-        v.varietyNameSinhala,
-        v.varietyNameTamil,
-        v.image,
-        c.cropNameEnglish,
-        c.cropNameSinhala,
-        c.cropNameTamil,
-        c.category
-      FROM marketplaceitems m
-      JOIN plant_care.cropvariety v ON m.varietyId = v.id
-      JOIN plant_care.cropgroup c ON v.cropGroupId = c.id
-      WHERE m.category = 'Wholesale'
-    `;
-
-    const params = [];
-
-    // Add category condition only if no search is provided or if search is empty
-    if (category && (!search || search.trim() === "")) {
-      // Normalize "fruits" to "Fruit" for category matching
-      let normalizedCategory =
-        category.toLowerCase() === "fruits" ? "Fruit" : category;
-
-      // Handle grouped categories
-      if (normalizedCategory === "Vegetables") {
-        sql += ` AND (c.category = ? OR c.category = ?)`;
-        params.push("Vegetables", "Mushrooms");
-      } else if (normalizedCategory === "Cereals") {
-        sql += ` AND (c.category = ? OR c.category = ? OR c.category = ? OR c.category = ?)`;
-        params.push("Cereals", "Legumes", "Pulses", "Grain");
-      } else {
-        sql += ` AND c.category = ?`;
-        params.push(normalizedCategory);
-      }
-    }
-
-    // Add search condition if search is provided
-    if (search && search.trim() !== "") {
-      sql += ` AND (m.displayName LIKE ? OR m.tags LIKE ?)`;
-      const searchParam = `%${search.trim()}%`;
-      params.push(searchParam, searchParam);
-    }
-
-    sql += ` ORDER BY m.displayName ASC`;
-
-    db.marketPlace.query(sql, params, (err, results) => {
-      if (err) {
-        reject(err);
-      } else {
-        // Format the results to handle discount price formatting and calculate discount percentage
-        const formattedResults = results.map((item) => {
-          // Calculate discount percentage
-          let discountPercentage = null;
-          if (
-            item.normalPrice &&
-            item.discountedPrice &&
-            item.normalPrice > item.discountedPrice
-          ) {
-            const discount =
-              ((item.normalPrice - item.discountedPrice) / item.normalPrice) *
-              100;
-            // Format percentage: if whole number, show as integer; if decimal, show with decimals
-            discountPercentage =
-              discount % 1 === 0
-                ? Math.round(discount)
-                : Math.round(discount * 100) / 100;
-          }
-
-          return {
-            ...item,
-            discountedPrice:
-              item.discountedPrice % 1 === 0
-                ? parseInt(item.discountedPrice)
-                : item.discountedPrice,
-            discount: discountPercentage,
-          };
-        });
-        resolve(formattedResults);
-      }
-    });
-  });
+  return exports.getProductsByCategoryDao(category, search, "Wholesale");
 };
 
 exports.getAllProductDao = (search) => {
@@ -233,7 +141,7 @@ exports.getAllProductDao = (search) => {
     GROUP BY mp.id, mp.displayName, mp.image
     ORDER BY mp.displayName ASC`;
 
-    db.marketPlace.query(sql, params, (err, results) => {
+    db.collectionofficer.query(sql, params, (err, results) => {
       if (err) {
         reject(err);
       } else {
@@ -243,6 +151,55 @@ exports.getAllProductDao = (search) => {
   });
 };
 
+/**
+ * Given arrays of marketplace item IDs and package IDs,
+ * returns a map of id → boolean indicating whether each is still available.
+ */
+exports.checkAvailabilityDao = (productIds, packageIds) => {
+  return new Promise((resolve, reject) => {
+    const result = { products: {}, packages: {} };
+    let pending = 0;
+
+    const done = (err) => {
+      if (err) return reject(err);
+      pending -= 1;
+      if (pending === 0) resolve(result);
+    };
+
+    // Check products (marketplaceitems table — only isEnable = 1 count as available)
+    if (productIds && productIds.length > 0) {
+      pending += 1;
+      const placeholders = productIds.map(() => "?").join(", ");
+      const sql = `SELECT id FROM marketplaceitems WHERE id IN (${placeholders}) AND isEnable = 1`;
+      db.collectionofficer.query(sql, productIds, (err, rows) => {
+        if (err) return done(err);
+        const existingIds = new Set(rows.map((r) => Number(r.id)));
+        productIds.forEach((id) => {
+          result.products[id] = existingIds.has(Number(id));
+        });
+        done(null);
+      });
+    }
+
+    // Check packages (marketplacepackages — only Enabled + isValid ones count as available)
+    if (packageIds && packageIds.length > 0) {
+      pending += 1;
+      const placeholders = packageIds.map(() => "?").join(", ");
+      const sql = `SELECT id FROM marketplacepackages WHERE id IN (${placeholders}) AND status = 'Enabled' AND isValid = 1`;
+      db.collectionofficer.query(sql, packageIds, (err, rows) => {
+        if (err) return done(err);
+        const existingIds = new Set(rows.map((r) => Number(r.id)));
+        packageIds.forEach((id) => {
+          result.packages[id] = existingIds.has(Number(id));
+        });
+        done(null);
+      });
+    }
+
+    // Both arrays empty — resolve immediately
+    if (pending === 0) resolve(result);
+  });
+};
 exports.getAllPackageItemsDao = (packageId) => {
   return new Promise((resolve, reject) => {
     const sql = `
@@ -258,7 +215,7 @@ exports.getAllPackageItemsDao = (packageId) => {
         LEFT JOIN producttypes pt ON pd.productTypeId = pt.id
         WHERE pd.packageId = ?;
         `;
-    db.marketPlace.query(sql, [packageId], (err, results) => {
+    db.collectionofficer.query(sql, [packageId], (err, results) => {
       if (err) {
         reject(err);
       } else {

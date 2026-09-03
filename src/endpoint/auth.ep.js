@@ -104,6 +104,39 @@ exports.getCities = asyncHandler(async (req, res) => {
   }
 });
 
+// Update City Availability & broadcast to all clients via Socket.IO
+exports.updateCityAvailability = asyncHandler(async (req, res) => {
+  const { cityId, isAvailable, companyCenterId = 1 } = req.body;
+
+  if (!cityId) {
+    return res.status(400).json({
+      status: false,
+      message: "cityId is required",
+    });
+  }
+
+  try {
+    const updatedCities = await userDao.updateCityAvailabilityDao(
+      cityId,
+      Boolean(isAvailable),
+      companyCenterId
+    );
+
+    return res.status(200).json({
+      status: true,
+      message: `City ${cityId} availability updated to ${isAvailable}`,
+      data: updatedCities,
+    });
+  } catch (err) {
+    console.error("Error updating city availability:", err.message);
+    return res.status(500).json({
+      status: false,
+      message: "Failed to update city availability",
+      error: err.message,
+    });
+  }
+});
+
 const sendEmailOtp = async (email, otp) => {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
     console.error("Email SMTP credentials not configured in env");
@@ -215,7 +248,16 @@ exports.userSignup = asyncHandler(async (req, res) => {
     });
   }
 
-  const { email, phoneCode, phoneNumber } = req.body;
+  const {
+    email,
+    phoneCode,
+    phoneNumber,
+    phoneNumber2,
+    phoneCode2,
+    nic,
+    companyPhoneNumber,
+    companyPhoneCode,
+  } = req.body;
 
   try {
     // Check if user already exists
@@ -224,6 +266,56 @@ exports.userSignup = asyncHandler(async (req, res) => {
       return res.status(400).json({
         status: false,
         message: "Email already in use.",
+      });
+    }
+
+    // Check if phone number already exists in phoneNumber, phoneNumber2, or companyPhone
+    const existingPhone = await userDao.getUserByPhoneDao(phoneCode, phoneNumber);
+    if (existingPhone) {
+      return res.status(400).json({
+        status: false,
+        message: "Mobile Number already exists",
+      });
+    }
+
+    // Check secondary phone number if provided
+    if (phoneNumber2) {
+      const existingPhone2 = await userDao.getUserByPhoneDao(phoneCode2 || phoneCode, phoneNumber2);
+      if (existingPhone2) {
+        return res.status(400).json({
+          status: false,
+          message: "Secondary Mobile Number already exists",
+        });
+      }
+    }
+
+    // Check company phone number if provided
+    if (companyPhoneNumber) {
+      const existingCompanyPhone = await userDao.getUserByPhoneDao(companyPhoneCode || phoneCode, companyPhoneNumber);
+      if (existingCompanyPhone) {
+        return res.status(400).json({
+          status: false,
+          message: "Company Phone Number already exists",
+        });
+      }
+
+      // Check if personal mobile and company phone are the same
+      const cleanCustomerPhone = String(phoneNumber).replace(/[^0-9]/g, "").replace(/^0+/, "").replace(/^94/, "");
+      const cleanCompanyPhone = String(companyPhoneNumber).replace(/[^0-9]/g, "").replace(/^0+/, "").replace(/^94/, "");
+      if (cleanCustomerPhone === cleanCompanyPhone) {
+        return res.status(400).json({
+          status: false,
+          message: "Customer Mobile Number and Company Number cannot be the same",
+        });
+      }
+    }
+
+    // Check if NIC already exists
+    const existingNic = await userDao.getUserByNicDao(nic);
+    if (existingNic) {
+      return res.status(400).json({
+        status: false,
+        message: "NIC Number already exists",
       });
     }
 
@@ -343,6 +435,50 @@ exports.verifySignup = asyncHandler(async (req, res) => {
       return res.status(400).json({
         status: false,
         message: "Email already in use.",
+      });
+    }
+
+    // Check again if phone was taken since signup started
+    const existingPhone = await userDao.getUserByPhoneDao(signupData.phoneCode, signupData.phoneNumber);
+    if (existingPhone) {
+      await userDao.deleteOtpDao(referenceId);
+      return res.status(400).json({
+        status: false,
+        message: "Mobile Number already exists",
+      });
+    }
+
+    // Check again if secondary phone was taken
+    if (signupData.phoneNumber2) {
+      const existingPhone2 = await userDao.getUserByPhoneDao(signupData.phoneCode2 || signupData.phoneCode, signupData.phoneNumber2);
+      if (existingPhone2) {
+        await userDao.deleteOtpDao(referenceId);
+        return res.status(400).json({
+          status: false,
+          message: "Secondary Mobile Number already exists",
+        });
+      }
+    }
+
+    // Check again if company phone was taken
+    if (signupData.companyPhoneNumber) {
+      const existingCompanyPhone = await userDao.getUserByPhoneDao(signupData.companyPhoneCode || signupData.phoneCode, signupData.companyPhoneNumber);
+      if (existingCompanyPhone) {
+        await userDao.deleteOtpDao(referenceId);
+        return res.status(400).json({
+          status: false,
+          message: "Company Phone Number already exists",
+        });
+      }
+    }
+
+    // Check again if NIC was taken since signup started
+    const existingNic = await userDao.getUserByNicDao(signupData.nic);
+    if (existingNic) {
+      await userDao.deleteOtpDao(referenceId);
+      return res.status(400).json({
+        status: false,
+        message: "NIC Number already exists",
       });
     }
 

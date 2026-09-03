@@ -299,6 +299,14 @@ exports.deleteAddress = asyncHandler(async (req, res) => {
 exports.updateUserDetails = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
+
+    if (req.body.nic) {
+      const isNicTaken = await customerDao.isNicTakenDao(userId, req.body.nic);
+      if (isNicTaken) {
+        return res.status(400).json({ status: false, message: "NIC Number already exists" });
+      }
+    }
+
     const result = await customerDao.updateUserDetailsDao(userId, req.body);
 
     if (result.affectedRows === 0) {
@@ -512,6 +520,40 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
     });
   } catch (error) {
     console.error("Resend phone change OTP error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+});
+
+// ---------- Update Credit Balance (Clear Balance) ----------
+exports.updateCreditBalance = asyncHandler(async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { creditBalance } = req.body;
+
+    if (creditBalance === undefined || creditBalance === null) {
+      return res.status(400).json({
+        status: false,
+        message: "creditBalance is required",
+      });
+    }
+
+    const amountToAdd = parseFloat(creditBalance);
+    if (isNaN(amountToAdd) || amountToAdd <= 0) {
+      return res.status(400).json({
+        status: false,
+        message: "Valid creditBalance amount is required",
+      });
+    }
+
+    const result = await customerDao.updateCreditBalanceDao(userId, amountToAdd);
+
+    return res.status(200).json({
+      status: true,
+      message: "Credit balance updated successfully",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Update credit balance error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });

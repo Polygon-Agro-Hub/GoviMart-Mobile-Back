@@ -2,8 +2,8 @@ const db = require("../startup/database");
 
 exports.getCustomerProfileDao = async (userId) => {
   const query =
-    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName FROM marketplaceusers WHERE id = ?";
-  const [results] = await db.marketPlace.promise().query(query, [userId]);
+    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName, creditBalance FROM marketplaceusers WHERE id = ?";
+  const [results] = await db.collectionofficer.promise().query(query, [userId]);
   return results;
 };
 
@@ -18,7 +18,7 @@ exports.getSuggestionsDao = async () => {
     WHERE mi.category = 'Retail'
     ORDER BY mi.displayName ASC
   `;
-  const [results] = await db.marketPlace.promise().query(query);
+  const [results] = await db.collectionofficer.promise().query(query);
   return results;
 };
 
@@ -34,7 +34,7 @@ exports.getIncludeItemsDao = async (userId) => {
     WHERE pl.userId = ? AND mi.category = 'Retail'
     ORDER BY mi.displayName ASC
   `;
-  const [results] = await db.marketPlace.promise().query(query, [userId]);
+  const [results] = await db.collectionofficer.promise().query(query, [userId]);
   return results;
 };
 
@@ -49,7 +49,7 @@ exports.addIncludeItemsDao = async (userId, items) => {
     FROM marketplaceitems mi
     WHERE mi.category = 'Retail' AND ${field} IN (${placeholders})
   `;
-  const [results] = await db.marketPlace
+  const [results] = await db.collectionofficer
     .promise()
     .query(query, [userId, ...items]);
   return results;
@@ -65,7 +65,7 @@ exports.deleteIncludeItemsDao = async (userId, items) => {
     JOIN marketplaceitems mi ON pl.mpItemId = mi.id
     WHERE pl.userId = ? AND ${field} IN (${placeholders})
   `;
-  const [results] = await db.marketPlace
+  const [results] = await db.collectionofficer
     .promise()
     .query(query, [userId, ...items]);
   return results;
@@ -83,7 +83,7 @@ exports.getExcludeItemsDao = async (userId) => {
     WHERE el.userId = ? AND mi.category = 'Retail'
     ORDER BY mi.displayName ASC
   `;
-  const [results] = await db.marketPlace.promise().query(query, [userId]);
+  const [results] = await db.collectionofficer.promise().query(query, [userId]);
   return results;
 };
 
@@ -98,7 +98,7 @@ exports.addExcludeItemsDao = async (userId, items) => {
     FROM marketplaceitems mi
     WHERE mi.category = 'Retail' AND ${field} IN (${placeholders})
   `;
-  const [results] = await db.marketPlace
+  const [results] = await db.collectionofficer
     .promise()
     .query(query, [userId, ...items]);
   return results;
@@ -114,7 +114,7 @@ exports.deleteExcludeItemsDao = async (userId, items) => {
     JOIN marketplaceitems mi ON el.mpItemId = mi.id
     WHERE el.userId = ? AND ${field} IN (${placeholders})
   `;
-  const [results] = await db.marketPlace
+  const [results] = await db.collectionofficer
     .promise()
     .query(query, [userId, ...items]);
   return results;
@@ -126,7 +126,7 @@ exports.updateUserStatusDao = async (userId) => {
     SET firstTimeUser = 1
     WHERE id = ? AND firstTimeUser = 0
   `;
-  const [result] = await db.marketPlace.promise().query(query, [userId]);
+  const [result] = await db.collectionofficer.promise().query(query, [userId]);
   return result;
 };
 
@@ -179,10 +179,10 @@ exports.getSavedAddressesByCustomerIdDao = async (customerId) => {
     WHERE customerId = ?
   `;
 
-  const [apartmentResults] = await db.marketPlace
+  const [apartmentResults] = await db.collectionofficer
     .promise()
     .query(apartmentQuery, [customerId]);
-  const [houseResults] = await db.marketPlace
+  const [houseResults] = await db.collectionofficer
     .promise()
     .query(houseQuery, [customerId]);
 
@@ -235,7 +235,7 @@ exports.getAccountDetailsDao = async (userId) => {
     FROM marketplaceusers
     WHERE id = ?
   `;
-  const [results] = await db.marketPlace.promise().query(query, [userId]);
+  const [results] = await db.collectionofficer.promise().query(query, [userId]);
   return results;
 };
 
@@ -269,7 +269,7 @@ exports.addAddressDao = async (customerId, addressData) => {
         houseNo, streetName, city
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
-    const [result] = await db.marketPlace
+    const [result] = await db.collectionofficer
       .promise()
       .query(query, [
         customerId,
@@ -301,7 +301,7 @@ exports.addAddressDao = async (customerId, addressData) => {
       longitude, latitude, houseNo, streetName, city
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
-  const [result] = await db.marketPlace
+  const [result] = await db.collectionofficer
     .promise()
     .query(query, [
       customerId,
@@ -351,7 +351,7 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
           houseNo = ?, streetName = ?, city = ?
       WHERE id = ? AND customerId = ?
     `;
-    const [result] = await db.marketPlace
+    const [result] = await db.collectionofficer
       .promise()
       .query(query, [
         saveAs,
@@ -384,7 +384,7 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
         longitude = ?, latitude = ?, houseNo = ?, streetName = ?, city = ?
     WHERE id = ? AND customerId = ?
   `;
-  const [result] = await db.marketPlace
+  const [result] = await db.collectionofficer
     .promise()
     .query(query, [
       saveAs,
@@ -408,7 +408,7 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
 exports.deleteAddressDao = async (addressId, customerId, buildingType) => {
   const table = buildingType === "Apartment" ? "apartment" : "house";
   const query = `DELETE FROM ${table} WHERE id = ? AND customerId = ?`;
-  const [result] = await db.marketPlace
+  const [result] = await db.collectionofficer
     .promise()
     .query(query, [addressId, customerId]);
   return result;
@@ -439,7 +439,7 @@ exports.updateUserDetailsDao = async (userId, userData) => {
         companyName = ?, buyerType = ?
     WHERE id = ?
   `;
-  const [result] = await db.marketPlace
+  const [result] = await db.collectionofficer
     .promise()
     .query(query, [
       title,
@@ -462,18 +462,68 @@ exports.updateUserDetailsDao = async (userId, userData) => {
 
 exports.deleteUserAccountDao = async (userId) => {
   const query = `DELETE FROM marketplaceusers WHERE id = ?`;
-  const [result] = await db.marketPlace.promise().query(query, [userId]);
+  const [result] = await db.collectionofficer.promise().query(query, [userId]);
   return result;
 };
 
-// Check if a phone number already belongs to another user
+// Check if a phone number already belongs to another user (across phoneNumber, phoneNumber2, companyPhone)
 exports.isPhoneTakenDao = async (userId, phoneNumber) => {
+  if (!phoneNumber) return false;
+  const raw = String(phoneNumber || "").trim();
+  const cleanNum = raw.replace(/[^0-9]/g, "");
+  const candidates = new Set([raw, cleanNum]);
+
+  if (cleanNum.length === 9 && cleanNum.startsWith("7")) {
+    candidates.add(cleanNum);
+    candidates.add("0" + cleanNum);
+    candidates.add("+94" + cleanNum);
+    candidates.add("94" + cleanNum);
+  } else if (cleanNum.length === 10 && cleanNum.startsWith("07")) {
+    const suffix = cleanNum.substring(1);
+    candidates.add(suffix);
+    candidates.add(cleanNum);
+    candidates.add("+94" + suffix);
+    candidates.add("94" + suffix);
+  } else if (cleanNum.length === 11 && cleanNum.startsWith("947")) {
+    const suffix = cleanNum.substring(2);
+    candidates.add(suffix);
+    candidates.add("0" + suffix);
+    candidates.add("+" + cleanNum);
+    candidates.add(cleanNum);
+  }
+
+  const phoneList = Array.from(candidates).filter(Boolean);
+  if (phoneList.length === 0) return false;
+  const placeholders = phoneList.map(() => "?").join(", ");
   const query = `
     SELECT id FROM marketplaceusers
-    WHERE phoneNumber = ? AND id != ?
+    WHERE (phoneNumber IN (${placeholders}) OR phoneNumber2 IN (${placeholders}) OR companyPhone IN (${placeholders}))
+      AND id != ?
     LIMIT 1
   `;
-  const [results] = await db.marketPlace.promise().query(query, [phoneNumber, userId]);
+  const [results] = await db.collectionofficer.promise().query(query, [
+    ...phoneList,
+    ...phoneList,
+    ...phoneList,
+    userId,
+  ]);
+  return results.length > 0;
+};
+
+// Check if an NIC already belongs to another user
+exports.isNicTakenDao = async (userId, nic) => {
+  if (!nic) return false;
+  const rawNic = String(nic).trim();
+  const upperNic = rawNic.toUpperCase();
+  const lowerNic = rawNic.toLowerCase();
+  const candidates = [...new Set([rawNic, upperNic, lowerNic])];
+  const placeholders = candidates.map(() => "?").join(", ");
+  const query = `
+    SELECT id FROM marketplaceusers
+    WHERE nic IN (${placeholders}) AND id != ?
+    LIMIT 1
+  `;
+  const [results] = await db.collectionofficer.promise().query(query, [...candidates, userId]);
   return results.length > 0;
 };
 
@@ -484,6 +534,30 @@ exports.updateUserPhoneDao = async (userId, phoneCode, phoneNumber) => {
     SET phoneCode = ?, phoneNumber = ?
     WHERE id = ?
   `;
-  const [result] = await db.marketPlace.promise().query(query, [phoneCode, phoneNumber, userId]);
+  const [result] = await db.collectionofficer.promise().query(query, [phoneCode, phoneNumber, userId]);
   return result;
+};
+
+// Update user credit balance (clear balance or adjust)
+exports.updateCreditBalanceDao = async (userId, creditBalance) => {
+  const query = `
+    UPDATE marketplaceusers
+    SET creditBalance = creditBalance + ?
+    WHERE id = ?
+  `;
+  const [result] = await db.collectionofficer.promise().query(query, [creditBalance, userId]);
+  if (result.affectedRows === 0) {
+    throw new Error("User not found");
+  }
+
+  const [rows] = await db.collectionofficer.promise().query(
+    "SELECT creditBalance FROM marketplaceusers WHERE id = ?",
+    [userId]
+  );
+
+  return {
+    userId,
+    creditBalance: parseFloat(rows[0]?.creditBalance || 0),
+    affectedRows: result.affectedRows,
+  };
 };

@@ -2,9 +2,18 @@ const ProductDao = require("../dao/product.dao");
 const ProductValidate = require("../validations/product.validations");
 
 exports.getAllProduct = async (req, res) => {
-  const { search } = req.query;
+  const { search, buyerType = "Retail", userType } = req.query;
+  const effectiveBuyerType = buyerType || userType || "Retail";
   const fullUrl = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
-  console.log(fullUrl, "search:", search);
+  console.log(fullUrl, "search:", search, "buyerType:", effectiveBuyerType);
+
+  if (effectiveBuyerType.toLowerCase() !== "retail") {
+    return res.status(200).json({
+      status: true,
+      message: "Packages are only available for Retail buyers",
+      product: [],
+    });
+  }
 
   try {
     const productData = await ProductDao.getAllProductDao(search);
@@ -29,9 +38,10 @@ exports.getAllProduct = async (req, res) => {
 };
 
 exports.getProductsByCategory = async (req, res) => {
-  const { category, search } = req.query;
+  const { category, search, buyerType, userType } = req.query;
+  const effectiveBuyerType = buyerType || userType || "Retail";
 
-  console.log("category", category, "search", search);
+  console.log("category", category, "search", search, "buyerType", effectiveBuyerType);
 
   // Only require category if no search parameter is provided
   if (!category && (!search || search.trim() === "")) {
@@ -45,6 +55,7 @@ exports.getProductsByCategory = async (req, res) => {
     const products = await ProductDao.getProductsByCategoryDao(
       category,
       search,
+      effectiveBuyerType,
     );
 
     if (products.length === 0) {
@@ -119,3 +130,33 @@ exports.getAllSlides = async (req, res) => {
     res.status(500).json({ status: false, error: "Failed to fetch slides" });
   }
 };
+
+/**
+ * POST /api/product/check-availability
+ * Body: { productIds: number[], packageIds: number[] }
+ * Returns which IDs are still active/available in the database.
+ */
+exports.checkAvailability = async (req, res) => {
+  try {
+    const { productIds = [], packageIds = [] } = req.body;
+
+    if (!Array.isArray(productIds) || !Array.isArray(packageIds)) {
+      return res.status(400).json({
+        status: false,
+        message: "productIds and packageIds must be arrays",
+      });
+    }
+
+    const result = await ProductDao.checkAvailabilityDao(productIds, packageIds);
+
+    return res.status(200).json({
+      status: true,
+      products: result.products,
+      packages: result.packages,
+    });
+  } catch (err) {
+    console.error("Error checking availability:", err);
+    res.status(500).json({ status: false, error: "Failed to check availability" });
+  }
+};
+
