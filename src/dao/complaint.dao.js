@@ -37,7 +37,7 @@ exports.getLastComplainRefIdDao = async () => {
       ORDER BY CAST(SUBSTRING(refId, 5) AS UNSIGNED) DESC
       LIMIT 1
     `;
-    const [results] = await db.marketPlace.promise().query(sql);
+    const [results] = await db.collectionofficer.promise().query(sql);
     return results[0] ? results[0].refId : null;
   } catch (err) {
     console.error("Database error in getLastComplainRefIdDao:", err);
@@ -58,7 +58,7 @@ exports.createComplainDao = async (
       (userId, complaicategoryId, refId, complain, status, createdAt) 
       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `;
-    const [result] = await db.marketPlace
+    const [result] = await db.collectionofficer
       .promise()
       .query(sql, [userId, complaicategoryId, refId, complain, "Pending"]);
     return result.insertId;
@@ -75,7 +75,7 @@ exports.addComplainImageDao = async (complainId, imageUrl) => {
       INSERT INTO marcketplacecomplainimages (complainId, image, createdAt) 
       VALUES (?, ?, CURRENT_TIMESTAMP)
     `;
-    const [result] = await db.marketPlace
+    const [result] = await db.collectionofficer
       .promise()
       .query(sql, [complainId, imageUrl]);
     return result;
@@ -107,14 +107,14 @@ exports.getComplainByIdDao = async (complainId) => {
       LEFT JOIN agro_world_admin.complaincategory cc ON cc.id = c.complaicategoryId
       WHERE c.id = ?
     `;
-    const [complainResults] = await db.marketPlace
+    const [complainResults] = await db.collectionofficer
       .promise()
       .query(complainSql, [complainId]);
 
     if (complainResults.length === 0) return null;
 
     const imagesSql = `SELECT id, image FROM marcketplacecomplainimages WHERE complainId = ?`;
-    const [imageResults] = await db.marketPlace
+    const [imageResults] = await db.collectionofficer
       .promise()
       .query(imagesSql, [complainId]);
 
@@ -149,7 +149,7 @@ exports.getComplainsByUserIdDao = async (userId) => {
       WHERE c.userId = ?
       ORDER BY c.createdAt DESC
     `;
-    const [complains] = await db.marketPlace
+    const [complains] = await db.collectionofficer
       .promise()
       .query(complainSql, [userId]);
 
@@ -161,7 +161,7 @@ exports.getComplainsByUserIdDao = async (userId) => {
       FROM marcketplacecomplainimages 
       WHERE complainId IN (?)
     `;
-    const [images] = await db.marketPlace
+    const [images] = await db.collectionofficer
       .promise()
       .query(imagesSql, [complainIds]);
 

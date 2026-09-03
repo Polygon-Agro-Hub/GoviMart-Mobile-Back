@@ -10,7 +10,7 @@ exports.couponValidationSchema = Joi.object({
 // ─── Order Creation Validation ────────────────────────────────────────────────
 exports.createOrderSchema = Joi.object({
     cartId: Joi.number().integer().allow(0, null).optional(),
-    paymentMethod: Joi.string().valid('cash', 'card', 'Cash', 'Card').required(),
+    paymentMethod: Joi.string().valid('cash', 'card', 'Cash', 'Card', 'payhere', 'PayHere').required(),
     grandTotal: Joi.number().positive().required(),
     discountAmount: Joi.number().min(0).default(0),
     deliveryCharge: Joi.number().min(0).default(0),
@@ -43,6 +43,11 @@ exports.createOrderSchema = Joi.object({
         scheduleType: Joi.string().allow('', null).optional(),
         deliveryDate: Joi.string().allow('', null).optional(),
         timeSlot: Joi.string().allow('', null).optional(),
+        recurringDays: Joi.array().items(Joi.string()).optional(),
+        selectedDays: Joi.alternatives().try(Joi.array().items(Joi.string()), Joi.string()).optional(),
+        validityWeeks: Joi.alternatives().try(Joi.string(), Joi.number()).optional(),
+        validityPeriod: Joi.alternatives().try(Joi.string(), Joi.number()).optional(),
+        calculatedOrders: Joi.array().items(Joi.object()).optional(),
         // Geo
         geoLatitude: Joi.number().allow(null).optional(),
         geoLongitude: Joi.number().allow(null).optional(),

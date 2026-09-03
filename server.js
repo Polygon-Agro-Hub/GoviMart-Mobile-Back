@@ -6,7 +6,6 @@ require("dotenv").config();
 const {
   plantcare,
   collectionofficer,
-  marketPlace,
   admin,
 } = require("./src/startup/database");
 
@@ -46,7 +45,6 @@ const DatabaseConnection = (db, name) => {
 // Initial database connections
 DatabaseConnection(plantcare, "PlantCare");
 DatabaseConnection(collectionofficer, "CollectionOfficer");
-DatabaseConnection(marketPlace, "MarketPlace");
 DatabaseConnection(admin, "Admin");
 
 // Setup routes
