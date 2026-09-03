@@ -10,11 +10,8 @@ const {
 exports.getRetailOrderHistory = async (req, res) => {
     try {
         const { userId } = req.user;
-        console.log("Fetching order history for userId:", userId); // Debug log
 
         const orderHistory = await RetailOrderDao.getRetailOrderHistoryDao(userId);
-        console.log("Order history fetched:", orderHistory); // Debug log
-
 
         res.status(200).json({
             status: true,
@@ -284,6 +281,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
         buildingType, cityName, companycenterId, houseNo, street,
         buildingNo, buildingName, flatNumber, floorNumber, saveAs,
         centerId, scheduleType, deliveryDate, timeSlot,
+        recurringDays, selectedDays, validityWeeks, validityPeriod, calculatedOrders,
         geoLatitude, geoLongitude, isCoupon, couponValue, couponType,
     } = checkoutDetails;
 
@@ -356,6 +354,25 @@ exports.createOrder = asyncHandler(async (req, res) => {
     const hasPackages = cartItems.some((i) => i.itemType === "package");
     const isHomeDelivery = deliveryMethod === "home";
 
+    // Normalize schedule fields
+    let normScheduleType = "One Time";
+    if (scheduleType === "Once a Week" || scheduleType === "Twice a Week") {
+        normScheduleType = scheduleType;
+    } else if (scheduleType === "One Time" || scheduleType === "One Time Order") {
+        normScheduleType = "One Time";
+    }
+
+    const effRecurringDays = selectedDays || recurringDays || [];
+    const effValidityPeriod = validityPeriod || validityWeeks || 4;
+
+    const parseScheduleDate = (rawDate) => {
+        if (!rawDate) return null;
+        if (rawDate instanceof Date) return rawDate;
+        const parsed = new Date(rawDate);
+        if (!isNaN(parsed.getTime())) return parsed;
+        return null;
+    };
+
     // ── 5. Begin transaction ──────────────────────────────────────────────────
     const db = require("../startup/database");
 
@@ -396,8 +413,10 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     fullTotal: grandTotal,
                     discount: discountAmount || 0,
                     deliveryCharge: isHomeDelivery ? (deliveryCharge || 0) : 0,
-                    sheduleType: scheduleType || "One Time Order",
-                    sheduleDate: deliveryDate || null,
+                    sheduleType: normScheduleType,
+                    validityPeriod: effValidityPeriod,
+                    selectedDays: effRecurringDays,
+                    sheduleDate: null,
                     sheduleTime: timeSlot || null,
                     isPackage: hasPackages ? 1 : 0,
                     isFinalizeImdt: isFinalizeImdt || 0,
@@ -423,9 +442,46 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     );
                 }
 
-                // ── 5c. Create process order (generates invoice number) ───────
-                const { insertId: processOrderId, invNo } =
-                    await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
+                // ── 5c. Create process order(s) ───────────────────────────────
+                let primaryProcessOrderId = null;
+                let primaryInvNo = null;
+                const createdProcessOrders = [];
+
+                if (normScheduleType === "Twice a Week") {
+                    // Special condition: 2 individual rows in processorders for the 2 days
+                    let date1 = null;
+                    let date2 = null;
+
+                    if (Array.isArray(calculatedOrders) && calculatedOrders.length >= 2) {
+                        date1 = parseScheduleDate(calculatedOrders[0]?.date || calculatedOrders[0]?.dateStr);
+                        date2 = parseScheduleDate(calculatedOrders[1]?.date || calculatedOrders[1]?.dateStr);
+                    }
+
+                    if (!date1 || !date2) {
+                        const DAY_MAP = { Mo: 1, Tu: 2, We: 3, Th: 4, Fr: 5, Sa: 6, Su: 0 };
+                        const minDate = new Date();
+                        minDate.setDate(minDate.getDate() + 3);
+                        minDate.setHours(0, 0, 0, 0);
+
+                        const daysArr = Array.isArray(effRecurringDays) && effRecurringDays.length > 0
+                            ? effRecurringDays
+                            : ["Tu", "Sa"];
+
+                        const computedDates = daysArr.map((d) => {
+                            const targetDay = DAY_MAP[d] !== undefined ? DAY_MAP[d] : 2;
+                            const dt = new Date(minDate);
+                            while (dt.getDay() !== targetDay) {
+                                dt.setDate(dt.getDate() + 1);
+                            }
+                            return dt;
+                        }).sort((a, b) => a.getTime() - b.getTime());
+
+                        date1 = date1 || computedDates[0];
+                        date2 = date2 || computedDates[1] || computedDates[0];
+                    }
+
+                    // Insert 1st process order
+                    const proc1 = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
                         orderId,
                         paymentMethod,
                         isPaid: 0,
@@ -433,13 +489,65 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         creditPaid: creditPaid || 0,
                         moneyPaid: moneyPaid || 0,
                         status: "Ordered",
-                        sheduleDate: deliveryDate || null,
+                        sheduleDate: date1,
                     });
+                    createdProcessOrders.push(proc1);
 
-                // ── 5d. Save all order items ──────────────────────────────────
-                await RetailOrderDao.saveOrderItemsWithTransactionDao(
-                    connection, orderId, processOrderId, cartItems
-                );
+                    // Insert 2nd process order
+                    const proc2 = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
+                        orderId,
+                        paymentMethod,
+                        isPaid: 0,
+                        amount: grandTotal,
+                        creditPaid: creditPaid || 0,
+                        moneyPaid: moneyPaid || 0,
+                        status: "Ordered",
+                        sheduleDate: date2,
+                    });
+                    createdProcessOrders.push(proc2);
+
+                    primaryProcessOrderId = proc1.insertId;
+                    primaryInvNo = proc1.invNo;
+
+                    // ── 5d. Save order items for both process orders ───────────
+                    // Additional items link to orderId and processOrderId
+                    const additionalItems = cartItems.filter((i) => i.itemType === "additional");
+                    for (const item of additionalItems) {
+                        await RetailOrderDao.saveOrderAdditionalItemWithTransactionDao(connection, orderId, item, proc1.insertId);
+                    }
+
+                    // Packages link to each processOrderId
+                    const packageItems = cartItems.filter((i) => i.itemType === "package");
+                    for (const pkg of packageItems) {
+                        await RetailOrderDao.saveOrderPackageWithTransactionDao(connection, proc1.insertId, pkg);
+                        await RetailOrderDao.saveOrderPackageWithTransactionDao(connection, proc2.insertId, pkg);
+                    }
+                } else {
+                    // One Time or Once a Week: 1 process order row
+                    let targetDate = parseScheduleDate(deliveryDate);
+                    if (!targetDate && Array.isArray(calculatedOrders) && calculatedOrders.length > 0) {
+                        targetDate = parseScheduleDate(calculatedOrders[0]?.date || calculatedOrders[0]?.dateStr);
+                    }
+
+                    const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
+                        orderId,
+                        paymentMethod,
+                        isPaid: 0,
+                        amount: grandTotal,
+                        creditPaid: creditPaid || 0,
+                        moneyPaid: moneyPaid || 0,
+                        status: "Ordered",
+                        sheduleDate: targetDate,
+                    });
+                    createdProcessOrders.push(proc);
+                    primaryProcessOrderId = proc.insertId;
+                    primaryInvNo = proc.invNo;
+
+                    // ── 5d. Save all order items ──────────────────────────────
+                    await RetailOrderDao.saveOrderItemsWithTransactionDao(
+                        connection, orderId, primaryProcessOrderId, cartItems
+                    );
+                }
 
                 // ── 5e. Commit ────────────────────────────────────────────────
                 connection.commit((commitErr) => {
@@ -462,8 +570,10 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         message: "Order created successfully",
                         data: {
                             orderId,
-                            processOrderId,
-                            invoiceNumber: invNo,
+                            processOrderId: primaryProcessOrderId,
+                            processOrderIds: createdProcessOrders.map((p) => p.insertId),
+                            invoiceNumber: primaryInvNo,
+                            invoiceNumbers: createdProcessOrders.map((p) => p.invNo),
                             total: grandTotal,
                         },
                     });
@@ -517,4 +627,28 @@ exports.getDeliveryCities = asyncHandler(async (req, res) => {
         message: "Delivery cities fetched successfully",
         data: cities,
     });
-});
+});
+
+/**
+ * GET /api/orders/invoice/:orderId
+ * Fetches invoice details matching web format.
+ */
+exports.getInvoiceByOrderId = asyncHandler(async (req, res) => {
+    const { orderId } = req.params;
+    const { userId } = req.user;
+
+    const result = await RetailOrderDao.getInvoiceByOrderIdDao(orderId, userId);
+
+    if (!result || !result.invoice) {
+        return res.status(404).json({
+            status: false,
+            message: "Invoice not found for this order.",
+        });
+    }
+
+    return res.status(200).json({
+        status: true,
+        message: "Invoice fetched successfully",
+        invoice: result.invoice,
+    });
+});
