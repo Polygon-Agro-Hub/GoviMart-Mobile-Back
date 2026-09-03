@@ -460,7 +460,7 @@ exports.getRetailOrderHistoryDao = async (userId) => {
       WHERE oai.orderId = ?
     `;
 
-        db.marketPlace.query(orderQuery, [userId], async (err, orders) => {
+        db.collectionofficer.query(orderQuery, [userId], async (err, orders) => {
             if (err) {
                 return reject("Error fetching retail order history: " + err);
             }
@@ -470,14 +470,14 @@ exports.getRetailOrderHistoryDao = async (userId) => {
                     orders.map(async (order) => {
                         // (Optional) Keep the below two fetches in case you want item breakdown later
                         const familyPackItems = await new Promise((res, rej) => {
-                            db.marketPlace.query(familyPackItemsQuery, [order.orderId], (err, items) => {
+                            db.collectionofficer.query(familyPackItemsQuery, [order.orderId], (err, items) => {
                                 if (err) return rej("Family pack query error: " + err);
                                 res(items || []);
                             });
                         });
 
                         const additionalItems = await new Promise((res, rej) => {
-                            db.marketPlace.query(additionalItemsQuery, [order.orderId], (err, items) => {
+                            db.collectionofficer.query(additionalItemsQuery, [order.orderId], (err, items) => {
                                 if (err) return rej("Additional items query error: " + err);
                                 res(items || []);
                             });
@@ -532,7 +532,7 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
         const houseSql = `SELECT * FROM orderhouse WHERE orderId = ?`;
         const apartmentSql = `SELECT * FROM orderapartment WHERE orderId = ?`;
 
-        db.marketPlace.query(orderSql, [orderId, userId], (err, orders) => {
+        db.collectionofficer.query(orderSql, [orderId, userId], (err, orders) => {
             if (err) return reject("Error fetching order: " + err);
             if (!orders || orders.length === 0) return reject("Order not found or unauthorized");
 
@@ -574,7 +574,7 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
                 // Handle Delivery
             } else if (order.deliveryType === 'DELIVERY') {
                 if (order.buildingType === 'House') {
-                    db.marketPlace.query(houseSql, [order.id], (err, result) => {
+                    db.collectionofficer.query(houseSql, [order.id], (err, result) => {
                         if (err) return reject("Error fetching house delivery: " + err);
                         if (!result || result.length === 0) return reject("House delivery address not found");
 
@@ -586,7 +586,7 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
                     });
 
                 } else if (order.buildingType === 'Apartment') {
-                    db.marketPlace.query(apartmentSql, [order.id], (err, result) => {
+                    db.collectionofficer.query(apartmentSql, [order.id], (err, result) => {
                         if (err) return reject("Error fetching apartment delivery: " + err);
                         if (!result || result.length === 0) return reject("Apartment delivery address not found");
 
@@ -651,7 +651,7 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
       ORDER BY op.id
     `;
 
-        db.marketPlace.query(sql, [orderId], (err, results) => {
+        db.collectionofficer.query(sql, [orderId], (err, results) => {
             if (err) {
                 return reject(new Error("Database error: " + err.message));
             }
@@ -735,7 +735,7 @@ exports.getOrderAdditionalItemsDao = async (processOrderId) => {
         console.log("Executing corrected query:", sql);
         console.log("With processOrderId:", processOrderId);
 
-        db.marketPlace.query(sql, [processOrderId], (err, results) => {
+        db.collectionofficer.query(sql, [processOrderId], (err, results) => {
             if (err) {
                 console.error("Database error:", err);
                 return reject(new Error("Database error: " + err.message));
@@ -761,7 +761,7 @@ exports.getCouponDetailsDao = (code) => {
             WHERE code = ?
             LIMIT 1
         `;
-        db.marketPlace.query(sql, [code], (err, results) => {
+        db.collectionofficer.query(sql, [code], (err, results) => {
             if (err) return reject(err);
             resolve(results && results.length > 0 ? results[0] : null);
         });
@@ -780,7 +780,7 @@ exports.getAvailableCouponsDao = () => {
             WHERE status = 'Enabled' OR status = 'Active'
             ORDER BY id DESC
         `;
-        db.marketPlace.query(sql, (err, results) => {
+        db.collectionofficer.query(sql, (err, results) => {
             if (err) return reject(err);
             resolve(results || []);
         });
@@ -815,7 +815,7 @@ exports.getUserCartTotalDao = (userId, cartId) => {
                 ) AS itemTotal
         `;
         const param = cartId || userId;
-        db.marketPlace.query(sql, [param, param], (err, rows) => {
+        db.collectionofficer.query(sql, [param, param], (err, rows) => {
             if (err || !rows || rows.length === 0) {
                 return resolve({ price: 0, count: 0 });
             }

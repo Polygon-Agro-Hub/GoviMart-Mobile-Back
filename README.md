@@ -8,7 +8,7 @@ Node.js / Express 5 backend API service for **GoviMart / Polygon**, handling mar
 
 - **Runtime**: Node.js
 - **Framework**: Express (`^5.1.0`)
-- **Database**: MySQL2 connection pool (`^3.15.3`) connected to multiple database instances (`plant_care`, `collection_officer`, `marketPlace`, `agro_world_admin`)
+- **Database**: MySQL2 connection pool (`^3.15.3`) connected to multiple database instances (`plant_care`, `collection_officer`, `agro_world_admin`)
 - **Authentication**: JSON Web Tokens (`jsonwebtoken`), `bcrypt` password hashing
 - **Validation**: `joi` (`^18.0.2`)
 - **Storage**: Cloudflare R2 / AWS S3 SDK (`@aws-sdk/client-s3`)
@@ -62,7 +62,7 @@ GoviMart-Mobile-API/
 ├── api/
 │   └── index.js                # Serverless entry point for Vercel deployment
 ├── startup/
-│   └── database.js             # MySQL database connection pools (plantcare, collectionofficer, marketPlace, admin)
+│   └── database.js             # MySQL database connection pools (plantcare, collectionofficer, admin)
 ├── routes/                     # Express router definitions (auth, customer, home, order, product, complaint, health)
 ├── endpoint/                   # Business logic and request controller handlers
 ├── dao/                        # Data Access Objects (SQL queries)
