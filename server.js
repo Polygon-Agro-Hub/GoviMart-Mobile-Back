@@ -48,6 +48,9 @@ DatabaseConnection(collectionofficer, "CollectionOfficer");
 DatabaseConnection(admin, "Admin");
 
 // Setup routes
+const http = require("http");
+const { initSocket } = require("./src/socket/socket");
+
 const userroute = require("./src/routes/auth.routes");
 const healthroute = require("./src/routes/health.routes");
 const customerroute = require("./src/routes/customer.routes");
@@ -57,6 +60,7 @@ const productroute = require("./src/routes/product.routes");
 const orderroute = require("./src/routes/order.routes");
 const cartroute = require("./src/routes/cart.routes");
 const paymentroute = require("./src/routes/payment.routes");
+const notificationroute = require("./src/routes/notification.routes");
 
 app.use(`${BASE_PATH}/api/auth`, userroute);
 app.use(`${BASE_PATH}/api/customer`, customerroute);
@@ -66,6 +70,7 @@ app.use(`${BASE_PATH}/api/product`, productroute);
 app.use(`${BASE_PATH}/api/order`, orderroute);
 app.use(`${BASE_PATH}/api/cart`, cartroute);
 app.use(`${BASE_PATH}/api/payment`, paymentroute);
+app.use(`${BASE_PATH}/api/notification`, notificationroute);
 app.use(`${BASE_PATH}`, healthroute);
 
 // Error handling middleware
@@ -78,13 +83,19 @@ app.use((err, req, res, next) => {
   res.status(500).send("Something broke!!");
 });
 
+// Create HTTP server & initialize Socket.IO
+const server = http.createServer(app);
+initSocket(server);
+
 // Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
   console.log(`📍 Base Path: ${BASE_PATH}`);
   console.log(`💓 Health Check URL: ${BASE_PATH}/health`);
+  console.log(`🔌 Socket.IO initialized`);
 });
 
-module.exports = app;
+module.exports = { app, server };
+

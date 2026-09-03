@@ -104,6 +104,39 @@ exports.getCities = asyncHandler(async (req, res) => {
   }
 });
 
+// Update City Availability & broadcast to all clients via Socket.IO
+exports.updateCityAvailability = asyncHandler(async (req, res) => {
+  const { cityId, isAvailable, companyCenterId = 1 } = req.body;
+
+  if (!cityId) {
+    return res.status(400).json({
+      status: false,
+      message: "cityId is required",
+    });
+  }
+
+  try {
+    const updatedCities = await userDao.updateCityAvailabilityDao(
+      cityId,
+      Boolean(isAvailable),
+      companyCenterId
+    );
+
+    return res.status(200).json({
+      status: true,
+      message: `City ${cityId} availability updated to ${isAvailable}`,
+      data: updatedCities,
+    });
+  } catch (err) {
+    console.error("Error updating city availability:", err.message);
+    return res.status(500).json({
+      status: false,
+      message: "Failed to update city availability",
+      error: err.message,
+    });
+  }
+});
+
 const sendEmailOtp = async (email, otp) => {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
     console.error("Email SMTP credentials not configured in env");

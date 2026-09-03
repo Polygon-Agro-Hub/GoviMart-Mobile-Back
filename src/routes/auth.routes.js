@@ -90,6 +90,7 @@ router.post('/login', loginRateLimiter, userAuthEp.login);
  *         description: Failed to retrieve cities.
  */
 router.get('/cities', userAuthEp.getCities);
+router.post('/city-availability', userAuthEp.updateCityAvailability);
 
 /**
  * @openapi

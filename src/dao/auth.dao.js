@@ -167,6 +167,32 @@ exports.getAllCitiesDao = async () => {
   }
 };
 
+// Update City Availability (adds/removes mapping in centerowncity) and emits socket update
+exports.updateCityAvailabilityDao = async (cityId, isAvailable, companyCenterId = 1) => {
+  try {
+    if (isAvailable) {
+      const checkSql = `SELECT id FROM centerowncity WHERE cityId = ?`;
+      const [existing] = await db.collectionofficer.promise().query(checkSql, [cityId]);
+      if (!existing || existing.length === 0) {
+        const insertSql = `INSERT INTO centerowncity (companyCenterId, cityId) VALUES (?, ?)`;
+        await db.collectionofficer.promise().query(insertSql, [companyCenterId, cityId]);
+      }
+    } else {
+      const deleteSql = `DELETE FROM centerowncity WHERE cityId = ?`;
+      await db.collectionofficer.promise().query(deleteSql, [cityId]);
+    }
+
+    const updatedCities = await exports.getAllCitiesDao();
+    const { emitCityAvailabilityUpdate } = require("../socket/socket");
+    emitCityAvailabilityUpdate(updatedCities);
+
+    return updatedCities;
+  } catch (err) {
+    console.error("Database error in updateCityAvailabilityDao:", err);
+    throw new Error("Database error while updating city availability: " + err.message);
+  }
+};
+
 // Get Last Customer ID
 exports.getMarketPlaceUserLastCusIdDao = async () => {
   try {
