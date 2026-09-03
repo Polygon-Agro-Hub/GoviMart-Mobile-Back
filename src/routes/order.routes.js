@@ -10,6 +10,7 @@ router.get("/coupons", authMiddleware, orderEp.getAvailableCoupons);
 router.post("/check-coupon", authMiddleware, orderEp.checkCouponAvalability);
 router.post("/create-order", authMiddleware, orderEp.createOrder);
 
+router.get("/invoice/:orderId", authMiddleware, orderEp.getInvoiceByOrderId);
 router.get("/:orderId", authMiddleware, orderEp.getRetailOrderById);
 router.get('/packages/:orderId', authMiddleware, orderEp.getOrderPackages);
 router.get("/additional-items/:orderId", authMiddleware, orderEp.getOrderAdditionalItems);

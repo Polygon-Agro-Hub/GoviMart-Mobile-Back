@@ -30,8 +30,6 @@ const createPool = (database) => {
 // Create all database pools
 const plantcare = createPool(process.env.DB_NAME_PC);
 const collectionofficer = createPool(process.env.DB_NAME_CO || "collection_officer");
-// All marketplace tables with data moved to collection_officer database
-const marketPlace = collectionofficer;
 const admin = createPool(process.env.DB_NAME_AD);
 
 // Function to close all database connections (useful for tests)
@@ -72,7 +70,6 @@ const closePool = async (pool) => {
 module.exports = { 
   plantcare, 
   collectionofficer, 
-  marketPlace, 
   admin,
   closeAllPools,
   closePool

@@ -18,7 +18,7 @@ exports.getSuggestionsDao = async () => {
     WHERE mi.category = 'Retail'
     ORDER BY mi.displayName ASC
   `;
-  const [results] = await db.marketPlace.promise().query(query);
+  const [results] = await db.collectionofficer.promise().query(query);
   return results;
 };
 
@@ -34,7 +34,7 @@ exports.getIncludeItemsDao = async (userId) => {
     WHERE pl.userId = ? AND mi.category = 'Retail'
     ORDER BY mi.displayName ASC
   `;
-  const [results] = await db.marketPlace.promise().query(query, [userId]);
+  const [results] = await db.collectionofficer.promise().query(query, [userId]);
   return results;
 };
 
@@ -49,7 +49,7 @@ exports.addIncludeItemsDao = async (userId, items) => {
     FROM marketplaceitems mi
     WHERE mi.category = 'Retail' AND ${field} IN (${placeholders})
   `;
-  const [results] = await db.marketPlace
+  const [results] = await db.collectionofficer
     .promise()
     .query(query, [userId, ...items]);
   return results;
@@ -65,7 +65,7 @@ exports.deleteIncludeItemsDao = async (userId, items) => {
     JOIN marketplaceitems mi ON pl.mpItemId = mi.id
     WHERE pl.userId = ? AND ${field} IN (${placeholders})
   `;
-  const [results] = await db.marketPlace
+  const [results] = await db.collectionofficer
     .promise()
     .query(query, [userId, ...items]);
   return results;
@@ -83,7 +83,7 @@ exports.getExcludeItemsDao = async (userId) => {
     WHERE el.userId = ? AND mi.category = 'Retail'
     ORDER BY mi.displayName ASC
   `;
-  const [results] = await db.marketPlace.promise().query(query, [userId]);
+  const [results] = await db.collectionofficer.promise().query(query, [userId]);
   return results;
 };
 
@@ -98,7 +98,7 @@ exports.addExcludeItemsDao = async (userId, items) => {
     FROM marketplaceitems mi
     WHERE mi.category = 'Retail' AND ${field} IN (${placeholders})
   `;
-  const [results] = await db.marketPlace
+  const [results] = await db.collectionofficer
     .promise()
     .query(query, [userId, ...items]);
   return results;
@@ -114,7 +114,7 @@ exports.deleteExcludeItemsDao = async (userId, items) => {
     JOIN marketplaceitems mi ON el.mpItemId = mi.id
     WHERE el.userId = ? AND ${field} IN (${placeholders})
   `;
-  const [results] = await db.marketPlace
+  const [results] = await db.collectionofficer
     .promise()
     .query(query, [userId, ...items]);
   return results;
@@ -126,7 +126,7 @@ exports.updateUserStatusDao = async (userId) => {
     SET firstTimeUser = 1
     WHERE id = ? AND firstTimeUser = 0
   `;
-  const [result] = await db.marketPlace.promise().query(query, [userId]);
+  const [result] = await db.collectionofficer.promise().query(query, [userId]);
   return result;
 };
 
@@ -179,10 +179,10 @@ exports.getSavedAddressesByCustomerIdDao = async (customerId) => {
     WHERE customerId = ?
   `;
 
-  const [apartmentResults] = await db.marketPlace
+  const [apartmentResults] = await db.collectionofficer
     .promise()
     .query(apartmentQuery, [customerId]);
-  const [houseResults] = await db.marketPlace
+  const [houseResults] = await db.collectionofficer
     .promise()
     .query(houseQuery, [customerId]);
 
@@ -236,7 +236,7 @@ exports.getAccountDetailsDao = async (userId) => {
     FROM marketplaceusers
     WHERE id = ?
   `;
-  const [results] = await db.marketPlace.promise().query(query, [userId]);
+  const [results] = await db.collectionofficer.promise().query(query, [userId]);
   return results;
 };
 
@@ -270,7 +270,7 @@ exports.addAddressDao = async (customerId, addressData) => {
         houseNo, streetName, city
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
-    const [result] = await db.marketPlace
+    const [result] = await db.collectionofficer
       .promise()
       .query(query, [
         customerId,
@@ -302,7 +302,7 @@ exports.addAddressDao = async (customerId, addressData) => {
       longitude, latitude, houseNo, streetName, city
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
-  const [result] = await db.marketPlace
+  const [result] = await db.collectionofficer
     .promise()
     .query(query, [
       customerId,
@@ -352,7 +352,7 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
           houseNo = ?, streetName = ?, city = ?
       WHERE id = ? AND customerId = ?
     `;
-    const [result] = await db.marketPlace
+    const [result] = await db.collectionofficer
       .promise()
       .query(query, [
         saveAs,
@@ -385,7 +385,7 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
         longitude = ?, latitude = ?, houseNo = ?, streetName = ?, city = ?
     WHERE id = ? AND customerId = ?
   `;
-  const [result] = await db.marketPlace
+  const [result] = await db.collectionofficer
     .promise()
     .query(query, [
       saveAs,
@@ -409,7 +409,7 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
 exports.deleteAddressDao = async (addressId, customerId, buildingType) => {
   const table = buildingType === "Apartment" ? "apartment" : "house";
   const query = `DELETE FROM ${table} WHERE id = ? AND customerId = ?`;
-  const [result] = await db.marketPlace
+  const [result] = await db.collectionofficer
     .promise()
     .query(query, [addressId, customerId]);
   return result;
@@ -440,7 +440,7 @@ exports.updateUserDetailsDao = async (userId, userData) => {
         companyName = ?, buyerType = ?
     WHERE id = ?
   `;
-  const [result] = await db.marketPlace
+  const [result] = await db.collectionofficer
     .promise()
     .query(query, [
       title,
@@ -463,7 +463,7 @@ exports.updateUserDetailsDao = async (userId, userData) => {
 
 exports.deleteUserAccountDao = async (userId) => {
   const query = `DELETE FROM marketplaceusers WHERE id = ?`;
-  const [result] = await db.marketPlace.promise().query(query, [userId]);
+  const [result] = await db.collectionofficer.promise().query(query, [userId]);
   return result;
 };
 
@@ -502,7 +502,7 @@ exports.isPhoneTakenDao = async (userId, phoneNumber) => {
       AND id != ?
     LIMIT 1
   `;
-  const [results] = await db.marketPlace.promise().query(query, [
+  const [results] = await db.collectionofficer.promise().query(query, [
     ...phoneList,
     ...phoneList,
     ...phoneList,
@@ -524,7 +524,7 @@ exports.isNicTakenDao = async (userId, nic) => {
     WHERE nic IN (${placeholders}) AND id != ?
     LIMIT 1
   `;
-  const [results] = await db.marketPlace.promise().query(query, [...candidates, userId]);
+  const [results] = await db.collectionofficer.promise().query(query, [...candidates, userId]);
   return results.length > 0;
 };
 
@@ -535,7 +535,7 @@ exports.updateUserPhoneDao = async (userId, phoneCode, phoneNumber) => {
     SET phoneCode = ?, phoneNumber = ?
     WHERE id = ?
   `;
-  const [result] = await db.marketPlace.promise().query(query, [phoneCode, phoneNumber, userId]);
+  const [result] = await db.collectionofficer.promise().query(query, [phoneCode, phoneNumber, userId]);
   return result;
 };
 
@@ -546,12 +546,12 @@ exports.updateCreditBalanceDao = async (userId, creditBalance) => {
     SET creditBalance = creditBalance + ?
     WHERE id = ?
   `;
-  const [result] = await db.marketPlace.promise().query(query, [creditBalance, userId]);
+  const [result] = await db.collectionofficer.promise().query(query, [creditBalance, userId]);
   if (result.affectedRows === 0) {
     throw new Error("User not found");
   }
 
-  const [rows] = await db.marketPlace.promise().query(
+  const [rows] = await db.collectionofficer.promise().query(
     "SELECT creditBalance FROM marketplaceusers WHERE id = ?",
     [userId]
   );
