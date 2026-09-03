@@ -1,7 +1,16 @@
 const express = require("express");
 const router = express.Router();
 const authMiddleware = require("../middlewares/auth.middleware");
+const { upload } = require("../middlewares/multer.middleware");
 const customerEp = require("../endpoint/customer.ep");
+
+// Upload customer profile image
+router.post(
+  "/upload-profile-image",
+  authMiddleware,
+  upload.single("profileImage"),
+  customerEp.uploadProfileImage
+);
 
 // Get customer profile info
 router.get("/profile", authMiddleware, customerEp.getCustomerProfile);
