@@ -4,6 +4,7 @@ const userAuthEp = require("./auth.ep");
 const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
 const asyncHandler = require("express-async-handler");
+const uploadFileToS3 = require("../middlewares/s3upload");
 
 exports.getCustomerProfile = asyncHandler(async (req, res) => {
   try {
@@ -554,6 +555,39 @@ exports.updateCreditBalance = asyncHandler(async (req, res) => {
     });
   } catch (error) {
     console.error("Update credit balance error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+});
+
+// ---------- Upload Customer Profile Image ----------
+exports.uploadProfileImage = asyncHandler(async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    if (!req.file) {
+      return res.status(400).json({
+        status: false,
+        message: "No image file provided",
+      });
+    }
+
+    const imageUrl = await uploadFileToS3(
+      req.file.buffer,
+      req.file.originalname,
+      "profile-images"
+    );
+
+    await customerDao.updateProfileImageDao(userId, imageUrl);
+
+    return res.status(200).json({
+      status: true,
+      message: "Profile image uploaded successfully",
+      data: {
+        imageUrl,
+      },
+    });
+  } catch (error) {
+    console.error("Profile image upload error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });

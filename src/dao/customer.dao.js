@@ -2,8 +2,8 @@ const db = require("../startup/database");
 
 exports.getCustomerProfileDao = async (userId) => {
   const query =
-    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName, creditBalance FROM marketplaceusers WHERE id = ?";
-  const [results] = await db.collectionofficer.promise().query(query, [userId]);
+    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName, creditBalance, image FROM marketplaceusers WHERE id = ?";
+  const [results] = await db.marketPlace.promise().query(query, [userId]);
   return results;
 };
 
@@ -231,7 +231,8 @@ exports.getAccountDetailsDao = async (userId) => {
       companyName,
       rateofCus,
       creditBalance,
-      nearesCity
+      nearesCity,
+      image
     FROM marketplaceusers
     WHERE id = ?
   `;
@@ -560,4 +561,15 @@ exports.updateCreditBalanceDao = async (userId, creditBalance) => {
     creditBalance: parseFloat(rows[0]?.creditBalance || 0),
     affectedRows: result.affectedRows,
   };
+};
+
+// Update user profile image URL
+exports.updateProfileImageDao = async (userId, imageUrl) => {
+  const query = `
+    UPDATE marketplaceusers
+    SET image = ?
+    WHERE id = ?
+  `;
+  const [result] = await db.marketPlace.promise().query(query, [imageUrl, userId]);
+  return result;
 };
