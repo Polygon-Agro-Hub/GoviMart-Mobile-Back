@@ -160,3 +160,34 @@ exports.checkAvailability = async (req, res) => {
   }
 };
 
+exports.getProductsByProductType = async (req, res) => {
+  const { productTypeId } = req.params;
+  const { buyerType = "Retail" } = req.query;
+
+  if (!productTypeId) {
+    return res.status(400).json({
+      status: false,
+      message: "productTypeId parameter is required",
+    });
+  }
+
+  try {
+    const products = await ProductDao.getProductsByProductTypeDao(
+      productTypeId,
+      buyerType
+    );
+
+    return res.status(200).json({
+      status: true,
+      message: "Products fetched for product type successfully",
+      products: products || [],
+    });
+  } catch (err) {
+    console.error("Error fetching products by product type:", err);
+    return res.status(500).json({
+      status: false,
+      error: "An error occurred while fetching products by product type.",
+    });
+  }
+};
+

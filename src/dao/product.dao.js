@@ -224,3 +224,59 @@ exports.getAllPackageItemsDao = (packageId) => {
     });
   });
 };
+
+/**
+ * Get products filtered by productTypeId using producttypes table
+ */
+exports.getProductsByProductTypeDao = (productTypeId, buyerType = "Retail") => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT 
+        m.id,
+        m.displayName,
+        m.normalPrice,
+        m.discountedPrice,
+        m.discount,
+        m.comPrice,
+        m.promo,
+        m.unitType,
+        m.startValue,
+        m.changeby,
+        m.displayType,
+        m.tags,
+        m.productTypeId,
+        pt.id AS typeId,
+        pt.typeName AS productTypeName,
+        pt.shortCode AS productTypeShortCode,
+        v.varietyNameEnglish,
+        v.image,
+        c.cropNameEnglish,
+        c.category
+      FROM marketplaceitems m
+      INNER JOIN producttypes pt ON m.productTypeId = pt.id
+      LEFT JOIN plant_care.cropvariety v ON m.varietyId = v.id
+      LEFT JOIN plant_care.cropgroup c ON v.cropGroupId = c.id
+      WHERE (m.productTypeId = ? OR pt.typeName = ? OR pt.shortCode = ?)
+        AND (m.isEnable = 1 OR m.isEnable IS NULL)
+      ORDER BY m.displayName ASC
+    `;
+    db.collectionofficer.query(sql, [productTypeId, productTypeId, productTypeId], (err, results) => {
+      if (err) return reject(err);
+      resolve(results || []);
+    });
+  });
+};
+
+/**
+ * Get all product types from producttypes table
+ */
+exports.getProductTypesDao = () => {
+  return new Promise((resolve, reject) => {
+    const sql = `SELECT id, typeName, shortCode FROM producttypes ORDER BY id ASC`;
+    db.collectionofficer.query(sql, [], (err, results) => {
+      if (err) return reject(err);
+      resolve(results || []);
+    });
+  });
+};
+
