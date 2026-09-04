@@ -90,6 +90,7 @@ router.post('/login', loginRateLimiter, userAuthEp.login);
  *         description: Failed to retrieve cities.
  */
 router.get('/cities', userAuthEp.getCities);
+router.post('/city-availability', userAuthEp.updateCityAvailability);
 
 /**
  * @openapi
@@ -322,5 +323,9 @@ router.post('/logout', userAuthEp.logout);
  *         description: Invalid or expired refresh token.
  */
 router.post('/refresh-token', userAuthEp.refreshToken);
+
+// Update / Clear Credit Balance (matches Web API /api/auth/update-credit-balance)
+const customerEp = require('../endpoint/customer.ep');
+router.put('/update-credit-balance', authMiddleware, customerEp.updateCreditBalance);
 
 module.exports = router;

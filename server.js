@@ -6,7 +6,6 @@ require("dotenv").config();
 const {
   plantcare,
   collectionofficer,
-  marketPlace,
   admin,
 } = require("./src/startup/database");
 
@@ -46,26 +45,38 @@ const DatabaseConnection = (db, name) => {
 // Initial database connections
 DatabaseConnection(plantcare, "PlantCare");
 DatabaseConnection(collectionofficer, "CollectionOfficer");
-DatabaseConnection(marketPlace, "MarketPlace");
 DatabaseConnection(admin, "Admin");
 
 // Setup routes
+const http = require("http");
+const { initSocket } = require("./src/socket/socket");
+
 const userroute = require("./src/routes/auth.routes");
 const healthroute = require("./src/routes/health.routes");
 const customerroute = require("./src/routes/customer.routes");
 const homeroute = require("./src/routes/home.routes");
 const complaintroute = require("./src/routes/complaint.routes");
-const productroute = require("./src/routes/product.routes")
-const orderroute = require("./src/routes/order.routes")
+const productroute = require("./src/routes/product.routes");
+const orderroute = require("./src/routes/order.routes");
+const cartroute = require("./src/routes/cart.routes");
+const paymentroute = require("./src/routes/payment.routes");
+const notificationroute = require("./src/routes/notification.routes");
 
-app.use(`${BASE_PATH}/api/auth`, userroute);
-app.use(`${BASE_PATH}/api/customer`, customerroute);
-app.use(`${BASE_PATH}/api/home`, homeroute);
-app.use(`${BASE_PATH}/api/complaint`, complaintroute);
-app.use(`${BASE_PATH}/api/product`, productroute);
-app.use(`${BASE_PATH}/api/order`, orderroute);
-app.use(`${BASE_PATH}`, healthroute);
+const registerRoutes = (prefix) => {
+  app.use(`${prefix}/api/auth`, userroute);
+  app.use(`${prefix}/api/customer`, customerroute);
+  app.use(`${prefix}/api/home`, homeroute);
+  app.use(`${prefix}/api/complaint`, complaintroute);
+  app.use(`${prefix}/api/product`, productroute);
+  app.use(`${prefix}/api/order`, orderroute);
+  app.use(`${prefix}/api/cart`, cartroute);
+  app.use(`${prefix}/api/payment`, paymentroute);
+  app.use(`${prefix}/api/notification`, notificationroute);
+  app.use(`${prefix}`, healthroute);
+};
 
+registerRoutes(BASE_PATH);
+registerRoutes("");
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -77,13 +88,28 @@ app.use((err, req, res, next) => {
   res.status(500).send("Something broke!!");
 });
 
+// Create HTTP server & initialize Socket.IO
+const server = http.createServer(app);
+const io = initSocket(server);
+
+// Attach io instance to express app
+app.set("io", io);
+
+// Attach io and app to server instance
+server.io = io;
+server.app = app;
+
 // Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
-  console.log(`📍 Base Path: ${BASE_PATH}`);
-  console.log(`💓 Health Check URL: ${BASE_PATH}/health`);
-});
+if (!process.env.VERCEL) {
+  server.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+    console.log(`📍 Base Path: ${BASE_PATH}`);
+    console.log(`💓 Health Check URL: ${BASE_PATH}/health`);
+    console.log(`🔌 Socket.IO initialized`);
+  });
+}
 
-module.exports = app;
+module.exports = server;
+

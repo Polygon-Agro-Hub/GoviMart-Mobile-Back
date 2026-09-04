@@ -65,7 +65,7 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
 
     sql += ` ORDER BY m.displayName ASC`;
 
-    db.marketPlace.query(sql, params, (err, results) => {
+    db.collectionofficer.query(sql, params, (err, results) => {
       if (err) {
         reject(err);
       } else {
@@ -105,7 +105,7 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
 
 exports.getAllSlidesDao = () => {
   return new Promise((resolve, reject) => {
-    db.marketPlace.query(
+    db.collectionofficer.query(
       "SELECT * FROM banners  ORDER BY createdAt DESC",
       (err, results) => {
         if (err) return reject(err);
@@ -141,7 +141,7 @@ exports.getAllProductDao = (search) => {
     GROUP BY mp.id, mp.displayName, mp.image
     ORDER BY mp.displayName ASC`;
 
-    db.marketPlace.query(sql, params, (err, results) => {
+    db.collectionofficer.query(sql, params, (err, results) => {
       if (err) {
         reject(err);
       } else {
@@ -166,12 +166,12 @@ exports.checkAvailabilityDao = (productIds, packageIds) => {
       if (pending === 0) resolve(result);
     };
 
-    // Check products (marketplaceitems table)
+    // Check products (marketplaceitems table — only isEnable = 1 count as available)
     if (productIds && productIds.length > 0) {
       pending += 1;
       const placeholders = productIds.map(() => "?").join(", ");
-      const sql = `SELECT id FROM marketplaceitems WHERE id IN (${placeholders})`;
-      db.marketPlace.query(sql, productIds, (err, rows) => {
+      const sql = `SELECT id FROM marketplaceitems WHERE id IN (${placeholders}) AND isEnable = 1`;
+      db.collectionofficer.query(sql, productIds, (err, rows) => {
         if (err) return done(err);
         const existingIds = new Set(rows.map((r) => Number(r.id)));
         productIds.forEach((id) => {
@@ -186,7 +186,7 @@ exports.checkAvailabilityDao = (productIds, packageIds) => {
       pending += 1;
       const placeholders = packageIds.map(() => "?").join(", ");
       const sql = `SELECT id FROM marketplacepackages WHERE id IN (${placeholders}) AND status = 'Enabled' AND isValid = 1`;
-      db.marketPlace.query(sql, packageIds, (err, rows) => {
+      db.collectionofficer.query(sql, packageIds, (err, rows) => {
         if (err) return done(err);
         const existingIds = new Set(rows.map((r) => Number(r.id)));
         packageIds.forEach((id) => {
@@ -215,7 +215,7 @@ exports.getAllPackageItemsDao = (packageId) => {
         LEFT JOIN producttypes pt ON pd.productTypeId = pt.id
         WHERE pd.packageId = ?;
         `;
-    db.marketPlace.query(sql, [packageId], (err, results) => {
+    db.collectionofficer.query(sql, [packageId], (err, results) => {
       if (err) {
         reject(err);
       } else {

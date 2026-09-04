@@ -1,9 +1,10 @@
 {
   "version": 2,
+  "fluid": true,
   "rewrites": [
     {
       "source": "/(.*)",
-      "destination": "/src/api"
+      "destination": "/api"
     }
   ]
 }

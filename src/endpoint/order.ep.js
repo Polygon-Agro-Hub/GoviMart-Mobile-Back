@@ -1,16 +1,17 @@
+const asyncHandler = require("express-async-handler");
 const RetailOrderDao = require("../dao/order.dao");
+const cartDao = require("../dao/cart.dao");
+const customerDao = require("../dao/customer.dao");
 
 const {
     couponValidationSchema,
+    createOrderSchema,
 } = require("../validations/order.validations");
 exports.getRetailOrderHistory = async (req, res) => {
     try {
         const { userId } = req.user;
-        console.log("Fetching order history for userId:", userId); // Debug log
 
         const orderHistory = await RetailOrderDao.getRetailOrderHistoryDao(userId);
-        console.log("Order history fetched:", orderHistory); // Debug log
-
 
         res.status(200).json({
             status: true,
@@ -159,13 +160,12 @@ exports.checkCouponAvalability = async (req, res) => {
             });
         }
 
-        const package = await athDao.getCartPackageInfoDao(userId);
-        const items = await athDao.getCartAdditionalInfoDao(userId);
-        const cartObj = {
-            price: parseFloat(package.price) + parseFloat(items.price),
-            count: parseFloat(package.count) + parseFloat(items.count)
-        };
-        console.log(cartObj);
+        let cartObj = null;
+        if (req.body.cartTotal && parseFloat(req.body.cartTotal) > 0) {
+            cartObj = { price: parseFloat(req.body.cartTotal) };
+        } else {
+            cartObj = await RetailOrderDao.getUserCartTotalDao(userId, req.body.cartId);
+        }
 
         if (couponData.type === 'Percentage') {
             if (couponData.checkLimit === 1) {
@@ -174,8 +174,8 @@ exports.checkCouponAvalability = async (req, res) => {
                 } else {
                     return res.status(400).json({
                         status: false,
-                        message: `This coupon is valid for minimum purchase of Rs.${formatPrice(couponData.priceLimit)}`,
-                        discount
+                        message: `This coupon is valid for minimum purchase of Rs. ${formatPrice(couponData.priceLimit)}`,
+                        discount: 0
                     });
                 }
             } else {
@@ -184,53 +184,471 @@ exports.checkCouponAvalability = async (req, res) => {
         } else if (couponData.type === 'Fixed Amount') {
             if (couponData.checkLimit === 1) {
                 if (cartObj.price >= couponData.priceLimit) {
-                    discount = couponData.fixDiscount;
+                    discount = parseFloat(couponData.fixDiscount) || 0;
                 } else {
                     return res.status(400).json({
                         status: false,
-                        message: `This coupon is valid for minimum purchase of Rs.${formatPrice(couponData.priceLimit)}`,
-                        discount
+                        message: `This coupon is valid for minimum purchase of Rs. ${formatPrice(couponData.priceLimit)}`,
+                        discount: 0
                     });
                 }
             } else {
-                discount = couponData.fixDiscount;
+                discount = parseFloat(couponData.fixDiscount) || 0;
             }
         } else if (isFreeDeliveryCoupon) {
-            // FIXED: Handle both spellings
             if (couponData.checkLimit === 1) {
                 if (cartObj.price >= couponData.priceLimit) {
                     discount = 0;
-                    // Discount is 0 because delivery charge will be removed on frontend
                 } else {
                     return res.status(400).json({
                         status: false,
-                        message: `This coupon is valid for minimum purchase of Rs.${formatPrice(couponData.priceLimit)}`,
-                        discount
+                        message: `This coupon is valid for minimum purchase of Rs. ${formatPrice(couponData.priceLimit)}`,
+                        discount: 0
                     });
                 }
             } else {
                 discount = 0;
-                // Discount is 0 because delivery charge will be removed on frontend
             }
         } else {
             return res.status(400).json({
                 status: false,
                 message: "Invalid coupon type.",
-                discount
+                discount: 0
             });
         }
 
         res.status(200).json({
             status: true,
             message: "Coupon is valid.",
-            discount: formatPrice(discount),
-            type: couponData.type  // Return the original type from database
+            discount: parseFloat(discount) || 0,
+            discountFormatted: formatPrice(discount),
+            type: couponData.type,
+            code: couponData.code,
         });
     } catch (err) {
-        console.error("Error fetching invoice for orderId:", err);
+        console.error("Error validating coupon:", err);
         res.status(500).json({
             status: false,
-            message: "Invalid coupon code",
+            message: err?.message || "Invalid coupon code",
         });
     }
 };
+
+exports.getAvailableCoupons = async (req, res) => {
+    try {
+        const coupons = await RetailOrderDao.getAvailableCouponsDao();
+        res.status(200).json({
+            status: true,
+            message: "Available coupons fetched successfully.",
+            data: coupons,
+        });
+    } catch (err) {
+        console.error("Error fetching available coupons:", err);
+        res.status(500).json({
+            status: false,
+            message: "Failed to fetch available coupons.",
+        });
+    }
+};
+
+// ─── ORDER CREATION ───────────────────────────────────────────────────────────
+
+/**
+ * POST /api/order/create-order
+ * Creates a new order with a full DB transaction.
+ */
+exports.createOrder = asyncHandler(async (req, res) => {
+    const userId = req.user.id;
+
+    // ── 1. Validate request payload ──────────────────────────────────────────
+    const { error, value } = createOrderSchema.validate(req.body, { abortEarly: false });
+    if (error) {
+        console.error("[createOrder] Validation error:", error.details.map((d) => d.message));
+        return res.status(400).json({
+            status: false,
+            message: "Validation failed: " + error.details.map((d) => d.message).join("; "),
+            details: error.details.map((d) => d.message),
+        });
+    }
+
+    const {
+        cartId, paymentMethod, grandTotal, discountAmount, deliveryCharge,
+        creditPaid, moneyPaid, isFinalizeImdt, checkoutDetails,
+    } = value;
+
+    const {
+        deliveryMethod, title, fullName, phoneCode1, phone1, phoneCode2, phone2,
+        buildingType, cityName, companycenterId, houseNo, street,
+        buildingNo, buildingName, flatNumber, floorNumber, saveAs,
+        centerId, scheduleType, deliveryDate, timeSlot,
+        recurringDays, selectedDays, validityWeeks, validityPeriod, calculatedOrders,
+        geoLatitude, geoLongitude, isCoupon, couponValue, couponType,
+    } = checkoutDetails;
+
+    // Resolve active cartId if missing/0
+    let effectiveCartId = cartId;
+    if (!effectiveCartId) {
+        const userCart = await cartDao.getCartByUserIdDao(userId);
+        effectiveCartId = userCart?.id;
+    }
+    if (!effectiveCartId) {
+        return res.status(400).json({
+            status: false,
+            message: "Active cart not found for user",
+        });
+    }
+
+    // Resolve user details fallback if empty (e.g. pickup flow)
+    let resolvedTitle = title;
+    let resolvedFullName = (fullName && fullName !== "Customer") ? fullName : null;
+    let resolvedPhoneCode1 = phoneCode1 || "+94";
+    let resolvedPhone1 = phone1;
+
+    try {
+        const rawProfile = await customerDao.getAccountDetailsDao(userId);
+        const userProfile = Array.isArray(rawProfile) ? rawProfile[0] : rawProfile;
+        if (userProfile) {
+            resolvedTitle = resolvedTitle || userProfile.title || "Mr";
+            const profileFullName = `${userProfile.firstName || ""} ${userProfile.lastName || ""}`.trim() || userProfile.firstName || "";
+            resolvedFullName = resolvedFullName || profileFullName;
+            resolvedPhoneCode1 = resolvedPhoneCode1 || userProfile.phoneCode || "+94";
+            resolvedPhone1 = resolvedPhone1 || userProfile.phoneNumber || req.user.phoneNumber || "";
+        }
+    } catch (e) {
+        console.warn("[createOrder] Profile lookup fallback failed:", e.message);
+    }
+    resolvedTitle = resolvedTitle || "Mr";
+    resolvedFullName = resolvedFullName || "Customer";
+    resolvedPhone1 = resolvedPhone1 || req.user.phoneNumber || "0000000000";
+
+    // ── 2. Verify cart ownership ──────────────────────────────────────────────
+    const cartBelongsToUser = await RetailOrderDao.validateCartDao(effectiveCartId, userId);
+    if (!cartBelongsToUser) {
+        return res.status(403).json({
+            status: false,
+            message: "Cart does not belong to the current user",
+        });
+    }
+
+    // ── 3. Check item availability ────────────────────────────────────────────
+    const availability = await RetailOrderDao.checkCartItemsAvailabilityDao(effectiveCartId);
+    if (availability.hasUnavailableItems) {
+        return res.status(409).json({
+            status: false,
+            code: "ITEMS_UNAVAILABLE",
+            message: "Some cart items are no longer available. Please review your cart.",
+            disabledCount: availability.disabledCount,
+            invalidCount: availability.invalidCount,
+        });
+    }
+
+    // ── 4. Fetch cart items ───────────────────────────────────────────────────
+    const cartItems = await RetailOrderDao.getCartItemsForOrderDao(effectiveCartId);
+    if (!cartItems.length) {
+        return res.status(400).json({
+            status: false,
+            message: "Cart is empty",
+        });
+    }
+
+    const hasPackages = cartItems.some((i) => i.itemType === "package");
+    const isHomeDelivery = deliveryMethod === "home";
+
+    // Normalize schedule fields
+    let normScheduleType = "One Time";
+    if (scheduleType === "Once a Week" || scheduleType === "Twice a Week") {
+        normScheduleType = scheduleType;
+    } else if (scheduleType === "One Time" || scheduleType === "One Time Order") {
+        normScheduleType = "One Time";
+    }
+
+    const effRecurringDays = selectedDays || recurringDays || [];
+    const effValidityPeriod = validityPeriod || validityWeeks || 4;
+
+    const parseScheduleDate = (rawDate) => {
+        if (!rawDate) return null;
+        if (rawDate instanceof Date) return rawDate;
+        const parsed = new Date(rawDate);
+        if (!isNaN(parsed.getTime())) return parsed;
+        return null;
+    };
+
+    // ── 5. Begin transaction ──────────────────────────────────────────────────
+    const db = require("../startup/database");
+
+    db.collectionofficer.getConnection((connErr, connection) => {
+        if (connErr) {
+            return res.status(500).json({
+                status: false,
+                message: "Database connection error",
+            });
+        }
+
+        connection.beginTransaction(async (txErr) => {
+            if (txErr) {
+                connection.release();
+                return res.status(500).json({
+                    status: false,
+                    message: "Transaction error",
+                });
+            }
+
+            try {
+                // ── 5a. Create order ──────────────────────────────────────────
+                const orderId = await RetailOrderDao.createOrderWithTransactionDao(connection, {
+                    userId,
+                    delivaryMethod: deliveryMethod,
+                    centerId: centerId || null,
+                    buildingType: buildingType || null,
+                    title: resolvedTitle,
+                    fullName: resolvedFullName,
+                    phonecode1: resolvedPhoneCode1,
+                    phone1: resolvedPhone1,
+                    phonecode2: phoneCode2 || null,
+                    phone2: phone2 || null,
+                    isCoupon: isCoupon || false,
+                    couponValue: couponValue || 0,
+                    couponType: couponType || null,
+                    total: grandTotal,
+                    fullTotal: grandTotal,
+                    discount: discountAmount || 0,
+                    deliveryCharge: isHomeDelivery ? (deliveryCharge || 0) : 0,
+                    sheduleType: normScheduleType,
+                    validityPeriod: effValidityPeriod,
+                    selectedDays: effRecurringDays,
+                    sheduleDate: null,
+                    sheduleTime: timeSlot || null,
+                    isPackage: hasPackages ? 1 : 0,
+                    isFinalizeImdt: isFinalizeImdt || 0,
+                    latitude: geoLatitude || null,
+                    longitude: geoLongitude || null,
+                    companycenterId: companycenterId || null,
+                });
+
+                // ── 5b. Insert delivery address (home only) ───────────────────
+                if (isHomeDelivery && buildingType) {
+                    const addrData = {
+                        houseNo: houseNo || null,
+                        streetName: street || null,
+                        city: cityName || null,
+                        saveAs: saveAs || null,
+                        buildingNo: buildingNo || null,
+                        buildingName: buildingName || null,
+                        unitNo: flatNumber || null,
+                        floorNo: floorNumber || null,
+                    };
+                    await RetailOrderDao.createOrderAddressWithTransactionDao(
+                        connection, orderId, addrData, buildingType
+                    );
+                }
+
+                // ── 5c. Create process order(s) ───────────────────────────────
+                let primaryProcessOrderId = null;
+                let primaryInvNo = null;
+                const createdProcessOrders = [];
+
+                if (normScheduleType === "Twice a Week") {
+                    // Special condition: 2 individual rows in processorders for the 2 days
+                    let date1 = null;
+                    let date2 = null;
+
+                    if (Array.isArray(calculatedOrders) && calculatedOrders.length >= 2) {
+                        date1 = parseScheduleDate(calculatedOrders[0]?.date || calculatedOrders[0]?.dateStr);
+                        date2 = parseScheduleDate(calculatedOrders[1]?.date || calculatedOrders[1]?.dateStr);
+                    }
+
+                    if (!date1 || !date2) {
+                        const DAY_MAP = { Mo: 1, Tu: 2, We: 3, Th: 4, Fr: 5, Sa: 6, Su: 0 };
+                        const minDate = new Date();
+                        minDate.setDate(minDate.getDate() + 3);
+                        minDate.setHours(0, 0, 0, 0);
+
+                        const daysArr = Array.isArray(effRecurringDays) && effRecurringDays.length > 0
+                            ? effRecurringDays
+                            : ["Tu", "Sa"];
+
+                        const computedDates = daysArr.map((d) => {
+                            const targetDay = DAY_MAP[d] !== undefined ? DAY_MAP[d] : 2;
+                            const dt = new Date(minDate);
+                            while (dt.getDay() !== targetDay) {
+                                dt.setDate(dt.getDate() + 1);
+                            }
+                            return dt;
+                        }).sort((a, b) => a.getTime() - b.getTime());
+
+                        date1 = date1 || computedDates[0];
+                        date2 = date2 || computedDates[1] || computedDates[0];
+                    }
+
+                    // Insert 1st process order
+                    const proc1 = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
+                        orderId,
+                        paymentMethod,
+                        isPaid: 0,
+                        amount: grandTotal,
+                        creditPaid: creditPaid || 0,
+                        moneyPaid: moneyPaid || 0,
+                        status: "Ordered",
+                        sheduleDate: date1,
+                    });
+                    createdProcessOrders.push(proc1);
+
+                    // Insert 2nd process order
+                    const proc2 = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
+                        orderId,
+                        paymentMethod,
+                        isPaid: 0,
+                        amount: grandTotal,
+                        creditPaid: creditPaid || 0,
+                        moneyPaid: moneyPaid || 0,
+                        status: "Ordered",
+                        sheduleDate: date2,
+                    });
+                    createdProcessOrders.push(proc2);
+
+                    primaryProcessOrderId = proc1.insertId;
+                    primaryInvNo = proc1.invNo;
+
+                    // ── 5d. Save order items for both process orders ───────────
+                    // Additional items link to orderId and processOrderId
+                    const additionalItems = cartItems.filter((i) => i.itemType === "additional");
+                    for (const item of additionalItems) {
+                        await RetailOrderDao.saveOrderAdditionalItemWithTransactionDao(connection, orderId, item, proc1.insertId);
+                    }
+
+                    // Packages link to each processOrderId
+                    const packageItems = cartItems.filter((i) => i.itemType === "package");
+                    for (const pkg of packageItems) {
+                        await RetailOrderDao.saveOrderPackageWithTransactionDao(connection, proc1.insertId, pkg);
+                        await RetailOrderDao.saveOrderPackageWithTransactionDao(connection, proc2.insertId, pkg);
+                    }
+                } else {
+                    // One Time or Once a Week: 1 process order row
+                    let targetDate = parseScheduleDate(deliveryDate);
+                    if (!targetDate && Array.isArray(calculatedOrders) && calculatedOrders.length > 0) {
+                        targetDate = parseScheduleDate(calculatedOrders[0]?.date || calculatedOrders[0]?.dateStr);
+                    }
+
+                    const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
+                        orderId,
+                        paymentMethod,
+                        isPaid: 0,
+                        amount: grandTotal,
+                        creditPaid: creditPaid || 0,
+                        moneyPaid: moneyPaid || 0,
+                        status: "Ordered",
+                        sheduleDate: targetDate,
+                    });
+                    createdProcessOrders.push(proc);
+                    primaryProcessOrderId = proc.insertId;
+                    primaryInvNo = proc.invNo;
+
+                    // ── 5d. Save all order items ──────────────────────────────
+                    await RetailOrderDao.saveOrderItemsWithTransactionDao(
+                        connection, orderId, primaryProcessOrderId, cartItems
+                    );
+                }
+
+                // ── 5e. Commit ────────────────────────────────────────────────
+                connection.commit((commitErr) => {
+                    if (commitErr) {
+                        return connection.rollback(() => {
+                            connection.release();
+                            res.status(500).json({ status: false, message: "Commit failed" });
+                        });
+                    }
+
+                    connection.release();
+
+                    // ── 5f. Clear cart (best-effort, after commit) ────────────
+                    RetailOrderDao.clearCartAfterOrderDao(effectiveCartId).catch((clearErr) => {
+                        console.error("[createOrder] Cart clear failed (non-fatal):", clearErr);
+                    });
+
+                    return res.status(201).json({
+                        status: true,
+                        message: "Order created successfully",
+                        data: {
+                            orderId,
+                            processOrderId: primaryProcessOrderId,
+                            processOrderIds: createdProcessOrders.map((p) => p.insertId),
+                            invoiceNumber: primaryInvNo,
+                            invoiceNumbers: createdProcessOrders.map((p) => p.invNo),
+                            total: grandTotal,
+                        },
+                    });
+                });
+            } catch (err) {
+                connection.rollback(() => {
+                    connection.release();
+                });
+
+                if (err.code === "ITEMS_UNAVAILABLE") {
+                    return res.status(409).json({
+                        status: false,
+                        code: "ITEMS_UNAVAILABLE",
+                        message: err.message,
+                    });
+                }
+
+                console.error("[createOrder] Transaction error:", err);
+                return res.status(500).json({
+                    status: false,
+                    message: "Order creation failed. Please try again.",
+                });
+            }
+        });
+    });
+});
+
+// ─── LOOKUP ENDPOINTS ─────────────────────────────────────────────────────────
+
+/**
+ * GET /api/order/pickup-centers
+ * Returns all available pickup centres from the DB.
+ */
+exports.getPickupCenters = asyncHandler(async (req, res) => {
+    const centers = await RetailOrderDao.getPickupCentersDao();
+    return res.status(200).json({
+        status: true,
+        message: "Pickup centres fetched successfully",
+        data: centers,
+    });
+});
+
+/**
+ * GET /api/order/delivery-cities
+ * Returns all delivery cities with their charges and companycenterId mapping.
+ */
+exports.getDeliveryCities = asyncHandler(async (req, res) => {
+    const cities = await RetailOrderDao.getDeliveryCitiesDao();
+    return res.status(200).json({
+        status: true,
+        message: "Delivery cities fetched successfully",
+        data: cities,
+    });
+});
+
+/**
+ * GET /api/orders/invoice/:orderId
+ * Fetches invoice details matching web format.
+ */
+exports.getInvoiceByOrderId = asyncHandler(async (req, res) => {
+    const { orderId } = req.params;
+    const { userId } = req.user;
+
+    const result = await RetailOrderDao.getInvoiceByOrderIdDao(orderId, userId);
+
+    if (!result || !result.invoice) {
+        return res.status(404).json({
+            status: false,
+            message: "Invoice not found for this order.",
+        });
+    }
+
+    return res.status(200).json({
+        status: true,
+        message: "Invoice fetched successfully",
+        invoice: result.invoice,
+    });
+});
