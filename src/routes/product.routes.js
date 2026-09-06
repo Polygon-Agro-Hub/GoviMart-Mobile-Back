@@ -8,6 +8,7 @@ router.get("/all-product", productEp.getAllProduct);
 router.get("/by-category", productEp.getProductsByCategory);
 
 router.get("/package-details/:packageId", productEp.getPackageDetails);
+router.get("/by-product-type/:productTypeId", productEp.getProductsByProductType);
 
 //Get all banners
 router.get("/slides", productEp.getAllSlides);
