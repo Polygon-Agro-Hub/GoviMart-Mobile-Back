@@ -150,3 +150,64 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
         });
     }
 });
+
+/**
+ * GET /api/order/package/packing-limit
+ * Returns current packing target limit and remaining available order slots.
+ */
+exports.getPackingTargetSlots = asyncHandler(async (req, res) => {
+    const { date, processOrderId } = req.query;
+
+    const data = await packageReviewDao.getPackingSlotAvailabilityDao(date, processOrderId);
+
+    return res.status(200).json({
+        status: true,
+        message: "Packing slot availability fetched successfully",
+        data,
+    });
+});
+
+/**
+ * POST /api/order/package/cancel-order
+ * Cancel order and refund paid amount as credit balance
+ */
+exports.cancelPackageOrder = asyncHandler(async (req, res) => {
+    const userId = req.user?.id;
+    const { orderId, processOrderId } = req.body;
+
+    if (!userId) {
+        return res.status(401).json({
+            status: false,
+            message: "Unauthorized",
+        });
+    }
+
+    if (!orderId && !processOrderId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderId or processOrderId is required",
+        });
+    }
+
+    try {
+        const result = await packageReviewDao.cancelOrderDao({
+            orderId,
+            processOrderId,
+            userId,
+        });
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+            data: result,
+        });
+    } catch (error) {
+        console.error("[cancelPackageOrder] Error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to cancel order",
+        });
+    }
+});
+
+

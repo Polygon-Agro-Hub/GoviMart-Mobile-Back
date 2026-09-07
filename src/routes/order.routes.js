@@ -5,10 +5,12 @@ const packageReviewEp = require("../endpoint/package-review.ep");
 const authMiddleware = require("../middlewares/auth.middleware");
 
 // Package review and customization routes
+router.get("/package/packing-limit", authMiddleware, packageReviewEp.getPackingTargetSlots);
 router.get("/package/review/:orderId", authMiddleware, packageReviewEp.getOrderPackageReview);
 router.post("/package/replace-item", authMiddleware, packageReviewEp.replacePackageItem);
 router.post("/package/reset-item", authMiddleware, packageReviewEp.resetPackageItem);
 router.post("/package/confirm-review", authMiddleware, packageReviewEp.confirmPackageReview);
+router.post("/package/cancel-order", authMiddleware, packageReviewEp.cancelPackageOrder);
 
 router.get("/order-history", authMiddleware, orderEp.getRetailOrderHistory);
 router.get("/pickup-centers", authMiddleware, orderEp.getPickupCenters);

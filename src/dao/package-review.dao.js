@@ -22,6 +22,8 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                 po.id AS processOrderId,
                 po.invNo,
                 po.amount,
+                po.creditPaid,
+                po.moneyPaid,
                 po.paymentMethod,
                 po.isPaid,
                 po.status,
@@ -223,10 +225,29 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                     };
                 });
 
+                // 7. Calculate slot availability and unread reminder cycle
+                let packingSlots = {
+                    targetLimit: 50,
+                    acceptedOrdersCount: 0,
+                    availableSlots: 50,
+                    isLimitReached: false,
+                    unreadReminderDays: 1,
+                    scheduleDate: orderInfo.sheduleDate || orderInfo.processScheduleDate || new Date().toISOString().split("T")[0],
+                };
+                try {
+                    packingSlots = await exports.getPackingSlotAvailabilityDao(
+                        orderInfo.sheduleDate || orderInfo.processScheduleDate,
+                        processOrderId
+                    );
+                } catch (slotErr) {
+                    console.warn("[getOrderPackageReviewDao] Packing slot calculation error:", slotErr.message);
+                }
+
                 resolve({
                     orderInfo,
                     packages: structuredPackages,
                     additionalItems,
+                    packingSlots,
                 });
             } catch (queryErr) {
                 reject(queryErr);
@@ -600,3 +621,254 @@ exports.confirmPackageReviewDao = ({
         });
     });
 };
+
+/**
+ * Fetch latest packing target limit, count accepted orders for the date,
+ * and check unread reminder history for an order.
+ */
+exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
+    return new Promise(async (resolve) => {
+        try {
+            // 1. Fetch latest target limit from packingtargetlimit
+            const limitSql = `SELECT tarValue FROM packingtargetlimit ORDER BY id DESC LIMIT 1`;
+            const limitRows = await new Promise((res) => {
+                db.collectionofficer.query(limitSql, [], (err, rows) => {
+                    if (err) {
+                        console.warn("[getPackingSlotAvailabilityDao] Error querying packingtargetlimit:", err.message);
+                        return res([]);
+                    }
+                    res(rows || []);
+                });
+            });
+
+            const targetLimit = limitRows.length > 0 && limitRows[0].tarValue != null
+                ? (parseInt(limitRows[0].tarValue, 10) || 50)
+                : 50;
+
+            // 2. Count accepted orders for schedule date from processorders
+            let countSql = `
+                SELECT COUNT(*) AS acceptedCount 
+                FROM processorders 
+                WHERE (status IS NULL OR status NOT IN ('Cancelled', 'Return', 'Return Received'))
+            `;
+            const countParams = [];
+            if (targetDate) {
+                countSql += ` AND DATE(sheduleDate) = DATE(?)`;
+                countParams.push(targetDate);
+            } else {
+                countSql += ` AND (DATE(sheduleDate) = CURDATE() OR sheduleDate IS NULL)`;
+            }
+
+            const countRows = await new Promise((res) => {
+                db.collectionofficer.query(countSql, countParams, (err, rows) => {
+                    if (err) {
+                        console.warn("[getPackingSlotAvailabilityDao] Error querying accepted orders:", err.message);
+                        return res([]);
+                    }
+                    res(rows || []);
+                });
+            });
+
+            const acceptedOrdersCount = countRows.length > 0 && countRows[0].acceptedCount != null
+                ? (parseInt(countRows[0].acceptedCount, 10) || 0)
+                : 0;
+            const availableSlots = Math.max(0, targetLimit - acceptedOrdersCount);
+
+            // 3. Check unread reminder notifications count if processOrderId given
+            let unreadReminderDays = 1;
+            if (processOrderId) {
+                const notifSql = `
+                    SELECT COUNT(*) AS unreadCount 
+                    FROM ordernotfication 
+                    WHERE orderId = ? AND isRead = 0
+                `;
+                const notifRows = await new Promise((res) => {
+                    db.collectionofficer.query(notifSql, [processOrderId], (err, rows) => {
+                        if (err) return res([]);
+                        res(rows || []);
+                    });
+                });
+                if (notifRows.length > 0 && notifRows[0].unreadCount > 0) {
+                    unreadReminderDays = Math.min(3, parseInt(notifRows[0].unreadCount, 10) || 1);
+                }
+            }
+
+            const isLimitReached = availableSlots <= 0 || unreadReminderDays >= 3;
+
+            resolve({
+                targetLimit,
+                acceptedOrdersCount,
+                availableSlots,
+                isLimitReached,
+                unreadReminderDays,
+                scheduleDate: targetDate || new Date().toISOString().split("T")[0],
+            });
+        } catch (err) {
+            console.error("[getPackingSlotAvailabilityDao] Error:", err);
+            resolve({
+                targetLimit: 50,
+                acceptedOrdersCount: 0,
+                availableSlots: 50,
+                isLimitReached: false,
+                unreadReminderDays: 1,
+                scheduleDate: targetDate || new Date().toISOString().split("T")[0],
+            });
+        }
+    });
+};
+
+/**
+ * Cancel an order / process order and convert paid balance to credit balance in marketplaceusers.
+ */
+exports.cancelOrderDao = ({ orderId, processOrderId, userId }) => {
+    return new Promise((resolve, reject) => {
+        if ((!orderId && !processOrderId) || !userId) {
+            return reject(new Error("orderId or processOrderId and userId are required"));
+        }
+
+        const findSql = `
+            SELECT 
+                po.id AS processOrderId,
+                po.orderId AS actualOrderId,
+                po.invNo,
+                po.amount,
+                po.creditPaid,
+                po.moneyPaid,
+                po.paymentMethod,
+                po.isPaid,
+                po.status,
+                o.userId
+            FROM processorders po
+            INNER JOIN orders o ON po.orderId = o.id
+            WHERE (po.id = ? OR o.id = ?) AND o.userId = ?
+            ORDER BY po.id DESC
+            LIMIT 1
+        `;
+
+        const searchId = processOrderId || orderId;
+
+        db.collectionofficer.query(findSql, [searchId, searchId, userId], async (err, rows) => {
+            if (err) return reject(err);
+            if (!rows || rows.length === 0) {
+                return reject(new Error("Order not found or you do not have permission to cancel this order"));
+            }
+
+            const order = rows[0];
+            const currentStatus = order.status ? order.status.trim().toLowerCase() : "";
+            if (currentStatus === "cancelled") {
+                return reject(new Error("Order is already cancelled"));
+            }
+            if (currentStatus === "delivered" || currentStatus === "picked up") {
+                return reject(new Error("Completed order cannot be cancelled"));
+            }
+
+            const pOrderId = order.processOrderId;
+            const pMethod = (order.paymentMethod || "").trim().toLowerCase();
+            const rawAmount = parseFloat(order.amount) || 0;
+            const rawCreditPaid = parseFloat(order.creditPaid) || 0;
+            const rawMoneyPaid = parseFloat(order.moneyPaid) || 0;
+            const isPaid = parseInt(order.isPaid, 10) === 1;
+
+            // Calculate refundable credit amount to add back to marketplaceusers
+            let refundCreditAmount = 0;
+            if (pMethod === "card" || pMethod === "payhere" || (isPaid && pMethod !== "cash")) {
+                // Paid via Card / Online payment (full amount refunded as credit)
+                refundCreditAmount = rawAmount > 0 ? rawAmount : (rawMoneyPaid + rawCreditPaid);
+            } else if (pMethod === "credit") {
+                // 100% paid by credit balance
+                refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : rawAmount;
+            } else {
+                // Cash order (only refund creditPaid if partial credit was used at checkout)
+                refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : 0;
+            }
+
+            db.collectionofficer.getConnection(async (connErr, connection) => {
+                if (connErr) return reject(connErr);
+
+                try {
+                    await new Promise((res, rej) => connection.beginTransaction(e => (e ? rej(e) : res())));
+
+                    // 1. Update processorders status to Cancelled
+                    const updateOrderSql = `
+                        UPDATE processorders 
+                        SET status = 'Cancelled' 
+                        WHERE id = ?
+                    `;
+                    await new Promise((res, rej) => {
+                        connection.query(updateOrderSql, [pOrderId], (e, r) => (e ? rej(e) : res(r)));
+                    });
+
+                    // 2. Also cancel any associated replacerequests
+                    const updateReplaceSql = `
+                        UPDATE replacerequest 
+                        SET status = 'Cancelled' 
+                        WHERE orderPackageId IN (SELECT id FROM orderpackage WHERE orderId = ?)
+                    `;
+                    await new Promise((res) => {
+                        connection.query(updateReplaceSql, [pOrderId], () => res());
+                    });
+
+                    // 3. If refundable amount > 0, update marketplaceusers creditBalance
+                    let newCreditBalance = null;
+                    if (refundCreditAmount > 0) {
+                        const updateCreditSql = `
+                            UPDATE marketplaceusers 
+                            SET creditBalance = creditBalance + ? 
+                            WHERE id = ?
+                        `;
+                        await new Promise((res, rej) => {
+                            connection.query(updateCreditSql, [refundCreditAmount, userId], (e, r) => (e ? rej(e) : res(r)));
+                        });
+
+                        const fetchCreditSql = `
+                            SELECT creditBalance 
+                            FROM marketplaceusers 
+                            WHERE id = ?
+                        `;
+                        const creditRows = await new Promise((res, rej) => {
+                            connection.query(fetchCreditSql, [userId], (e, r) => (e ? rej(e) : res(r)));
+                        });
+                        if (creditRows && creditRows.length > 0) {
+                            newCreditBalance = parseFloat(creditRows[0].creditBalance || 0);
+                        }
+                    }
+
+                    // 4. Insert notification
+                    const invNoDisplay = order.invNo || `ORD-${order.actualOrderId}`;
+                    const notifMsg = refundCreditAmount > 0
+                        ? `Your order #${invNoDisplay} has been cancelled. Rs. ${refundCreditAmount.toFixed(2)} has been credited back to your credit balance.`
+                        : `Your order #${invNoDisplay} has been cancelled successfully.`;
+
+                    const notifSql = `
+                        INSERT INTO ordernotfication (orderId, Title, message, isRead, createdAt)
+                        VALUES (?, 'Order Cancelled', ?, 0, NOW())
+                    `;
+                    await new Promise((res) => {
+                        connection.query(notifSql, [pOrderId, notifMsg], () => res());
+                    });
+
+                    await new Promise((res, rej) => connection.commit(e => (e ? rej(e) : res())));
+                    connection.release();
+
+                    resolve({
+                        success: true,
+                        orderId: order.actualOrderId,
+                        processOrderId: pOrderId,
+                        invoiceNo: order.invNo,
+                        status: "Cancelled",
+                        refundCreditAmount,
+                        newCreditBalance,
+                        message: refundCreditAmount > 0
+                            ? `Order cancelled. Rs. ${refundCreditAmount.toFixed(2)} added to your credit balance.`
+                            : "Order cancelled successfully.",
+                    });
+                } catch (txErr) {
+                    connection.rollback(() => connection.release());
+                    reject(txErr);
+                }
+            });
+        });
+    });
+};
+
+
