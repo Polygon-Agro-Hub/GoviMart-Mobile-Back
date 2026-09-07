@@ -114,7 +114,9 @@ exports.resetPackageItem = asyncHandler(async (req, res) => {
  */
 exports.confirmPackageReview = asyncHandler(async (req, res) => {
     const { userId } = req.user;
-    const { orderId, processOrderId, lockNow = true, additionalAmount = 0 } = req.body;
+    const { orderId, processOrderId, lockNow = true, additionalAmount = 0, replacements = [], additionalItems = [] } = req.body;
+
+    console.log("[confirmPackageReview Endpoint] Received request by userId:", userId, "body:", JSON.stringify(req.body, null, 2));
 
     if (!orderId && !processOrderId) {
         return res.status(400).json({
@@ -130,14 +132,18 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
             userId,
             lockNow,
             additionalAmount,
+            replacements,
+            additionalItems,
         });
+
+        console.log("[confirmPackageReview Endpoint] Success response:", result);
 
         return res.status(200).json({
             status: true,
             message: result.message,
         });
     } catch (err) {
-        console.error("Confirm package review error:", err);
+        console.error("[confirmPackageReview Endpoint] Error finalize package review:", err);
         return res.status(500).json({
             status: false,
             message: err.message || "Failed to finalize package review",
