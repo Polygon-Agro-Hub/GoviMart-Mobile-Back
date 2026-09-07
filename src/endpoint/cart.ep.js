@@ -55,17 +55,35 @@ exports.getUserCart = asyncHandler(async (req, res) => {
   );
 
   // Format products
-  const formattedProducts = products.map((prod) => ({
-    id: prod.productId,
-    name: prod.name,
-    image: prod.image,
-    price: parseFloat(prod.discountedPrice || prod.normalPrice) || 0,
-    weight: parseFloat(prod.quantity) || 500,
-    unit: prod.unit || "g",
-    minimumWeight: prod.unit === "kg" ? 1 : 500,
-    step: prod.unit === "kg" ? 0.5 : 100,
-    isUnavailable: prod.isEnable !== 1,
-  }));
+  const formattedProducts = products.map((prod) => {
+    const rawStartVal = parseFloat(prod.startValue) || 1;
+    const dbUnitType = (prod.unitType || "g").toLowerCase();
+    const currentUnit = (prod.unit || dbUnitType).toLowerCase();
+
+    let minWeight = rawStartVal;
+    if (rawStartVal < 1 && currentUnit === "g") {
+      minWeight = Math.round(rawStartVal * 1000);
+    } else if (dbUnitType === "kg" && currentUnit === "g") {
+      minWeight = Math.round(rawStartVal * 1000);
+    } else if (dbUnitType === "g" && currentUnit === "kg") {
+      minWeight = parseFloat((rawStartVal / 1000).toFixed(3));
+    }
+
+    const currentWeight = parseFloat(prod.quantity) || minWeight;
+
+    return {
+      id: prod.productId,
+      name: prod.name,
+      image: prod.image,
+      price: parseFloat(prod.discountedPrice || prod.normalPrice) || 0,
+      normalPrice: parseFloat(prod.normalPrice) || 0,
+      weight: currentWeight,
+      unit: currentUnit,
+      minimumWeight: minWeight,
+      step: currentUnit === "kg" ? 0.5 : (minWeight >= 500 ? 500 : 100),
+      isUnavailable: prod.isEnable !== 1,
+    };
+  });
 
   return res.status(200).json({
     status: true,
