@@ -17,7 +17,8 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                 o.id AS actualOrderId,
                 o.userId,
                 o.delivaryMethod,
-                o.sheduleDate,
+                o.sheduleTime,
+                o.sheduleType,
                 po.id AS processOrderId,
                 po.invNo,
                 po.amount,
@@ -25,7 +26,8 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                 po.isPaid,
                 po.status,
                 po.packagePackStatus,
-                po.sheduleDate AS processScheduleDate
+                po.sheduleDate AS processScheduleDate,
+                po.sheduleDate AS sheduleDate
             FROM processorders po
             INNER JOIN orders o ON po.orderId = o.id
             WHERE (po.id = ? OR o.id = ?) AND o.userId = ?
@@ -174,14 +176,14 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                     FROM orderadditionalitems oai
                     LEFT JOIN marketplaceitems mi ON oai.productId = mi.id
                     LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-                    WHERE oai.orderId = ?
+                    WHERE oai.orderId = ? OR oai.orderId = ?
                 `;
 
                 const [items, baselineItems, replaceRequests, additionalItems] = await Promise.all([
                     new Promise((res, rej) => db.collectionofficer.query(itemsSql, orderPackageIds, (e, r) => e ? rej(e) : res(r || []))),
                     new Promise((res, rej) => db.collectionofficer.query(baselineSql, orderPackageIds, (e, r) => e ? rej(e) : res(r || []))),
                     new Promise((res, rej) => db.collectionofficer.query(replaceRequestsSql, orderPackageIds, (e, r) => e ? rej(e) : res(r || []))),
-                    new Promise((res, rej) => db.collectionofficer.query(additionalSql, [actualOrderId], (e, r) => e ? rej(e) : res(r || []))),
+                    new Promise((res, rej) => db.collectionofficer.query(additionalSql, [actualOrderId, processOrderId], (e, r) => e ? rej(e) : res(r || []))),
                 ]);
 
                 // Assemble packages with nested items and baselines
@@ -261,13 +263,24 @@ exports.replacePackageItemDao = ({ orderPackageId, userId, replceId, newProductI
                         throw new Error("Package is locked for editing. Packing has commenced or review period expired.");
                     }
 
-                    // 2. Insert into replacerequest
+                    // 2. Validate officer userId against collectionofficer FK constraint
+                    let officerUserId = null;
+                    if (userId) {
+                        const [officerRows] = await new Promise((res, rej) => {
+                            connection.query("SELECT id FROM collectionofficer WHERE id = ? LIMIT 1", [userId], (e, r) => e ? rej(e) : res([r]));
+                        });
+                        if (officerRows && officerRows.length > 0) {
+                            officerUserId = officerRows[0].id;
+                        }
+                    }
+
+                    // 3. Insert into replacerequest
                     const insertRequestSql = `
                         INSERT INTO replacerequest (orderPackageId, userId, replceId, productType, productId, qty, price, status)
                         VALUES (?, ?, ?, ?, ?, ?, ?, 'Approved')
                     `;
                     const requestResult = await new Promise((res, rej) => {
-                        connection.query(insertRequestSql, [orderPackageId, userId, replceId || null, productType || null, newProductId, newQty, newPrice], (e, r) => e ? rej(e) : res(r));
+                        connection.query(insertRequestSql, [orderPackageId, officerUserId, replceId || null, productType || null, newProductId, newQty, newPrice], (e, r) => e ? rej(e) : res(r));
                     });
 
                     // 3. Update orderpackageitems row
@@ -351,17 +364,17 @@ exports.resetPackageItemDao = ({ orderPackageId, userId, replceId, originalBasel
                             WHERE id = ? AND orderPackageId = ?
                         `;
                         await new Promise((res, rej) => {
-                            connection.query(restoreSql, [base.productId, base.productType, base.qty, base.price, replceId, orderPackageId], (e, r) => e ? rej(e) : res(r));
+                            connection.query(restoreSql, [base.productId, base.productType, base.qty, base.price, targetReplceId, orderPackageId], (e, r) => e ? rej(e) : res(r));
                         });
 
-                        // Update replacerequest status to 'Reverted'
+                        // 4. Update status in replacerequest to Cancelled
                         const updateReqSql = `
                             UPDATE replacerequest 
-                            SET status = 'Reverted' 
+                            SET status = 'Cancelled' 
                             WHERE orderPackageId = ? AND replceId = ?
                         `;
                         await new Promise((res, rej) => {
-                            connection.query(updateReqSql, [orderPackageId, replceId], (e, r) => e ? rej(e) : res(r));
+                            connection.query(updateReqSql, [orderPackageId, targetReplceId], (e, r) => e ? rej(e) : res(r));
                         });
                     }
 
@@ -375,7 +388,7 @@ exports.resetPackageItemDao = ({ orderPackageId, userId, replceId, originalBasel
                         connection.release();
                         resolve({
                             status: true,
-                            message: "Package item reset to original successfully",
+                            message: "Package item reset to original baseline successfully",
                         });
                     });
                 } catch (err) {
@@ -391,54 +404,193 @@ exports.resetPackageItemDao = ({ orderPackageId, userId, replceId, originalBasel
 
 /**
  * Finalize/confirm package review:
- * Sets isLock = 1 on orderpackage (if specified), adjusts processorders amount, and completes review.
+ * Applies any batch replacements, inserts additional items, adjusts processorders amount, and locks packages.
  */
-exports.confirmPackageReviewDao = ({ orderId, processOrderId, userId, lockNow = true, additionalAmount = 0 }) => {
+exports.confirmPackageReviewDao = ({
+    orderId,
+    processOrderId,
+    userId,
+    lockNow = true,
+    additionalAmount = 0,
+    replacements = [],
+    additionalItems = [],
+}) => {
     return new Promise((resolve, reject) => {
+        console.log("\n================ [confirmPackageReviewDao] START ================");
+        console.log("[confirmPackageReviewDao] Input Parameters:", {
+            orderId,
+            processOrderId,
+            userId,
+            lockNow,
+            additionalAmount,
+            replacementsCount: Array.isArray(replacements) ? replacements.length : 0,
+            additionalItemsCount: Array.isArray(additionalItems) ? additionalItems.length : 0,
+        });
+        console.log("[confirmPackageReviewDao] Replacements Data:", JSON.stringify(replacements, null, 2));
+        console.log("[confirmPackageReviewDao] Additional Items Data:", JSON.stringify(additionalItems, null, 2));
+
         db.collectionofficer.getConnection((connErr, connection) => {
-            if (connErr) return reject(connErr);
+            if (connErr) {
+                console.error("[confirmPackageReviewDao] DB Connection Error:", connErr);
+                return reject(connErr);
+            }
 
             connection.beginTransaction(async (txErr) => {
                 if (txErr) {
+                    console.error("[confirmPackageReviewDao] Begin Transaction Error:", txErr);
                     connection.release();
                     return reject(txErr);
                 }
 
                 try {
-                    // 1. Lock order packages
-                    if (lockNow) {
-                        const lockSql = `UPDATE orderpackage SET isLock = 1 WHERE orderId = ? OR orderId = ?`;
-                        await new Promise((res, rej) => {
-                            connection.query(lockSql, [processOrderId || 0, orderId || 0], (e, r) => e ? rej(e) : res(r));
+                    // Validate officer userId against collectionofficer FK constraint
+                    let officerUserId = null;
+                    if (userId) {
+                        const [officerRows] = await new Promise((res, rej) => {
+                            connection.query("SELECT id FROM collectionofficer WHERE id = ? LIMIT 1", [userId], (e, r) => e ? rej(e) : res([r]));
                         });
+                        if (officerRows && officerRows.length > 0) {
+                            officerUserId = officerRows[0].id;
+                        }
                     }
 
-                    // 2. Adjust processorders amount if delta > 0
+                    // 1. Process batch replacements (if any)
+                    if (Array.isArray(replacements) && replacements.length > 0) {
+                        console.log(`[confirmPackageReviewDao] Processing ${replacements.length} replacement(s)...`);
+                        for (let i = 0; i < replacements.length; i++) {
+                            const rep = replacements[i];
+                            const { orderPackageId, replceId, newProductId, productType, newQty, newPrice } = rep;
+                            console.log(`[confirmPackageReviewDao] -> Replacement #${i + 1}:`, rep);
+
+                            if (!orderPackageId || !newProductId) {
+                                console.warn(`[confirmPackageReviewDao] -> Skipped Replacement #${i + 1} (missing orderPackageId or newProductId)`);
+                                continue;
+                            }
+
+                            let targetReplceId = replceId;
+                            let targetProductType = productType;
+
+                            const [matchingItems] = await new Promise((res, rej) => {
+                                connection.query(
+                                    "SELECT id, productType FROM orderpackageitems WHERE orderPackageId = ? AND (id = ? OR productId = ?) LIMIT 1",
+                                    [orderPackageId, replceId || 0, replceId || 0],
+                                    (e, r) => e ? rej(e) : res([r])
+                                );
+                            });
+
+                            if (matchingItems && matchingItems.length > 0) {
+                                targetReplceId = matchingItems[0].id;
+                                if (!targetProductType) targetProductType = matchingItems[0].productType;
+                                console.log(`[confirmPackageReviewDao] -> Resolved orderpackageitems row ID: ${targetReplceId}, productType: ${targetProductType}`);
+                            } else {
+                                console.warn(`[confirmPackageReviewDao] -> No matching item row found for orderPackageId: ${orderPackageId}, replceId/productId: ${replceId}`);
+                            }
+
+                            // Insert replacerequest
+                            const insertRequestSql = `
+                                INSERT INTO replacerequest (orderPackageId, userId, replceId, productType, productId, qty, price, status)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, 'Approved')
+                            `;
+                            const insertRes = await new Promise((res, rej) => {
+                                connection.query(
+                                    insertRequestSql,
+                                    [orderPackageId, officerUserId, targetReplceId || null, targetProductType || null, newProductId, newQty, newPrice],
+                                    (e, r) => e ? rej(e) : res(r)
+                                );
+                            });
+                            console.log(`[confirmPackageReviewDao] -> Inserted replacerequest row with ID:`, insertRes.insertId);
+
+                            // Update orderpackageitems
+                            if (targetReplceId) {
+                                const updateItemSql = `
+                                    UPDATE orderpackageitems 
+                                    SET productId = ?, productType = COALESCE(?, productType), qty = ?, price = ?
+                                    WHERE id = ? AND orderPackageId = ?
+                                `;
+                                const updateRes = await new Promise((res, rej) => {
+                                    connection.query(
+                                        updateItemSql,
+                                        [newProductId, targetProductType, newQty, newPrice, targetReplceId, orderPackageId],
+                                        (e, r) => e ? rej(e) : res(r)
+                                    );
+                                });
+                                console.log(`[confirmPackageReviewDao] -> Updated orderpackageitems (id: ${targetReplceId}):`, updateRes.affectedRows, "affected");
+                            }
+                        }
+                    }
+
+                    // 2. Process added Ala Carte items (orderadditionalitems)
+                    if (Array.isArray(additionalItems) && additionalItems.length > 0) {
+                        console.log(`[confirmPackageReviewDao] Inserting ${additionalItems.length} additional item(s)...`);
+                        for (let j = 0; j < additionalItems.length; j++) {
+                            const item = additionalItems[j];
+                            console.log(`[confirmPackageReviewDao] -> Additional Item #${j + 1}:`, item);
+
+                            const insertAddSql = `
+                                INSERT INTO orderadditionalitems (orderId, proOrderId, productId, qty, unit, normalPrice, price, discount)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                            `;
+                            const addRes = await new Promise((res, rej) => {
+                                connection.query(
+                                    insertAddSql,
+                                    [
+                                        orderId || processOrderId || 0,
+                                        processOrderId || orderId || 0,
+                                        item.productId,
+                                        item.qty || 1,
+                                        item.unit || "kg",
+                                        item.normalPrice || item.price || 0,
+                                        item.price || 0,
+                                    ],
+                                    (e, r) => e ? rej(e) : res(r)
+                                );
+                            });
+                            console.log(`[confirmPackageReviewDao] -> Inserted orderadditionalitems row ID:`, addRes.insertId);
+                        }
+                    }
+
+                    // 3. Lock order packages
+                    if (lockNow) {
+                        console.log(`[confirmPackageReviewDao] Setting isLock = 1 on orderpackage for orderId: ${orderId} / processOrderId: ${processOrderId}`);
+                        const lockSql = `UPDATE orderpackage SET isLock = 1 WHERE orderId = ? OR orderId = ?`;
+                        const lockRes = await new Promise((res, rej) => {
+                            connection.query(lockSql, [processOrderId || 0, orderId || 0], (e, r) => e ? rej(e) : res(r));
+                        });
+                        console.log(`[confirmPackageReviewDao] Packages locked:`, lockRes.affectedRows, "row(s) updated");
+                    }
+
+                    // 4. Adjust processorders amount if delta > 0
                     if (additionalAmount > 0 && processOrderId) {
+                        console.log(`[confirmPackageReviewDao] Updating processorders amount (+${additionalAmount}) for processOrderId: ${processOrderId}`);
                         const updateAmountSql = `
                             UPDATE processorders 
                             SET amount = amount + ? 
                             WHERE id = ?
                         `;
-                        await new Promise((res, rej) => {
+                        const amountRes = await new Promise((res, rej) => {
                             connection.query(updateAmountSql, [parseFloat(additionalAmount), processOrderId], (e, r) => e ? rej(e) : res(r));
                         });
+                        console.log(`[confirmPackageReviewDao] Amount updated:`, amountRes.affectedRows, "row(s)");
                     }
 
                     connection.commit((commitErr) => {
                         if (commitErr) {
+                            console.error("[confirmPackageReviewDao] Commit Error:", commitErr);
                             return connection.rollback(() => {
                                 connection.release();
                                 reject(commitErr);
                             });
                         }
                         connection.release();
+                        console.log("[confirmPackageReviewDao] Transaction committed successfully!");
+                        console.log("================ [confirmPackageReviewDao] END ================\n");
                         resolve({
                             status: true,
                             message: "Package review finalized successfully",
                         });
                     });
                 } catch (err) {
+                    console.error("[confirmPackageReviewDao] Execution Error (Rolling back):", err);
                     connection.rollback(() => {
                         connection.release();
                         reject(err);
