@@ -394,6 +394,14 @@ exports.createOrder = asyncHandler(async (req, res) => {
             }
 
             try {
+                const isFreeDeliveryCoupon = Boolean(
+                    isCoupon && couponType && (
+                        String(couponType).toLowerCase().includes("free") ||
+                        String(couponType).toLowerCase().includes("delivery")
+                    )
+                );
+                const finalDeliveryCharge = isFreeDeliveryCoupon ? 0 : (isHomeDelivery ? (parseFloat(deliveryCharge) || 0) : 0);
+
                 // ── 5a. Create order ──────────────────────────────────────────
                 const orderId = await RetailOrderDao.createOrderWithTransactionDao(connection, {
                     userId,
@@ -412,7 +420,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     total: grandTotal,
                     fullTotal: grandTotal,
                     discount: discountAmount || 0,
-                    deliveryCharge: isHomeDelivery ? (deliveryCharge || 0) : 0,
+                    deliveryCharge: finalDeliveryCharge,
                     sheduleType: normScheduleType,
                     validityPeriod: effValidityPeriod,
                     selectedDays: effRecurringDays,
@@ -662,3 +670,21 @@ exports.getInvoiceByOrderId = asyncHandler(async (req, res) => {
         invoice: result.invoice,
     });
 });
+
+exports.getDeliveredOrdersTotal = async (req, res) => {
+    try {
+        const userId = req.params.userId;
+        if (!userId || isNaN(parseInt(userId))) {
+            return res.status(400).json({ success: false, message: "Invalid user ID" });
+        }
+        const result = await orderDao.getDeliveredOrdersTotal(userId);
+        return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+        console.error("Error in getDeliveredOrdersTotal:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch delivered orders total",
+            error: error.message,
+        });
+    }
+};

@@ -22,4 +22,6 @@ router.get("/:orderId", authMiddleware, orderEp.getRetailOrderById);
 router.get('/packages/:orderId', authMiddleware, orderEp.getOrderPackages);
 router.get("/additional-items/:orderId", authMiddleware, orderEp.getOrderAdditionalItems);
 
+router.get('/delivered-total/:userId', authMiddleware, orderEp.getDeliveredOrdersTotal);
+
 module.exports = router;
