@@ -10,7 +10,7 @@ exports.couponValidationSchema = Joi.object({
 // ─── Order Creation Validation ────────────────────────────────────────────────
 exports.createOrderSchema = Joi.object({
     cartId: Joi.number().integer().allow(0, null).optional(),
-    paymentMethod: Joi.string().valid('cash', 'card', 'Cash', 'Card', 'payhere', 'PayHere').required(),
+    paymentMethod: Joi.string().valid('cash', 'card', 'Cash', 'Card', 'payhere', 'PayHere', 'credit', 'Credit').required(),
     grandTotal: Joi.number().positive().required(),
     discountAmount: Joi.number().min(0).default(0),
     deliveryCharge: Joi.number().min(0).default(0),

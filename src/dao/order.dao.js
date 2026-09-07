@@ -138,9 +138,9 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
                     userId, orderApp, delivaryMethod, centerId, buildingType,
                     title, fullName, phonecode1, phone1, phonecode2, phone2,
                     isCoupon, couponType, couponValue, total, fullTotal, discount,
-                    deliveryCharge, sheduleType, sheduleDate, validityPeriod, selectedDays, sheduleTime,
+                    deliveryCharge, sheduleType, validityPeriod, selectedDays, sheduleTime,
                     isPackage, isFinalizeImdt, latitude, longitude, assignCoMCenId
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             const values = [
                 userId, 'Marketplace', formattedMethod, centerId || null, formattedBuildingType || null,
@@ -149,7 +149,6 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
                 total, fullTotal, discount,
                 parseFloat(deliveryCharge) || 0,
                 normalizedScheduleType,
-                null, // orders.sheduleDate is NULL; processorders.sheduleDate is used across all order types
                 parsedValidityPeriod,
                 parsedSelectedDays,
                 sheduleTime || null,
@@ -262,24 +261,35 @@ exports.createProcessOrderWithTransactionDao = (connection, processOrderData) =>
                         const formattedMethod = formatMethod(paymentMethod);
                         const normalized = formattedMethod ? formattedMethod.toLowerCase() : '';
 
-                        let finalIsPaid = isPaid || 0;
-                        let finalAmount = parseFloat(amount) || 0;
-                        let finalMoneyPaid = parseFloat(moneyPaid) || 0;
-                        const finalCreditPaid = parseFloat(creditPaid) || 0;
-                        let finalMethod = formattedMethod;
+                        const rawCreditPaid = parseFloat(creditPaid) || 0;
+                        const rawMoneyPaid  = parseFloat(moneyPaid)  || 0;
+                        const rawAmount     = parseFloat(amount)      || 0;
 
-                        if (normalized === 'cash') {
-                            finalIsPaid = 0;
-                            finalAmount = 0;
+                        let finalMethod   = formattedMethod;
+                        let finalIsPaid   = 0;
+                        let finalAmount   = 0;   // only set for full card-only payment
+                        let finalMoneyPaid = 0;  // only set for full card-only payment
+                        let finalCreditPaid = rawCreditPaid;
+
+                        if (normalized === 'card' || normalized === 'payhere') {
+                            // Card payment (with or without credit balance)
+                            finalMethod    = 'Card';
+                            finalIsPaid    = 1;
+                            finalAmount    = rawAmount;                         // grandTotal
+                            finalCreditPaid = rawCreditPaid;                   // credit used (may be 0)
+                            finalMoneyPaid = rawAmount - rawCreditPaid;        // grandTotal - creditUsed
+                        } else if (normalized === 'credit') {
+                            // 100% paid by credit balance
+                            finalMethod    = 'Credit';
+                            finalIsPaid    = 1;
+                            finalAmount    = 0;
                             finalMoneyPaid = 0;
-                        } else if (normalized === 'card' || normalized === 'payhere') {
-                            finalIsPaid = 1;
-                            finalMethod = 'Card';
-                        }
-
-                        if (normalized !== 'cash' && finalCreditPaid > 0 && finalMoneyPaid === 0) {
-                            finalIsPaid = 1;
-                            finalMethod = 'Card';
+                        } else {
+                            // Cash (with or without partial credit)
+                            finalMethod    = 'Cash';
+                            finalIsPaid    = 0;
+                            finalAmount    = 0;
+                            finalMoneyPaid = 0;
                         }
 
                         const sql = `
@@ -310,6 +320,23 @@ exports.createProcessOrderWithTransactionDao = (connection, processOrderData) =>
                     })
                     .catch(reject);
             });
+        });
+    });
+};
+
+/**
+ * Deduct used credit balance from marketplaceusers within transaction.
+ */
+exports.deductUserCreditBalanceWithTransactionDao = (connection, userId, creditAmount) => {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            UPDATE marketplaceusers
+            SET creditBalance = GREATEST(0, creditBalance - ?)
+            WHERE id = ?
+        `;
+        connection.query(sql, [creditAmount, userId], (err, result) => {
+            if (err) return reject(err);
+            resolve(result);
         });
     });
 };
@@ -461,7 +488,7 @@ exports.getRetailOrderHistoryDao = async (userId) => {
         const orderQuery = `
       SELECT 
         po.id AS orderId,
-        o.sheduleDate AS scheduleDate,
+        po.sheduleDate AS scheduleDate,
         o.createdAt AS createdAt,
         o.sheduleTime AS scheduleTime,
         o.delivaryMethod AS delivaryMethod,
@@ -963,7 +990,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                 o.delivaryMethod AS deliveryMethod,
                 o.discount AS orderDiscount,
                 o.createdAt AS invoiceDate,
-                o.sheduleDate AS scheduledDate,
+                po.sheduleDate AS scheduledDate,
                 o.buildingType,
                 o.fullTotal AS fullTotal,
                 o.isCoupon,

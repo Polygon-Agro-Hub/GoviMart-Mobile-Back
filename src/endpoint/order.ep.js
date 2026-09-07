@@ -416,7 +416,6 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     sheduleType: normScheduleType,
                     validityPeriod: effValidityPeriod,
                     selectedDays: effRecurringDays,
-                    sheduleDate: null,
                     sheduleTime: timeSlot || null,
                     isPackage: hasPackages ? 1 : 0,
                     isFinalizeImdt: isFinalizeImdt || 0,
@@ -549,7 +548,18 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     );
                 }
 
-                // ── 5e. Commit ────────────────────────────────────────────────
+                // ── 5e. Deduct credit balance from marketplaceusers if used ────
+                const creditDeduction = parseFloat(creditPaid) || 0;
+                if (creditDeduction > 0) {
+                    await RetailOrderDao.deductUserCreditBalanceWithTransactionDao(
+                        connection,
+                        userId,
+                        creditDeduction
+                    );
+                    console.log(`[createOrder] Deducted Rs. ${creditDeduction} credit from marketplaceusers for userId: ${userId}`);
+                }
+
+                // ── 5f. Commit ────────────────────────────────────────────────
                 connection.commit((commitErr) => {
                     if (commitErr) {
                         return connection.rollback(() => {
