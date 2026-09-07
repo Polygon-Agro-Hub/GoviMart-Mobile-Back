@@ -431,7 +431,7 @@ exports.confirmPackageReviewDao = ({
     orderId,
     processOrderId,
     userId,
-    lockNow = true,
+    lockNow = false,
     additionalAmount = 0,
     replacements = [],
     additionalItems = [],
@@ -570,14 +570,16 @@ exports.confirmPackageReviewDao = ({
                         }
                     }
 
-                    // 3. Lock order packages
-                    if (lockNow) {
+                    // 3. Lock order packages (only if explicitly requested)
+                    if (lockNow === true || lockNow === 1 || lockNow === "true") {
                         console.log(`[confirmPackageReviewDao] Setting isLock = 1 on orderpackage for orderId: ${orderId} / processOrderId: ${processOrderId}`);
                         const lockSql = `UPDATE orderpackage SET isLock = 1 WHERE orderId = ? OR orderId = ?`;
                         const lockRes = await new Promise((res, rej) => {
                             connection.query(lockSql, [processOrderId || 0, orderId || 0], (e, r) => e ? rej(e) : res(r));
                         });
                         console.log(`[confirmPackageReviewDao] Packages locked:`, lockRes.affectedRows, "row(s) updated");
+                    } else {
+                        console.log(`[confirmPackageReviewDao] lockNow is false. Packages will remain unlocked.`);
                     }
 
                     // 4. Adjust processorders amount if delta > 0
