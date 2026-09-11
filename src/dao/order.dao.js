@@ -1311,3 +1311,27 @@ exports.getDeliveredOrdersTotal = async (userId) => {
         if (connection) connection.release();
     }
 };
+
+/**
+ * Marks processorders record as paid via PayHere webhook or direct card settlement.
+ * Accepts invNo, orderId, or processorders.id as identifier.
+ */
+exports.markOrderPaidDao = async (identifier, transactionId) => {
+    let connection;
+    try {
+        connection = await db.collectionofficer.promise().getConnection();
+        const [result] = await connection.query(
+            `UPDATE processorders 
+             SET isPaid = 1, paymentMethod = 'Card', transactionId = COALESCE(?, transactionId)
+             WHERE invNo = ? OR orderId = ? OR id = ?`,
+            [transactionId || null, identifier, identifier, identifier]
+        );
+        return result.affectedRows > 0;
+    } catch (err) {
+        console.error("Error in markOrderPaidDao:", err);
+        throw err;
+    } finally {
+        if (connection) connection.release();
+    }
+};
+

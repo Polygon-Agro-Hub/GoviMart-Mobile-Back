@@ -3,7 +3,7 @@ const db = require("../startup/database");
 exports.getCustomerProfileDao = async (userId) => {
   const query =
     "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName, creditBalance, image FROM marketplaceusers WHERE id = ?";
-  const [results] = await db.marketPlace.promise().query(query, [userId]);
+  const [results] = await db.collectionofficer.promise().query(query, [userId]);
   return results;
 };
 
@@ -582,14 +582,14 @@ exports.updateProfileImageDao = async (userId, imageUrl) => {
     SET image = ?
     WHERE id = ?
   `;
-  const [result] = await db.marketPlace.promise().query(query, [imageUrl, userId]);
+  const [result] = await db.collectionofficer.promise().query(query, [imageUrl, userId]);
   return result;
 };
 
 // Check delete account eligibility (credit balance and processing orders)
 exports.getDeleteAccountStatusDao = async (userId) => {
   const userQuery = `SELECT creditBalance FROM marketplaceusers WHERE id = ?`;
-  const [userResults] = await db.marketPlace.promise().query(userQuery, [userId]);
+  const [userResults] = await db.collectionofficer.promise().query(userQuery, [userId]);
   const creditBalance = userResults.length > 0 ? Number(userResults[0].creditBalance || 0) : 0;
 
   const ordersQuery = `
@@ -599,7 +599,7 @@ exports.getDeleteAccountStatusDao = async (userId) => {
     WHERE o.userId = ?
       AND (po.status IS NULL OR po.status NOT IN ('Delivered', 'Picked up','Return','Return Received','Cancelled'))
   `;
-  const [ordersResults] = await db.marketPlace.promise().query(ordersQuery, [userId]);
+  const [ordersResults] = await db.collectionofficer.promise().query(ordersQuery, [userId]);
   const processingCount = ordersResults.length > 0 ? Number(ordersResults[0].processingCount || 0) : 0;
 
   return {

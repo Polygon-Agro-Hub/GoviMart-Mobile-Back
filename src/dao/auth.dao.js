@@ -76,11 +76,6 @@ exports.loginUser = async (identifier, password) => {
       // Ignored
     }
 
-    // Fallback: Plain-text password check
-    if (!isPasswordValid && password === user.password) {
-      isPasswordValid = true;
-    }
-
     if (!isPasswordValid) {
       throw new Error("Invalid mobile number/email or password");
     }

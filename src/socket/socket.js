@@ -45,12 +45,51 @@ const initSocket = (httpServer) => {
       console.log(`👤 [Socket] Socket ${socket.id} joined room user_${socket.userId}`);
     }
 
-    socket.on("register_user", (userId) => {
-      if (userId) {
-        socket.userId = userId;
-        socket.join(`user_${userId}`);
-        console.log(`👤 [Socket] Socket ${socket.id} manually joined room user_${userId}`);
+    socket.on("register_user", (data) => {
+      let targetUserId = null;
+      let token = null;
+
+      if (typeof data === "object" && data !== null) {
+        targetUserId = data.userId;
+        token = data.token;
+      } else {
+        targetUserId = data;
       }
+
+      if (!targetUserId) return;
+
+      // If socket already authenticated via handshake token
+      if (socket.userId) {
+        if (String(socket.userId) === String(targetUserId)) {
+          socket.join(`user_${targetUserId}`);
+          console.log(`👤 [Socket] Verified socket ${socket.id} joined room user_${targetUserId}`);
+        } else {
+          console.warn(`⚠️ [Socket Security] Blocked room hijacking: socket ${socket.id} (user ${socket.userId}) attempted to join user_${targetUserId}`);
+        }
+        return;
+      }
+
+      // If token provided in register_user payload, verify it
+      if (token) {
+        try {
+          const decoded = jwt.verify(token, process.env.JWT_SECRET);
+          if (String(decoded.id) === String(targetUserId)) {
+            socket.userId = decoded.id;
+            socket.user = decoded;
+            socket.join(`user_${targetUserId}`);
+            console.log(`👤 [Socket] Socket ${socket.id} verified via payload token and joined room user_${targetUserId}`);
+            return;
+          } else {
+            console.warn(`⚠️ [Socket Security] Token userId (${decoded.id}) does not match target (${targetUserId})`);
+            return;
+          }
+        } catch (tokenErr) {
+          console.warn("[Socket Security] Token verification failed on register_user:", tokenErr.message);
+          return;
+        }
+      }
+
+      console.warn(`⚠️ [Socket Security] Blocked unauthenticated register_user attempt for user_${targetUserId} from socket ${socket.id}`);
     });
 
     socket.on("get_cities_availability", async () => {

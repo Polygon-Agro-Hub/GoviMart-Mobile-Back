@@ -5,6 +5,10 @@ const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
 const asyncHandler = require("express-async-handler");
 const uploadFileToS3 = require("../middlewares/s3upload");
+const crypto = require("crypto");
+
+// Brute force lockout for phone change OTP (Risk 4.B)
+const phoneOtpAttempts = new Map();
 
 exports.getCustomerProfile = asyncHandler(async (req, res) => {
   try {
@@ -311,6 +315,14 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
     const result = await customerDao.updateUserDetailsDao(userId, req.body);
 
     if (result.affectedRows === 0) {
+      // In MySQL, affectedRows is 0 when matching rows already have identical values
+      const existingUser = await customerDao.getCustomerProfileDao(userId);
+      if (existingUser && existingUser.length > 0) {
+        return res.status(200).json({
+          status: true,
+          message: "No changes were made to your account details.",
+        });
+      }
       return res.status(404).json({ status: false, message: "User not found" });
     }
 
@@ -398,9 +410,10 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
       });
     }
 
-    // Generate 5-digit OTP
-    const otp = Math.floor(10000 + Math.random() * 90000).toString();
+    // Generate 5-digit OTP (Risk 4.B)
+    const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
+    phoneOtpAttempts.delete(referenceId);
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes
 
     await authDao.saveOtpDao(referenceId, req.user.email || null, otp, expiresAt);
@@ -473,8 +486,25 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
       return res.status(400).json({ status: false, message: "Verification code has expired." });
     }
     if (otpRecord.otp !== code) {
-      return res.status(400).json({ status: false, message: "Incorrect verification code." });
+      const attempts = (phoneOtpAttempts.get(referenceId) || 0) + 1;
+      phoneOtpAttempts.set(referenceId, attempts);
+
+      if (attempts >= 5) {
+        phoneOtpAttempts.delete(referenceId);
+        await authDao.deleteOtpDao(referenceId);
+        return res.status(429).json({
+          status: false,
+          message: "Too many incorrect verification attempts. Please request a new verification code.",
+        });
+      }
+
+      return res.status(400).json({
+        status: false,
+        message: `Incorrect verification code. ${5 - attempts} attempts remaining.`,
+      });
     }
+
+    phoneOtpAttempts.delete(referenceId);
 
     let decoded;
     try {
@@ -535,8 +565,9 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
 
     const { userId, phoneCode, phoneNumber } = decoded;
 
-    const otp = Math.floor(10000 + Math.random() * 90000).toString();
+    const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
+    phoneOtpAttempts.delete(referenceId);
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000);
 
     await authDao.saveOtpDao(referenceId, req.user?.email || null, otp, expiresAt);

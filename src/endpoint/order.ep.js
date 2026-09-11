@@ -7,6 +7,9 @@ const {
     couponValidationSchema,
     createOrderSchema,
 } = require("../validations/order.validations");
+
+// In-flight concurrency lock to prevent duplicate order creation (Risk 3.A)
+const activeOrderLocks = new Set();
 exports.getRetailOrderHistory = async (req, res) => {
     try {
         const { userId } = req.user;
@@ -298,6 +301,21 @@ exports.createOrder = asyncHandler(async (req, res) => {
         });
     }
 
+    // In-flight concurrency lock to prevent duplicate order creation (Risk 3.A)
+    const lockKey = `${userId}_${effectiveCartId}`;
+    if (activeOrderLocks.has(lockKey)) {
+        return res.status(429).json({
+            status: false,
+            message: "An order creation request is already in progress for this cart. Please wait.",
+        });
+    }
+    activeOrderLocks.add(lockKey);
+
+    const safeRespond = (statusCode, body) => {
+        activeOrderLocks.delete(lockKey);
+        return res.status(statusCode).json(body);
+    };
+
     // Resolve user details fallback if empty (e.g. pickup flow)
     let resolvedTitle = title;
     let resolvedFullName = (fullName && fullName !== "Customer") ? fullName : null;
@@ -324,7 +342,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 2. Verify cart ownership ──────────────────────────────────────────────
     const cartBelongsToUser = await RetailOrderDao.validateCartDao(effectiveCartId, userId);
     if (!cartBelongsToUser) {
-        return res.status(403).json({
+        return safeRespond(403, {
             status: false,
             message: "Cart does not belong to the current user",
         });
@@ -333,7 +351,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 3. Check item availability ────────────────────────────────────────────
     const availability = await RetailOrderDao.checkCartItemsAvailabilityDao(effectiveCartId);
     if (availability.hasUnavailableItems) {
-        return res.status(409).json({
+        return safeRespond(409, {
             status: false,
             code: "ITEMS_UNAVAILABLE",
             message: "Some cart items are no longer available. Please review your cart.",
@@ -345,7 +363,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 4. Fetch cart items ───────────────────────────────────────────────────
     const cartItems = await RetailOrderDao.getCartItemsForOrderDao(effectiveCartId);
     if (!cartItems.length) {
-        return res.status(400).json({
+        return safeRespond(400, {
             status: false,
             message: "Cart is empty",
         });
@@ -353,6 +371,59 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
     const hasPackages = cartItems.some((i) => i.itemType === "package");
     const isHomeDelivery = deliveryMethod === "home";
+
+    // Recalculate item prices server-side (Risk 1.A)
+    const [cartProducts, cartPackages] = await Promise.all([
+        cartDao.getCartProductsDao(effectiveCartId),
+        cartDao.getCartPackagesDao(effectiveCartId),
+    ]);
+
+    let calculatedItemsTotal = 0;
+    for (const p of cartProducts) {
+        const pQty = parseFloat(p.quantity) || 0;
+        const pPrice = (p.discountedPrice != null && p.discountedPrice !== "" && !isNaN(Number(p.discountedPrice)) && Number(p.discountedPrice) > 0)
+            ? Number(p.discountedPrice)
+            : Number(p.normalPrice || 0);
+        calculatedItemsTotal += pPrice * pQty;
+    }
+    for (const pkg of cartPackages) {
+        const pkgQty = parseFloat(pkg.quantity) || 0;
+        const pkgPrice = parseFloat(pkg.price) || 0;
+        calculatedItemsTotal += pkgPrice * pkgQty;
+    }
+
+    const isFreeDeliveryCoupon = Boolean(
+        isCoupon && couponType && (
+            String(couponType).toLowerCase().includes("free") ||
+            String(couponType).toLowerCase().includes("delivery")
+        )
+    );
+    const finalDeliveryCharge = isFreeDeliveryCoupon ? 0 : (isHomeDelivery ? (parseFloat(deliveryCharge) || 0) : 0);
+    const finalDiscount = Math.min(parseFloat(discountAmount) || 0, calculatedItemsTotal);
+
+    const calculatedGrandTotal = Math.max(0, parseFloat((calculatedItemsTotal + finalDeliveryCharge - finalDiscount).toFixed(2)));
+
+    // Verify grandTotal from client against server-calculated grandTotal
+    if (Math.abs((parseFloat(grandTotal) || 0) - calculatedGrandTotal) > 1.0) {
+        console.warn(`[createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Server: ${calculatedGrandTotal}`);
+        return safeRespond(400, {
+            status: false,
+            message: `Order total mismatch. Expected Rs. ${calculatedGrandTotal.toFixed(2)}, but received Rs. ${Number(grandTotal).toFixed(2)}.`,
+        });
+    }
+
+    // Verify user credit balance if paying with credit
+    const requestedCredit = parseFloat(creditPaid) || 0;
+    if (requestedCredit > 0) {
+        const userProfile = await customerDao.getCustomerProfileDao(userId);
+        const availableCredit = parseFloat(userProfile?.[0]?.creditBalance || 0);
+        if (requestedCredit > availableCredit + 0.01) {
+            return safeRespond(400, {
+                status: false,
+                message: `Insufficient credit balance. Available: Rs. ${availableCredit.toFixed(2)}, requested: Rs. ${requestedCredit.toFixed(2)}.`,
+            });
+        }
+    }
 
     // Normalize schedule fields
     let normScheduleType = "One Time";
@@ -378,7 +449,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
     db.collectionofficer.getConnection((connErr, connection) => {
         if (connErr) {
-            return res.status(500).json({
+            return safeRespond(500, {
                 status: false,
                 message: "Database connection error",
             });
@@ -387,21 +458,13 @@ exports.createOrder = asyncHandler(async (req, res) => {
         connection.beginTransaction(async (txErr) => {
             if (txErr) {
                 connection.release();
-                return res.status(500).json({
+                return safeRespond(500, {
                     status: false,
                     message: "Transaction error",
                 });
             }
 
             try {
-                const isFreeDeliveryCoupon = Boolean(
-                    isCoupon && couponType && (
-                        String(couponType).toLowerCase().includes("free") ||
-                        String(couponType).toLowerCase().includes("delivery")
-                    )
-                );
-                const finalDeliveryCharge = isFreeDeliveryCoupon ? 0 : (isHomeDelivery ? (parseFloat(deliveryCharge) || 0) : 0);
-
                 // ── 5a. Create order ──────────────────────────────────────────
                 const orderId = await RetailOrderDao.createOrderWithTransactionDao(connection, {
                     userId,
@@ -417,9 +480,9 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     isCoupon: isCoupon || false,
                     couponValue: couponValue || 0,
                     couponType: couponType || null,
-                    total: grandTotal,
-                    fullTotal: grandTotal,
-                    discount: discountAmount || 0,
+                    total: calculatedGrandTotal,
+                    fullTotal: calculatedGrandTotal,
+                    discount: finalDiscount,
                     deliveryCharge: finalDeliveryCharge,
                     sheduleType: normScheduleType,
                     validityPeriod: effValidityPeriod,
@@ -492,9 +555,9 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         orderId,
                         paymentMethod,
                         isPaid: 0,
-                        amount: grandTotal,
-                        creditPaid: creditPaid || 0,
-                        moneyPaid: moneyPaid || 0,
+                        amount: calculatedGrandTotal,
+                        creditPaid: requestedCredit,
+                        moneyPaid: Math.max(0, calculatedGrandTotal - requestedCredit),
                         status: "Ordered",
                         sheduleDate: date1,
                     });
@@ -505,9 +568,9 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         orderId,
                         paymentMethod,
                         isPaid: 0,
-                        amount: grandTotal,
-                        creditPaid: creditPaid || 0,
-                        moneyPaid: moneyPaid || 0,
+                        amount: calculatedGrandTotal,
+                        creditPaid: requestedCredit,
+                        moneyPaid: Math.max(0, calculatedGrandTotal - requestedCredit),
                         status: "Ordered",
                         sheduleDate: date2,
                     });
@@ -517,7 +580,6 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     primaryInvNo = proc1.invNo;
 
                     // ── 5d. Save order items for both process orders ───────────
-                    // Additional items link to orderId and processOrderId
                     const additionalItems = cartItems.filter((i) => i.itemType === "additional");
                     for (const item of additionalItems) {
                         await RetailOrderDao.saveOrderAdditionalItemWithTransactionDao(connection, orderId, item, proc1.insertId);
@@ -540,9 +602,9 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         orderId,
                         paymentMethod,
                         isPaid: 0,
-                        amount: grandTotal,
-                        creditPaid: creditPaid || 0,
-                        moneyPaid: moneyPaid || 0,
+                        amount: calculatedGrandTotal,
+                        creditPaid: requestedCredit,
+                        moneyPaid: Math.max(0, calculatedGrandTotal - requestedCredit),
                         status: "Ordered",
                         sheduleDate: targetDate,
                     });
@@ -557,14 +619,13 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 }
 
                 // ── 5e. Deduct credit balance from marketplaceusers if used ────
-                const creditDeduction = parseFloat(creditPaid) || 0;
-                if (creditDeduction > 0) {
+                if (requestedCredit > 0) {
                     await RetailOrderDao.deductUserCreditBalanceWithTransactionDao(
                         connection,
                         userId,
-                        creditDeduction
+                        requestedCredit
                     );
-                    console.log(`[createOrder] Deducted Rs. ${creditDeduction} credit from marketplaceusers for userId: ${userId}`);
+                    console.log(`[createOrder] Deducted Rs. ${requestedCredit} credit from marketplaceusers for userId: ${userId}`);
                 }
 
                 // ── 5f. Commit ────────────────────────────────────────────────
@@ -572,7 +633,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     if (commitErr) {
                         return connection.rollback(() => {
                             connection.release();
-                            res.status(500).json({ status: false, message: "Commit failed" });
+                            safeRespond(500, { status: false, message: "Commit failed" });
                         });
                     }
 
@@ -583,7 +644,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         console.error("[createOrder] Cart clear failed (non-fatal):", clearErr);
                     });
 
-                    return res.status(201).json({
+                    return safeRespond(201, {
                         status: true,
                         message: "Order created successfully",
                         data: {
@@ -592,7 +653,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                             processOrderIds: createdProcessOrders.map((p) => p.insertId),
                             invoiceNumber: primaryInvNo,
                             invoiceNumbers: createdProcessOrders.map((p) => p.invNo),
-                            total: grandTotal,
+                            total: calculatedGrandTotal,
                         },
                     });
                 });
@@ -602,7 +663,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 });
 
                 if (err.code === "ITEMS_UNAVAILABLE") {
-                    return res.status(409).json({
+                    return safeRespond(409, {
                         status: false,
                         code: "ITEMS_UNAVAILABLE",
                         message: err.message,
@@ -610,7 +671,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 }
 
                 console.error("[createOrder] Transaction error:", err);
-                return res.status(500).json({
+                return safeRespond(500, {
                     status: false,
                     message: "Order creation failed. Please try again.",
                 });
@@ -677,7 +738,11 @@ exports.getDeliveredOrdersTotal = async (req, res) => {
         if (!userId || isNaN(parseInt(userId))) {
             return res.status(400).json({ success: false, message: "Invalid user ID" });
         }
-        const result = await orderDao.getDeliveredOrdersTotal(userId);
+        // Authorization check: ensure users can only access their own order totals
+        if (parseInt(userId) !== parseInt(req.user.id)) {
+            return res.status(403).json({ success: false, message: "Forbidden: Access denied to user data" });
+        }
+        const result = await RetailOrderDao.getDeliveredOrdersTotal(userId);
         return res.status(200).json({ success: true, data: result });
     } catch (error) {
         console.error("Error in getDeliveredOrdersTotal:", error);
