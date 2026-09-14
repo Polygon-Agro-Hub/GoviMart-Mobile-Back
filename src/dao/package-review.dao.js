@@ -764,18 +764,30 @@ exports.cancelOrderDao = ({ orderId, processOrderId, userId }) => {
                         }
                     }
 
-                    // 4. Insert notification
+                    // 4. Insert notifications into both ordernotfication and dashnotification
                     const invNoDisplay = order.invNo || `ORD-${order.actualOrderId}`;
-                    const notifMsg = refundCreditAmount > 0
-                        ? `Your order #${invNoDisplay} has been cancelled. Rs. ${refundCreditAmount.toFixed(2)} has been credited back to your credit balance.`
-                        : `Your order #${invNoDisplay} has been cancelled successfully.`;
+                    const notifMsg = `Your order #${invNoDisplay} has been cancelled successfully.`;
 
                     const notifSql = `
                         INSERT INTO ordernotfication (orderId, Title, message, isRead, createdAt)
                         VALUES (?, 'Order Cancelled', ?, 0, NOW())
                     `;
                     await new Promise((res) => {
-                        connection.query(notifSql, [pOrderId, notifMsg], () => res());
+                        connection.query(notifSql, [pOrderId, notifMsg], (notifErr) => {
+                            if (notifErr) console.error("Error inserting ordernotfication on cancel:", notifErr);
+                            res();
+                        });
+                    });
+
+                    const dashNotifSql = `
+                        INSERT INTO dashnotification (orderId, title, readStatus, createdAt)
+                        VALUES (?, 'Order is Cancelled', 0, NOW())
+                    `;
+                    await new Promise((res) => {
+                        connection.query(dashNotifSql, [pOrderId], (dashErr) => {
+                            if (dashErr) console.error("Error inserting dashnotification on cancel:", dashErr);
+                            res();
+                        });
                     });
 
                     await new Promise((res, rej) => connection.commit(e => (e ? rej(e) : res())));
