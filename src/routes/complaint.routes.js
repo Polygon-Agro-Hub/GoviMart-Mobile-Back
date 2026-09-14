@@ -3,6 +3,7 @@ const router = express.Router();
 const complainEndpoint = require("../endpoint/complaint.ep");
 const { upload } = require("../middlewares/multer.middleware");
 const authMiddleware = require("../middlewares/auth.middleware");
+const checkProfanity = require("../middlewares/profanity.middleware");
 
 // Get All Complaint Categories
 router.get(
@@ -16,6 +17,7 @@ router.post(
   "/create-complain",
   authMiddleware,
   upload.array("images", 6),
+  checkProfanity(["complain"]),
   complainEndpoint.createComplain,
 );
 

@@ -138,9 +138,9 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
                     userId, orderApp, delivaryMethod, centerId, buildingType,
                     title, fullName, phonecode1, phone1, phonecode2, phone2,
                     isCoupon, couponType, couponValue, total, fullTotal, discount,
-                    deliveryCharge, sheduleType, sheduleDate, validityPeriod, selectedDays, sheduleTime,
+                    deliveryCharge, sheduleType, validityPeriod, selectedDays, sheduleTime,
                     isPackage, isFinalizeImdt, latitude, longitude, assignCoMCenId
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             const values = [
                 userId, 'Marketplace', formattedMethod, centerId || null, formattedBuildingType || null,
@@ -149,7 +149,6 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
                 total, fullTotal, discount,
                 parseFloat(deliveryCharge) || 0,
                 normalizedScheduleType,
-                null, // orders.sheduleDate is NULL; processorders.sheduleDate is used across all order types
                 parsedValidityPeriod,
                 parsedSelectedDays,
                 sheduleTime || null,
@@ -262,24 +261,29 @@ exports.createProcessOrderWithTransactionDao = (connection, processOrderData) =>
                         const formattedMethod = formatMethod(paymentMethod);
                         const normalized = formattedMethod ? formattedMethod.toLowerCase() : '';
 
-                        let finalIsPaid = isPaid || 0;
-                        let finalAmount = parseFloat(amount) || 0;
-                        let finalMoneyPaid = parseFloat(moneyPaid) || 0;
-                        const finalCreditPaid = parseFloat(creditPaid) || 0;
-                        let finalMethod = formattedMethod;
+                        const rawCreditPaid = parseFloat(creditPaid) || 0;
+                        const rawMoneyPaid = parseFloat(moneyPaid) || 0;
+                        const rawAmount = parseFloat(amount) || 0;
 
-                        if (normalized === 'cash') {
+                        let finalMethod = formattedMethod;
+                        let finalIsPaid = 0;
+                        let finalAmount = 0;   // only set for full card-only payment
+                        let finalMoneyPaid = 0;  // only set for full card-only payment
+                        let finalCreditPaid = rawCreditPaid;
+
+                        if (normalized === 'card' || normalized === 'payhere' || normalized === 'credit' || (rawCreditPaid > 0 && rawAmount > 0 && rawCreditPaid >= rawAmount)) {
+                            // Card payment (with or without credit balance, or 100% credit balance)
+                            finalMethod = 'Card';
+                            finalIsPaid = 1;
+                            finalAmount = rawAmount;                         // grandTotal
+                            finalCreditPaid = rawCreditPaid;                   // credit used (may be 0)
+                            finalMoneyPaid = Math.max(0, rawAmount - rawCreditPaid); // grandTotal - creditUsed (0 if 100% credit)
+                        } else {
+                            // Cash (with or without partial credit)
+                            finalMethod = 'Cash';
                             finalIsPaid = 0;
                             finalAmount = 0;
                             finalMoneyPaid = 0;
-                        } else if (normalized === 'card' || normalized === 'payhere') {
-                            finalIsPaid = 1;
-                            finalMethod = 'Card';
-                        }
-
-                        if (normalized !== 'cash' && finalCreditPaid > 0 && finalMoneyPaid === 0) {
-                            finalIsPaid = 1;
-                            finalMethod = 'Card';
                         }
 
                         const sql = `
@@ -310,6 +314,23 @@ exports.createProcessOrderWithTransactionDao = (connection, processOrderData) =>
                     })
                     .catch(reject);
             });
+        });
+    });
+};
+
+/**
+ * Deduct used credit balance from marketplaceusers within transaction.
+ */
+exports.deductUserCreditBalanceWithTransactionDao = (connection, userId, creditAmount) => {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            UPDATE marketplaceusers
+            SET creditBalance = GREATEST(0, creditBalance - ?)
+            WHERE id = ?
+        `;
+        connection.query(sql, [creditAmount, userId], (err, result) => {
+            if (err) return reject(err);
+            resolve(result);
         });
     });
 };
@@ -461,7 +482,7 @@ exports.getRetailOrderHistoryDao = async (userId) => {
         const orderQuery = `
       SELECT 
         po.id AS orderId,
-        o.sheduleDate AS scheduleDate,
+        po.sheduleDate AS scheduleDate,
         o.createdAt AS createdAt,
         o.sheduleTime AS scheduleTime,
         o.delivaryMethod AS delivaryMethod,
@@ -559,15 +580,37 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
         const orderSql = `
       SELECT 
         o.*, 
+        p.id AS processOrderId,
         p.status AS processStatus,
         p.invNo AS invoiceNo,  
+        p.paymentMethod,
+        p.isPaid,
+        p.amount AS processOrderAmount,
+        p.creditPaid,
+        p.moneyPaid,
+        p.curDlvrCharge,
+        p.sheduleDate,
+        p.packTime,
+        p.outDlvrDate,
+        p.deliveredTime,
+        ohf.fee AS returnHandlingFee,
+        dro.note AS returnNote,
+        rr.rsnEnglish AS returnReason,
+        dro.createdAt AS returnTime,
+        do_order.id AS driverOrderId,
+        do_order.startTime AS driverStartTime,
+        do_order.createdAt AS driverCollectedTime,
         CASE 
-          WHEN o.delivaryMethod = 'PICKUP' THEN 'PICKUP'
-          WHEN o.delivaryMethod = 'DELIVERY' THEN 'DELIVERY'
+          WHEN UPPER(o.delivaryMethod) = 'PICKUP' THEN 'PICKUP'
+          WHEN UPPER(o.delivaryMethod) = 'DELIVERY' THEN 'DELIVERY'
           ELSE 'UNKNOWN'
         END AS deliveryType
       FROM orders o
       LEFT JOIN processorders p ON o.id = p.orderId
+      LEFT JOIN orderhandlingfee ohf ON ohf.orderId = p.id
+      LEFT JOIN driverorders do_order ON do_order.orderId = p.id
+      LEFT JOIN driverreturnorders dro ON dro.drvOrderId = do_order.id
+      LEFT JOIN returnreason rr ON rr.id = dro.returnReasonId
       WHERE (p.id = ? OR o.id = ?) AND o.userId = ?
       ORDER BY p.id DESC
     `;
@@ -575,11 +618,38 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
         const houseSql = `SELECT * FROM orderhouse WHERE orderId = ?`;
         const apartmentSql = `SELECT * FROM orderapartment WHERE orderId = ?`;
 
+        // Helper: fetch all hold events for a given driverOrderId
+        const fetchHoldHistory = (driverOrderId) => {
+            return new Promise((res) => {
+                if (!driverOrderId) return res([]);
+                db.collectionofficer.query(
+                    'SELECT dho.id, dho.holdReasonId, dho.restartedTime, ' +
+                    'dho.createdAt AS holdTime, ' +
+                    'hr.rsnEnglish AS holdReason, ' +
+                    'hr.rsnSinhala AS holdReasonSinhala, ' +
+                    'hr.rsnTamil AS holdReasonTamil ' +
+                    'FROM driverholdorders dho ' +
+                    'LEFT JOIN holdreason hr ON hr.id = dho.holdReasonId ' +
+                    'WHERE dho.drvOrderId = ? ORDER BY dho.id ASC',
+                    [driverOrderId],
+                    (hErr, hRows) => res(hErr ? [] : (hRows || []))
+                );
+            });
+        };
+
         db.collectionofficer.query(orderSql, [orderId, orderId, userId], (err, orders) => {
             if (err) return reject("Error fetching order: " + err);
             if (!orders || orders.length === 0) return reject("Order not found or unauthorized");
 
             const order = orders[0];
+
+            // Attach hold history and then resolve
+            const resolveWithHolds = (finalOrder) => {
+                fetchHoldHistory(finalOrder.driverOrderId).then((holdHistory) => {
+                    finalOrder.holdHistory = holdHistory;
+                    resolve(finalOrder);
+                });
+            };
 
             // Handle Pickup Delivery
             if (order.deliveryType === 'PICKUP') {
@@ -611,7 +681,7 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
                         }
                     };
 
-                    return resolve(order);
+                    return resolveWithHolds(order);
                 });
 
                 // Handle Delivery
@@ -625,7 +695,7 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
                             buildingType: 'House',
                             ...result[0]
                         };
-                        return resolve(order);
+                        return resolveWithHolds(order);
                     });
 
                 } else if (order.buildingType === 'Apartment') {
@@ -657,7 +727,7 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
                         console.log('deliveryInfo at 03:40 PM +0530, May 27, 2025:', order.deliveryInfo);
                         // Remove the old deliveryAddress field to avoid redundancy
                         delete order.deliveryAddress;
-                        resolve(order);
+                        resolveWithHolds(order);
                     });
 
                 } else {
@@ -665,7 +735,7 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
                 }
 
             } else {
-                return resolve(order); // Unknown delivery method
+                return resolveWithHolds(order); // Unknown delivery method
             }
         });
     });
@@ -677,114 +747,181 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
             return reject(new Error("Invalid orderId"));
         }
 
-        const sql = `
-      SELECT 
-        op.id AS orderPackageId,    -- unique row for each package instance in the order
-        op.packageId,
-        op.qty AS packageQty,       -- quantity of this package in the order
-        mp.displayName,
-        (mp.productPrice + mp.packingFee + mp.serviceFee) AS productPrice,
-        pd.qty AS itemQty,
-        pt.typeName
-      FROM orderpackage op
-      JOIN marketplacepackages mp ON op.packageId = mp.id
-      JOIN packagedetails pd ON mp.id = pd.packageId
-      JOIN producttypes pt ON pd.productTypeId = pt.id
-      WHERE op.orderId = ? OR op.orderId IN (SELECT id FROM processorders WHERE orderId = ?)
-      ORDER BY op.id
-    `;
+        const poSql = "SELECT id, orderId FROM processorders WHERE id = ? OR orderId = ? ORDER BY (id = ?) DESC LIMIT 1";
+        db.collectionofficer.query(poSql, [orderId, orderId, orderId], (poErr, poRows) => {
+            if (poErr) return reject(new Error("Database error: " + poErr.message));
 
-        db.collectionofficer.query(sql, [orderId, orderId], (err, results) => {
-            if (err) {
-                return reject(new Error("Database error: " + err.message));
-            }
+            const processOrderId = poRows?.[0]?.id || orderId;
+            const actualOrderId = poRows?.[0]?.orderId || orderId;
 
-            // First group by orderPackageId to get package details with products
-            const groupedPackages = {};
+            const packagesSql = `
+              SELECT 
+                op.id AS orderPackageId,
+                op.orderId,
+                op.packageId,
+                op.qty AS packageQty,
+                mp.displayName,
+                mp.image AS packageImage,
+                (mp.productPrice + mp.packingFee + mp.serviceFee) AS productPrice
+              FROM orderpackage op
+              JOIN marketplacepackages mp ON op.packageId = mp.id
+              WHERE op.orderId = ? OR op.orderId = ?
+              ORDER BY op.id
+            `;
 
-            results.forEach(row => {
-                const key = row.orderPackageId;
-
-                if (!groupedPackages[key]) {
-                    groupedPackages[key] = {
-                        packageId: row.packageId,
-                        displayName: row.displayName,
-                        productPrice: parseFloat(row.productPrice || '0'),
-                        packageQty: parseInt(row.packageQty || '1'),
-                        products: []
-                    };
+            db.collectionofficer.query(packagesSql, [processOrderId, actualOrderId], (err, packRows) => {
+                if (err) {
+                    return reject(new Error("Database error: " + err.message));
                 }
 
-                groupedPackages[key].products.push({
-                    typeName: row.typeName,
-                    qty: parseInt(row.itemQty || '1')
+                if (!packRows || packRows.length === 0) {
+                    return resolve([]);
+                }
+
+                const opIds = packRows.map(p => p.orderPackageId);
+
+                // Fetch items using orderpackageitems ordered as requested
+                const itemsSql = `
+                  SELECT 
+                    opi.id,
+                    opi.orderPackageId,
+                    opi.productType,
+                    opi.productId,
+                    opi.qty,
+                    opi.price,
+                    opi.createdAt,
+                    mi.displayName AS itemName,
+                    mi.unitType,
+                    cv.image,
+                    pt.typeName
+                  FROM orderpackageitems opi
+                  LEFT JOIN marketplaceitems mi ON opi.productId = mi.id
+                  LEFT JOIN producttypes pt ON opi.productType = pt.id
+                  LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
+                  WHERE opi.orderPackageId IN (?)
+                  ORDER BY opi.id ASC, opi.orderPackageId ASC, opi.productType ASC, opi.productId ASC, opi.qty ASC, opi.price ASC, opi.createdAt ASC
+                `;
+
+                db.collectionofficer.query(itemsSql, [opIds], (itemErr, itemRows) => {
+                    if (itemErr) {
+                        return reject(new Error("Database error: " + itemErr.message));
+                    }
+
+                    const itemsByPackId = {};
+                    (itemRows || []).forEach(item => {
+                        if (!itemsByPackId[item.orderPackageId]) {
+                            itemsByPackId[item.orderPackageId] = [];
+                        }
+                        const unit = item.unitType ? String(item.unitType).trim() : 'kg';
+                        itemsByPackId[item.orderPackageId].push({
+                            itemName: item.itemName || item.typeName || 'Item',
+                            quantity: `${parseFloat(item.qty || 1)} ${unit}`,
+                            image: item.image || "https://images.unsplash.com/photo-1542838132-92c53300491e?w=200",
+                            price: parseFloat(item.price || 0)
+                        });
+                    });
+
+                    // Check if any package needs fallback to packagedetails
+                    const fallbackPackIds = packRows
+                        .filter(p => !itemsByPackId[p.orderPackageId] || itemsByPackId[p.orderPackageId].length === 0)
+                        .map(p => p.packageId);
+
+                    if (fallbackPackIds.length > 0) {
+                        const fallbackSql = `
+                          SELECT pd.packageId, pd.qty AS itemQty, pt.typeName
+                          FROM packagedetails pd
+                          JOIN producttypes pt ON pd.productTypeId = pt.id
+                          WHERE pd.packageId IN (?)
+                        `;
+                        db.collectionofficer.query(fallbackSql, [fallbackPackIds], (fbErr, fbRows) => {
+                            if (!fbErr && fbRows) {
+                                packRows.forEach(pack => {
+                                    if (!itemsByPackId[pack.orderPackageId] || itemsByPackId[pack.orderPackageId].length === 0) {
+                                        itemsByPackId[pack.orderPackageId] = fbRows
+                                            .filter(r => r.packageId === pack.packageId)
+                                            .map(r => ({
+                                                itemName: r.typeName,
+                                                quantity: `${r.itemQty} units`,
+                                                image: "https://images.unsplash.com/photo-1542838132-92c53300491e?w=200",
+                                                price: 0
+                                            }));
+                                    }
+                                });
+                            }
+
+                            const packages = buildPackageList(packRows, itemsByPackId);
+                            resolve(packages);
+                        });
+                    } else {
+                        const packages = buildPackageList(packRows, itemsByPackId);
+                        resolve(packages);
+                    }
                 });
             });
-
-            // Now create separate entries for each package quantity
-            const packages = [];
-
-            Object.values(groupedPackages).forEach(pack => {
-                // Create separate entries based on packageQty
-                for (let i = 0; i < pack.packageQty; i++) {
-                    packages.push({
-                        packageId: pack.packageId,
-                        displayName: pack.displayName,
-                        productPrice: `Rs. ${pack.productPrice.toFixed(2)}`,
-                        products: pack.products.map(p => ({
-                            typeName: p.typeName,
-                            qty: String(p.qty).padStart(2, '0'),
-                        }))
-                    });
-                }
-            });
-
-            resolve(packages);
         });
     });
 };
 
+function buildPackageList(packRows, itemsByPackId) {
+    const packages = [];
+    packRows.forEach(pack => {
+        const qty = parseInt(pack.packageQty || 1);
+        const priceVal = parseFloat(pack.productPrice || 0);
+        for (let i = 0; i < qty; i++) {
+            packages.push({
+                orderPackageId: pack.orderPackageId,
+                packageId: pack.packageId,
+                displayName: pack.displayName,
+                packageImage: pack.packageImage,
+                productPrice: `Rs. ${priceVal.toFixed(2)}`,
+                priceNum: priceVal,
+                products: itemsByPackId[pack.orderPackageId] || []
+            });
+        }
+    });
+    return packages;
+}
 
-
-exports.getOrderAdditionalItemsDao = async (processOrderId) => {
-    console.log("getOrderAdditionalItemsDao called with processOrderId:", processOrderId);
-
+exports.getOrderAdditionalItemsDao = async (orderId) => {
     return new Promise((resolve, reject) => {
-        if (!processOrderId) {
-            return reject(new Error("Invalid processOrderId"));
+        if (!orderId) {
+            return reject(new Error("Invalid orderId"));
         }
 
-        // CORRECTED: Join on cv.id instead of cv.cropGroupId
-        const sql = `
-      SELECT
-        oai.qty,
-        oai.unit,
-        mi.discountedprice AS price,
-        oai.discount,
-        mi.displayName,
-        cv.image,
-        oai.productId,
-        mi.varietyId,
-        cv.id as cropVarietyId,
-        cv.cropGroupId
-      FROM orderadditionalitems oai
-      LEFT JOIN processorders po ON (po.id = oai.proOrderId OR po.orderId = oai.orderId)
-      JOIN marketplaceitems mi ON oai.productId = mi.id
-      LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-      WHERE po.id = ? OR oai.orderId = ? OR oai.proOrderId = ?
-      ORDER BY oai.id
-    `;
+        const poSql = "SELECT id, orderId FROM processorders WHERE id = ? OR orderId = ? ORDER BY (id = ?) DESC LIMIT 1";
+        db.collectionofficer.query(poSql, [orderId, orderId, orderId], (err, poRows) => {
+            if (err) return reject(new Error("Database error: " + err.message));
 
-        db.collectionofficer.query(sql, [processOrderId, processOrderId, processOrderId], (err, results) => {
-            if (err) {
-                console.error("Database error:", err);
-                return reject(new Error("Database error: " + err.message));
-            }
+            const processOrderId = poRows?.[0]?.id || orderId;
+            const actualOrderId = poRows?.[0]?.orderId || orderId;
 
-            console.log("Query results count:", results?.length || 0);
-            console.log("Query results:", JSON.stringify(results, null, 2));
+            const sql = `
+              SELECT
+                oai.id,
+                oai.qty,
+                oai.unit,
+                COALESCE(oai.price, mi.discountedPrice, mi.normalPrice, 0) AS price,
+                COALESCE(oai.normalPrice, mi.normalPrice, 0) AS normalPrice,
+                oai.discount,
+                mi.displayName,
+                cv.image,
+                oai.productId,
+                mi.varietyId,
+                cv.id as cropVarietyId,
+                cv.cropGroupId
+              FROM orderadditionalitems oai
+              JOIN marketplaceitems mi ON oai.productId = mi.id
+              LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
+              WHERE oai.orderId = ? OR oai.proOrderId = ?
+              ORDER BY oai.id
+            `;
 
-            resolve(results || []);
+            db.collectionofficer.query(sql, [actualOrderId, processOrderId], (err2, results) => {
+                if (err2) {
+                    return reject(new Error("Database error: " + err2.message));
+                }
+                resolve(results || []);
+            });
         });
     });
 };
@@ -963,7 +1100,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                 o.delivaryMethod AS deliveryMethod,
                 o.discount AS orderDiscount,
                 o.createdAt AS invoiceDate,
-                o.sheduleDate AS scheduledDate,
+                po.sheduleDate AS scheduledDate,
                 o.buildingType,
                 o.fullTotal AS fullTotal,
                 o.isCoupon,
@@ -1125,14 +1262,14 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                     })),
                     additionalItems: Array.isArray(additionalItems)
                         ? additionalItems.map((item) => ({
-                              id: item.id,
-                              name: item.name || "Unknown",
-                              unit: item.unit || "kg",
-                              unitPrice: `Rs. ${parseFloat(item.unitPrice || 0).toFixed(2)}`,
-                              quantity: String(item.quantity || 0).padStart(2, "0"),
-                              amount: `Rs. ${parseFloat(item.finalPrice || item.amount || 0).toFixed(2)}`,
-                              image: item.image || null,
-                          }))
+                            id: item.id,
+                            name: item.name || "Unknown",
+                            unit: item.unit || "kg",
+                            unitPrice: `Rs. ${parseFloat(item.unitPrice || 0).toFixed(2)}`,
+                            quantity: String(item.quantity || 0).padStart(2, "0"),
+                            amount: `Rs. ${parseFloat(item.finalPrice || item.amount || 0).toFixed(2)}`,
+                            image: item.image || null,
+                        }))
                         : [],
                     familyPackTotal: `Rs. ${familyPackTotal}`,
                     additionalItemsTotal: `Rs. ${additionalItemsTotal}`,
@@ -1149,3 +1286,52 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
         });
     });
 };
+
+exports.getDeliveredOrdersTotal = async (userId) => {
+    let connection;
+    try {
+        connection = await db.collectionofficer.promise().getConnection();
+        const [rows] = await connection.query(
+            `SELECT COALESCE(SUM(p.amount), 0) AS deliveredTotal
+       FROM processorders p
+       INNER JOIN orders o ON o.id = p.orderId
+       WHERE o.userId = ?
+         AND p.status IN ('Delivered', 'Picked up')`,
+            [userId],
+        );
+        const deliveredTotal = parseFloat(rows[0]?.deliveredTotal || 0);
+        // Base 2000, +250 for every full 25000 in total order value
+        const tiersEarned = Math.floor(deliveredTotal / 25000);
+        const creditBalance = 2000 + tiersEarned * 250;
+        return { deliveredTotal, creditBalance };
+    } catch (err) {
+        console.error("Error in getDeliveredOrdersTotal:", err);
+        throw err;
+    } finally {
+        if (connection) connection.release();
+    }
+};
+
+/**
+ * Marks processorders record as paid via PayHere webhook or direct card settlement.
+ * Accepts invNo, orderId, or processorders.id as identifier.
+ */
+exports.markOrderPaidDao = async (identifier, transactionId) => {
+    let connection;
+    try {
+        connection = await db.collectionofficer.promise().getConnection();
+        const [result] = await connection.query(
+            `UPDATE processorders 
+             SET isPaid = 1, paymentMethod = 'Card', transactionId = COALESCE(?, transactionId)
+             WHERE invNo = ? OR orderId = ? OR id = ?`,
+            [transactionId || null, identifier, identifier, identifier]
+        );
+        return result.affectedRows > 0;
+    } catch (err) {
+        console.error("Error in markOrderPaidDao:", err);
+        throw err;
+    } finally {
+        if (connection) connection.release();
+    }
+};
+

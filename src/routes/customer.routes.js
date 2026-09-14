@@ -1,7 +1,16 @@
 const express = require("express");
 const router = express.Router();
 const authMiddleware = require("../middlewares/auth.middleware");
+const { upload } = require("../middlewares/multer.middleware");
 const customerEp = require("../endpoint/customer.ep");
+
+// Upload customer profile image
+router.post(
+  "/upload-profile-image",
+  authMiddleware,
+  upload.single("profileImage"),
+  customerEp.uploadProfileImage
+);
 
 // Get customer profile info
 router.get("/profile", authMiddleware, customerEp.getCustomerProfile);
@@ -47,6 +56,9 @@ router.delete("/delete-address/:addressId", authMiddleware, customerEp.deleteAdd
 
 // Update User Details
 router.put("/update-details", authMiddleware, customerEp.updateUserDetails);
+
+// Get Delete Account Status (Credit Balance & Active Orders)
+router.get("/delete-account-status", authMiddleware, customerEp.getDeleteAccountStatus);
 
 // Delete User Account
 router.delete("/delete-account", authMiddleware, customerEp.deleteUserAccount);

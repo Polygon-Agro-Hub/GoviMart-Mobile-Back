@@ -4,6 +4,11 @@ const userAuthEp = require("./auth.ep");
 const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
 const asyncHandler = require("express-async-handler");
+const uploadFileToS3 = require("../middlewares/s3upload");
+const crypto = require("crypto");
+
+// Brute force lockout for phone change OTP (Risk 4.B)
+const phoneOtpAttempts = new Map();
 
 exports.getCustomerProfile = asyncHandler(async (req, res) => {
   try {
@@ -310,6 +315,14 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
     const result = await customerDao.updateUserDetailsDao(userId, req.body);
 
     if (result.affectedRows === 0) {
+      // In MySQL, affectedRows is 0 when matching rows already have identical values
+      const existingUser = await customerDao.getCustomerProfileDao(userId);
+      if (existingUser && existingUser.length > 0) {
+        return res.status(200).json({
+          status: true,
+          message: "No changes were made to your account details.",
+        });
+      }
       return res.status(404).json({ status: false, message: "User not found" });
     }
 
@@ -322,10 +335,38 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
   }
 });
 
+// ---------- Get Delete Account Status ----------
+exports.getDeleteAccountStatus = asyncHandler(async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const statusData = await customerDao.getDeleteAccountStatusDao(userId);
+    return res.status(200).json({ status: true, data: statusData });
+  } catch (error) {
+    console.error("Get delete account status error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+});
+
 // ---------- Delete User Account ----------
 exports.deleteUserAccount = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
+    const statusData = await customerDao.getDeleteAccountStatusDao(userId);
+
+    if (statusData.hasNegativeCredit) {
+      return res.status(400).json({
+        status: false,
+        message: "You have a negative credit balance on your account. Please clear the outstanding balance before deleting your account.",
+      });
+    }
+
+    if (statusData.hasProcessingOrders) {
+      return res.status(400).json({
+        status: false,
+        message: "You have processing orders. Once all of them are completed, you may delete your account.",
+      });
+    }
+
     const result = await customerDao.deleteUserAccountDao(userId);
 
     if (result.affectedRows === 0) {
@@ -369,9 +410,10 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
       });
     }
 
-    // Generate 5-digit OTP
-    const otp = Math.floor(10000 + Math.random() * 90000).toString();
+    // Generate 5-digit OTP (Risk 4.B)
+    const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
+    phoneOtpAttempts.delete(referenceId);
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes
 
     await authDao.saveOtpDao(referenceId, req.user.email || null, otp, expiresAt);
@@ -383,15 +425,29 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
       { expiresIn: "15m" }
     );
 
-    const method = "sms";
-    try {
-      const fullPhone = `${phoneCode}${normalizedPhone}`
-        .replace(/\+/g, "")
-        .replace(/\s+/g, "");
-      await userAuthEp.sendShoutoutSms(fullPhone, otp);
-      console.log(`[SMS] Phone change OTP sent to ${fullPhone}`);
-    } catch (smsErr) {
-      console.error("Failed to send Shoutout SMS for phone change:", smsErr.message);
+    // Determine method: SMS for Sri Lanka (+94), email for all other countries
+    const method = phoneCode === "+94" ? "sms" : "email";
+
+    if (method === "sms") {
+      try {
+        const fullPhone = `${phoneCode}${normalizedPhone}`
+          .replace(/\+/g, "")
+          .replace(/\s+/g, "");
+        await userAuthEp.sendShoutoutSms(fullPhone, otp);
+        console.log(`[SMS] Phone change OTP sent to ${fullPhone}`);
+      } catch (smsErr) {
+        console.error("Failed to send Shoutout SMS for phone change:", smsErr.message);
+      }
+    } else {
+      try {
+        const userEmail = req.user.email;
+        if (userEmail) {
+          await userAuthEp.sendEmailOtp(userEmail, otp);
+          console.log(`[Email] Phone change OTP sent to ${userEmail}`);
+        }
+      } catch (emailErr) {
+        console.error("Failed to send email OTP for phone change:", emailErr.message);
+      }
     }
 
     return res.status(200).json({
@@ -399,7 +455,9 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
       method,
       referenceId,
       signupToken: phoneChangeToken,
-      message: "Verification code has been sent to your new mobile number.",
+      message: method === "sms"
+        ? "Verification code has been sent to your new mobile number."
+        : "Verification code has been sent to your email address.",
     });
   } catch (error) {
     console.error("Send phone change OTP error:", error);
@@ -428,8 +486,25 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
       return res.status(400).json({ status: false, message: "Verification code has expired." });
     }
     if (otpRecord.otp !== code) {
-      return res.status(400).json({ status: false, message: "Incorrect verification code." });
+      const attempts = (phoneOtpAttempts.get(referenceId) || 0) + 1;
+      phoneOtpAttempts.set(referenceId, attempts);
+
+      if (attempts >= 5) {
+        phoneOtpAttempts.delete(referenceId);
+        await authDao.deleteOtpDao(referenceId);
+        return res.status(429).json({
+          status: false,
+          message: "Too many incorrect verification attempts. Please request a new verification code.",
+        });
+      }
+
+      return res.status(400).json({
+        status: false,
+        message: `Incorrect verification code. ${5 - attempts} attempts remaining.`,
+      });
     }
+
+    phoneOtpAttempts.delete(referenceId);
 
     let decoded;
     try {
@@ -490,8 +565,9 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
 
     const { userId, phoneCode, phoneNumber } = decoded;
 
-    const otp = Math.floor(10000 + Math.random() * 90000).toString();
+    const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
+    phoneOtpAttempts.delete(referenceId);
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000);
 
     await authDao.saveOtpDao(referenceId, req.user?.email || null, otp, expiresAt);
@@ -502,21 +578,38 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
       { expiresIn: "15m" }
     );
 
-    try {
-      const fullPhone = `${phoneCode}${phoneNumber}`
-        .replace(/\+/g, "")
-        .replace(/\s+/g, "");
-      await userAuthEp.sendShoutoutSms(fullPhone, otp);
-      console.log(`[SMS] Phone change OTP resent to ${fullPhone}`);
-    } catch (smsErr) {
-      console.error("Failed to send Shoutout SMS on phone change resend:", smsErr.message);
+    const method = phoneCode === "+94" ? "sms" : "email";
+
+    if (method === "sms") {
+      try {
+        const fullPhone = `${phoneCode}${phoneNumber}`
+          .replace(/\+/g, "")
+          .replace(/\s+/g, "");
+        await userAuthEp.sendShoutoutSms(fullPhone, otp);
+        console.log(`[SMS] Phone change OTP resent to ${fullPhone}`);
+      } catch (smsErr) {
+        console.error("Failed to send Shoutout SMS on phone change resend:", smsErr.message);
+      }
+    } else {
+      try {
+        const userEmail = req.user?.email;
+        if (userEmail) {
+          await userAuthEp.sendEmailOtp(userEmail, otp);
+          console.log(`[Email] Phone change OTP resent to ${userEmail}`);
+        }
+      } catch (emailErr) {
+        console.error("Failed to send email OTP on phone change resend:", emailErr.message);
+      }
     }
 
     return res.status(200).json({
       status: true,
+      method,
       referenceId,
       signupToken: newSignupToken,
-      message: "Verification code has been resent to your new mobile number.",
+      message: method === "sms"
+        ? "Verification code has been resent to your new mobile number."
+        : "Verification code has been resent to your email address.",
     });
   } catch (error) {
     console.error("Resend phone change OTP error:", error);
@@ -554,6 +647,39 @@ exports.updateCreditBalance = asyncHandler(async (req, res) => {
     });
   } catch (error) {
     console.error("Update credit balance error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+});
+
+// ---------- Upload Customer Profile Image ----------
+exports.uploadProfileImage = asyncHandler(async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    if (!req.file) {
+      return res.status(400).json({
+        status: false,
+        message: "No image file provided",
+      });
+    }
+
+    const imageUrl = await uploadFileToS3(
+      req.file.buffer,
+      req.file.originalname,
+      "profile-images"
+    );
+
+    await customerDao.updateProfileImageDao(userId, imageUrl);
+
+    return res.status(200).json({
+      status: true,
+      message: "Profile image uploaded successfully",
+      data: {
+        imageUrl,
+      },
+    });
+  } catch (error) {
+    console.error("Profile image upload error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });

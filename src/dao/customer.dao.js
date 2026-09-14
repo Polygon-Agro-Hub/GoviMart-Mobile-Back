@@ -2,7 +2,7 @@ const db = require("../startup/database");
 
 exports.getCustomerProfileDao = async (userId) => {
   const query =
-    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName, creditBalance FROM marketplaceusers WHERE id = ?";
+    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName, creditBalance, image FROM marketplaceusers WHERE id = ?";
   const [results] = await db.collectionofficer.promise().query(query, [userId]);
   return results;
 };
@@ -231,7 +231,8 @@ exports.getAccountDetailsDao = async (userId) => {
       companyName,
       rateofCus,
       creditBalance,
-      nearesCity
+      nearesCity,
+      image
     FROM marketplaceusers
     WHERE id = ?
   `;
@@ -415,28 +416,40 @@ exports.deleteAddressDao = async (addressId, customerId, buildingType) => {
 };
 
 exports.updateUserDetailsDao = async (userId, userData) => {
-  const {
-    title,
-    firstName,
-    lastName,
-    phoneCode,
-    phoneNumber,
-    phoneCode2,
-    phoneNumber2,
-    nic,
-    email,
-    companyPhoneCode,
-    companyPhone,
-    companyName,
-    buyerType,
-  } = userData;
+  const allowedKeys = [
+    "title",
+    "firstName",
+    "lastName",
+    "phoneCode",
+    "phoneNumber",
+    "phoneCode2",
+    "phoneNumber2",
+    "nic",
+    "email",
+    "companyPhoneCode",
+    "companyPhone",
+    "companyName",
+    "buyerType",
+  ];
 
+  const fieldsToUpdate = [];
+  const values = [];
+
+  for (const key of allowedKeys) {
+    if (userData[key] !== undefined) {
+      fieldsToUpdate.push(`${key} = ?`);
+      values.push(userData[key]);
+    }
+  }
+
+  if (fieldsToUpdate.length === 0) {
+    return { affectedRows: 0 };
+  }
+
+  values.push(userId);
   const query = `
     UPDATE marketplaceusers
-    SET title = ?, firstName = ?, lastName = ?,
-        phoneCode = ?, phoneNumber = ?, phoneCode2 = ?, phoneNumber2 = ?,
-        nic = ?, email = ?, companyPhoneCode = ?, companyPhone = ?,
-        companyName = ?, buyerType = ?
+    SET ${fieldsToUpdate.join(", ")}
     WHERE id = ?
   `;
   const [result] = await db.collectionofficer
@@ -559,5 +572,40 @@ exports.updateCreditBalanceDao = async (userId, creditBalance) => {
     userId,
     creditBalance: parseFloat(rows[0]?.creditBalance || 0),
     affectedRows: result.affectedRows,
+  };
+};
+
+// Update user profile image URL
+exports.updateProfileImageDao = async (userId, imageUrl) => {
+  const query = `
+    UPDATE marketplaceusers
+    SET image = ?
+    WHERE id = ?
+  `;
+  const [result] = await db.collectionofficer.promise().query(query, [imageUrl, userId]);
+  return result;
+};
+
+// Check delete account eligibility (credit balance and processing orders)
+exports.getDeleteAccountStatusDao = async (userId) => {
+  const userQuery = `SELECT creditBalance FROM marketplaceusers WHERE id = ?`;
+  const [userResults] = await db.collectionofficer.promise().query(userQuery, [userId]);
+  const creditBalance = userResults.length > 0 ? Number(userResults[0].creditBalance || 0) : 0;
+
+  const ordersQuery = `
+    SELECT COUNT(o.id) AS processingCount
+    FROM orders o
+    JOIN processorders po ON po.orderId = o.id
+    WHERE o.userId = ?
+      AND (po.status IS NULL OR po.status NOT IN ('Delivered', 'Picked up','Return','Return Received','Cancelled'))
+  `;
+  const [ordersResults] = await db.collectionofficer.promise().query(ordersQuery, [userId]);
+  const processingCount = ordersResults.length > 0 ? Number(ordersResults[0].processingCount || 0) : 0;
+
+  return {
+    creditBalance,
+    hasNegativeCredit: creditBalance < 0,
+    processingCount,
+    hasProcessingOrders: processingCount > 0,
   };
 };

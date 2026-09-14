@@ -7,6 +7,10 @@ const { v4: uuidv4 } = require("uuid");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+
+// Brute-force lockout: Track consecutive incorrect OTP verification attempts (Risk 4.B)
+const signupOtpAttempts = new Map();
 
 // Login User
 exports.login = asyncHandler(async (req, res) => {
@@ -319,8 +323,8 @@ exports.userSignup = asyncHandler(async (req, res) => {
       });
     }
 
-    // Generate 5-digit OTP code
-    const otp = Math.floor(10000 + Math.random() * 90000).toString();
+    // Generate cryptographically secure 5-digit OTP code (Risk 4.B)
+    const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes expiry
 
@@ -409,11 +413,25 @@ exports.verifySignup = asyncHandler(async (req, res) => {
     }
 
     if (otpRecord.otp !== code) {
+      const attempts = (signupOtpAttempts.get(referenceId) || 0) + 1;
+      signupOtpAttempts.set(referenceId, attempts);
+
+      if (attempts >= 5) {
+        signupOtpAttempts.delete(referenceId);
+        await userDao.deleteOtpDao(referenceId);
+        return res.status(429).json({
+          status: false,
+          message: "Too many incorrect verification attempts. This code is now invalidated. Please request a new code.",
+        });
+      }
+
       return res.status(400).json({
         status: false,
-        message: "Incorrect verification code.",
+        message: `Incorrect verification code. ${5 - attempts} attempts remaining.`,
       });
     }
+
+    signupOtpAttempts.delete(referenceId);
 
     // 2. Verify and decode signupToken
     let decoded;
@@ -551,9 +569,10 @@ exports.resendSignupOtp = asyncHandler(async (req, res) => {
     const { signupData } = decoded;
     const { email, phoneCode, phoneNumber } = signupData;
 
-    // Generate new 5-digit OTP code
-    const otp = Math.floor(10000 + Math.random() * 90000).toString();
+    // Generate cryptographically secure 5-digit OTP code (Risk 4.B)
+    const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
+    signupOtpAttempts.delete(referenceId);
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes expiry
 
     // Save OTP to DB

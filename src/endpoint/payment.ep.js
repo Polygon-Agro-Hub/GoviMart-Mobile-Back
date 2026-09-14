@@ -1,9 +1,14 @@
 const asyncHandler = require("express-async-handler");
 const customerDao = require("../dao/customer.dao");
+const orderDao = require("../dao/order.dao");
 const {
   generatePayHereHash,
   verifyPayHereNotify,
 } = require("../services/payhere.service");
+
+// In-memory bounded cache for processed PayHere payment IDs (Idempotency)
+const processedPaymentIds = new Set();
+const MAX_PROCESSED_IDS = 5000;
 
 // ---------- Initiate PayHere Payment (Generates Pre-hashed Parameters) ----------
 exports.initiatePayHere = asyncHandler(async (req, res) => {
@@ -29,7 +34,9 @@ exports.initiatePayHere = asyncHandler(async (req, res) => {
       process.env.PAYHERE_MERCHANT_SECRET ||
       "Mjk4NjMyODI2MjMyMDU0MDMyMzgyNDY5Nzc0OTkwNDEzNzQwNTcxMg==";
     const isSandbox =
-      String(process.env.PAYHERE_SANDBOX).toLowerCase() === "true" || true;
+      process.env.PAYHERE_SANDBOX !== undefined
+        ? String(process.env.PAYHERE_SANDBOX).toLowerCase() === "true"
+        : process.env.NODE_ENV !== "production";
 
     // Generate unique order ID if not provided
     const prefix = paymentType === "clear_balance" ? "CB" : "ORD";
@@ -122,8 +129,22 @@ exports.handlePayHereNotify = asyncHandler(async (req, res) => {
       return res.status(400).send("Invalid signature");
     }
 
-    const { status_code, custom_1, custom_2, payhere_amount, order_id } =
+    const { status_code, custom_1, custom_2, payhere_amount, order_id, payment_id } =
       payload;
+
+    // Idempotency: Prevent duplicate webhook execution
+    if (payment_id) {
+      const pidStr = String(payment_id);
+      if (processedPaymentIds.has(pidStr)) {
+        console.log(`[PayHere Webhook] Duplicate webhook for payment_id: ${pidStr}. Skipping.`);
+        return res.status(200).send("OK");
+      }
+      if (processedPaymentIds.size >= MAX_PROCESSED_IDS) {
+        const firstEntry = processedPaymentIds.values().next().value;
+        processedPaymentIds.delete(firstEntry);
+      }
+      processedPaymentIds.add(pidStr);
+    }
 
     // Status code 2 represents a successful payment in PayHere
     if (Number(status_code) === 2) {
@@ -140,6 +161,16 @@ exports.handlePayHereNotify = asyncHandler(async (req, res) => {
           userId,
           parseFloat(payhere_amount)
         );
+      } else {
+        // Order payment settlement: mark processorders as isPaid = 1 (Risk 3.B)
+        console.log(
+          `[PayHere Webhook] Settling order payment for identifier: ${order_id}, payment_id: ${payment_id}`
+        );
+        try {
+          await orderDao.markOrderPaidDao(order_id, payment_id);
+        } catch (settleErr) {
+          console.error(`[PayHere Webhook] Failed to mark order paid:`, settleErr);
+        }
       }
     } else {
       console.warn(
