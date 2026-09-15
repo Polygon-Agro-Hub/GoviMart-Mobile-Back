@@ -17,6 +17,7 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                 o.id AS actualOrderId,
                 o.userId,
                 o.delivaryMethod,
+                COALESCE(o.deliveryCharge, 0) AS deliveryCharge,
                 o.sheduleTime,
                 o.sheduleType,
                 po.id AS processOrderId,
@@ -49,6 +50,7 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
 
             try {
                 // 2. Fetch packages for this process order (orderpackage)
+                // orderpackage.orderId references processorders.id
                 const packagesSql = `
                     SELECT 
                         op.id AS orderPackageId,
@@ -68,11 +70,11 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                         (mp.productPrice + mp.packingFee + mp.serviceFee) AS packageTotalUnit
                     FROM orderpackage op
                     INNER JOIN marketplacepackages mp ON op.packageId = mp.id
-                    WHERE op.orderId = ? OR op.orderId = ?
+                    WHERE op.orderId = ?
                 `;
 
                 const packages = await new Promise((res, rej) => {
-                    db.collectionofficer.query(packagesSql, [processOrderId, actualOrderId], (e, r) => e ? rej(e) : res(r || []));
+                    db.collectionofficer.query(packagesSql, [processOrderId], (e, r) => e ? rej(e) : res(r || []));
                 });
 
                 if (packages.length === 0) {
@@ -145,10 +147,13 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
 
 
                 // 5. Fetch additional items (orderadditionalitems)
+                // Use proOrderId (the specific processorders.id) for precise matching.
+                // Falling back to orderId only when proOrderId is NULL (legacy rows).
                 const additionalSql = `
                     SELECT 
                         oai.id,
                         oai.orderId,
+                        oai.proOrderId,
                         oai.productId,
                         oai.qty,
                         oai.unit,
@@ -160,13 +165,14 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                     FROM orderadditionalitems oai
                     LEFT JOIN marketplaceitems mi ON oai.productId = mi.id
                     LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-                    WHERE oai.orderId = ? OR oai.orderId = ?
+                    WHERE oai.proOrderId = ?
+                      OR (oai.proOrderId IS NULL AND oai.orderId = ?)
                 `;
 
                 const [items, baselineItems, additionalItems] = await Promise.all([
                     new Promise((res, rej) => db.collectionofficer.query(itemsSql, orderPackageIds, (e, r) => e ? rej(e) : res(r || []))),
                     new Promise((res, rej) => db.collectionofficer.query(baselineSql, orderPackageIds, (e, r) => e ? rej(e) : res(r || []))),
-                    new Promise((res, rej) => db.collectionofficer.query(additionalSql, [actualOrderId, processOrderId], (e, r) => e ? rej(e) : res(r || []))),
+                    new Promise((res, rej) => db.collectionofficer.query(additionalSql, [processOrderId, actualOrderId], (e, r) => e ? rej(e) : res(r || []))),
                 ]);
 
                 // Assemble packages with nested items and baselines
@@ -382,6 +388,9 @@ exports.confirmPackageReviewDao = ({
     lockNow = false,
     additionalAmount = 0,
     newScheduleDate = null,
+    paymentMethod = null,
+    newTotal = null,
+    creditToAdd = 0,
     replacements = [],
     additionalItems = [],
 }) => {
@@ -394,6 +403,9 @@ exports.confirmPackageReviewDao = ({
             lockNow,
             additionalAmount,
             newScheduleDate,
+            paymentMethod,
+            newTotal,
+            creditToAdd,
             replacementsCount: Array.isArray(replacements) ? replacements.length : 0,
             additionalItemsCount: Array.isArray(additionalItems) ? additionalItems.length : 0,
         });
@@ -521,18 +533,142 @@ exports.confirmPackageReviewDao = ({
                         console.log(`[confirmPackageReviewDao] Schedule date updated:`, scheduleRes.affectedRows, "row(s)");
                     }
 
-                    // 5. Adjust processorders amount if delta > 0
-                    if (additionalAmount > 0 && processOrderId) {
-                        console.log(`[confirmPackageReviewDao] Updating processorders amount (+${additionalAmount}) for processOrderId: ${processOrderId}`);
-                        const updateAmountSql = `
-                            UPDATE processorders 
-                            SET amount = amount + ? 
+                    // 5. Payment-aware order total updates
+                    // Resolve processorders and orders records from DB
+                    const searchId1 = processOrderId ? parseInt(processOrderId) : (orderId ? parseInt(orderId) : 0);
+                    const searchId2 = orderId ? parseInt(orderId) : (processOrderId ? parseInt(processOrderId) : 0);
+
+                    const [orderCheckRows] = await new Promise((res, rej) => {
+                        const checkSql = `
+                            SELECT 
+                                po.id AS processOrderId, 
+                                po.orderId AS actualOrderId, 
+                                po.paymentMethod, 
+                                po.isPaid, 
+                                po.amount, 
+                                po.moneyPaid, 
+                                po.creditPaid,
+                                o.userId,
+                                o.total AS orderTotal,
+                                o.fullTotal AS orderFullTotal
+                            FROM processorders po
+                            INNER JOIN orders o ON po.orderId = o.id
+                            WHERE po.id = ? OR po.orderId = ? OR o.id = ?
+                            ORDER BY po.id DESC 
+                            LIMIT 1
+                        `;
+                        connection.query(checkSql, [searchId1, searchId2, searchId2], (e, r) => (e ? rej(e) : res([r])));
+                    });
+
+                    const matchedOrder = orderCheckRows && orderCheckRows.length > 0 ? orderCheckRows[0] : null;
+                    const targetProcessOrderId = matchedOrder ? matchedOrder.processOrderId : (processOrderId ? parseInt(processOrderId) : null);
+                    const targetOrderId = matchedOrder ? matchedOrder.actualOrderId : (orderId ? parseInt(orderId) : null);
+                    const targetUserId = matchedOrder && matchedOrder.userId ? matchedOrder.userId : userId;
+
+                    // Determine payment method (prefer DB record, fallback to payload)
+                    const dbPaymentMethod = (matchedOrder?.paymentMethod || paymentMethod || "").trim().toLowerCase();
+                    const isDbPaid = matchedOrder?.isPaid === 1 || matchedOrder?.isPaid === true || String(matchedOrder?.isPaid) === "1";
+                    const isCard = dbPaymentMethod.includes("card") || 
+                                   dbPaymentMethod.includes("payhere") || 
+                                   dbPaymentMethod.includes("online") || 
+                                   (isDbPaid && !dbPaymentMethod.includes("cash") && !dbPaymentMethod.includes("cod"));
+
+                    const parsedNewTotal = newTotal != null ? parseFloat(newTotal) : null;
+                    const parsedAdditional = parseFloat(additionalAmount) || 0;
+
+                    console.log(`[confirmPackageReviewDao] Order lookup: processOrderId=${targetProcessOrderId}, orderId=${targetOrderId}, userId=${targetUserId}`);
+                    console.log(`[confirmPackageReviewDao] Payment method: "${dbPaymentMethod}" -> isCard: ${isCard}, isDbPaid: ${isDbPaid}, newTotal: ${parsedNewTotal}, additionalAmount: ${parsedAdditional}`);
+
+                    // 5a. If Card payment - update processorders (amount and moneyPaid)
+                    if (isCard && targetProcessOrderId && parsedNewTotal != null) {
+                        const targetCreditPaid = parseFloat(matchedOrder?.creditPaid) || 0;
+                        const newMoneyPaid = Math.max(0, parsedNewTotal - targetCreditPaid);
+                        console.log(`[confirmPackageReviewDao] CARD: Updating processorders (amount=${parsedNewTotal}, moneyPaid=${newMoneyPaid}) for processOrderId: ${targetProcessOrderId}`);
+                        const updateProcessSql = `
+                            UPDATE processorders
+                            SET amount = ?, moneyPaid = ?
                             WHERE id = ?
                         `;
-                        const amountRes = await new Promise((res, rej) => {
-                            connection.query(updateAmountSql, [parseFloat(additionalAmount), processOrderId], (e, r) => e ? rej(e) : res(r));
+                        const processRes = await new Promise((res, rej) => {
+                            connection.query(updateProcessSql, [parsedNewTotal, newMoneyPaid, targetProcessOrderId], (e, r) => (e ? rej(e) : res(r)));
                         });
-                        console.log(`[confirmPackageReviewDao] Amount updated:`, amountRes.affectedRows, "row(s)");
+                        console.log(`[confirmPackageReviewDao] processorders updated (card amount & moneyPaid):`, processRes.affectedRows, "row(s)");
+                    }
+
+                    // 5b. Update orders table (total, fullTotal, discount) - for both Card and Cash
+                    if (targetOrderId && parsedNewTotal != null) {
+                        console.log(`[confirmPackageReviewDao] Updating orders table with newTotal: ${parsedNewTotal} for orderId: ${targetOrderId}`);
+                        const updateOrderSql = `
+                            UPDATE orders
+                            SET
+                                total     = ?,
+                                fullTotal = ?,
+                                discount  = GREATEST(0, fullTotal - ?)
+                            WHERE id = ?
+                        `;
+                        const orderRes = await new Promise((res, rej) => {
+                            connection.query(
+                                updateOrderSql,
+                                [parsedNewTotal, parsedNewTotal, parsedNewTotal, targetOrderId],
+                                (e, r) => (e ? rej(e) : res(r))
+                            );
+                        });
+                        console.log(`[confirmPackageReviewDao] orders total/fullTotal updated:`, orderRes.affectedRows, "row(s)");
+                    } else if (targetOrderId && parsedAdditional > 0) {
+                        console.log(`[confirmPackageReviewDao] Fallback: incrementing orders total by ${parsedAdditional} for orderId: ${targetOrderId}`);
+                        const fallbackSql = `
+                            UPDATE orders
+                            SET
+                                total     = total + ?,
+                                fullTotal = fullTotal + ?,
+                                discount  = GREATEST(0, fullTotal + ? - (total + ?))
+                            WHERE id = ?
+                        `;
+                        const fallRes = await new Promise((res, rej) => {
+                            connection.query(
+                                fallbackSql,
+                                [parsedAdditional, parsedAdditional, parsedAdditional, parsedAdditional, targetOrderId],
+                                (e, r) => (e ? rej(e) : res(r))
+                            );
+                        });
+                        console.log(`[confirmPackageReviewDao] orders fallback update:`, fallRes.affectedRows, "row(s)");
+                    }
+
+                    // 6. Credit balance top-up for savings (negative diff)
+                    const parsedCreditToAdd = parseFloat(creditToAdd) || 0;
+                    if (parsedCreditToAdd > 0 && targetUserId) {
+                        console.log(`[confirmPackageReviewDao] Adding ${parsedCreditToAdd} savings credit to marketplaceusers for userId: ${targetUserId}`);
+
+                        // Check current creditBalance in marketplaceusers
+                        const [muRows] = await new Promise((res, rej) => {
+                            connection.query(
+                                "SELECT id, creditBalance FROM marketplaceusers WHERE id = ? LIMIT 1",
+                                [targetUserId],
+                                (e, r) => (e ? rej(e) : res([r]))
+                            );
+                        });
+
+                        if (muRows && muRows.length > 0) {
+                            const oldBalance = parseFloat(muRows[0].creditBalance) || 0;
+                            const newBalance = Number((oldBalance + parsedCreditToAdd).toFixed(2));
+                            const creditRes = await new Promise((res, rej) => {
+                                connection.query(
+                                    "UPDATE marketplaceusers SET creditBalance = ? WHERE id = ?",
+                                    [newBalance, targetUserId],
+                                    (e, r) => (e ? rej(e) : res(r))
+                                );
+                            });
+                            console.log(`[confirmPackageReviewDao] marketplaceusers creditBalance updated: ${creditRes.affectedRows} row(s). Old balance = ${oldBalance}, Added = ${parsedCreditToAdd}, New balance = ${newBalance}`);
+                        } else {
+                            const insertCreditRes = await new Promise((res, rej) => {
+                                connection.query(
+                                    "INSERT INTO marketplaceusers (id, creditBalance) VALUES (?, ?) ON DUPLICATE KEY UPDATE creditBalance = creditBalance + ?",
+                                    [targetUserId, parsedCreditToAdd, parsedCreditToAdd],
+                                    (e, r) => (e ? rej(e) : res(r))
+                                );
+                            });
+                            console.log(`[confirmPackageReviewDao] marketplaceusers credit inserted/upserted:`, insertCreditRes.affectedRows, "row(s)");
+                        }
                     }
 
                     connection.commit((commitErr) => {
