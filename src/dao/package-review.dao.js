@@ -17,6 +17,7 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                 o.id AS actualOrderId,
                 o.userId,
                 o.delivaryMethod,
+                COALESCE(o.deliveryCharge, 0) AS deliveryCharge,
                 o.sheduleTime,
                 o.sheduleType,
                 po.id AS processOrderId,
@@ -49,6 +50,7 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
 
             try {
                 // 2. Fetch packages for this process order (orderpackage)
+                // orderpackage.orderId references processorders.id
                 const packagesSql = `
                     SELECT 
                         op.id AS orderPackageId,
@@ -68,11 +70,11 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                         (mp.productPrice + mp.packingFee + mp.serviceFee) AS packageTotalUnit
                     FROM orderpackage op
                     INNER JOIN marketplacepackages mp ON op.packageId = mp.id
-                    WHERE op.orderId = ? OR op.orderId = ?
+                    WHERE op.orderId = ?
                 `;
 
                 const packages = await new Promise((res, rej) => {
-                    db.collectionofficer.query(packagesSql, [processOrderId, actualOrderId], (e, r) => e ? rej(e) : res(r || []));
+                    db.collectionofficer.query(packagesSql, [processOrderId], (e, r) => e ? rej(e) : res(r || []));
                 });
 
                 if (packages.length === 0) {
@@ -145,10 +147,13 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
 
 
                 // 5. Fetch additional items (orderadditionalitems)
+                // Use proOrderId (the specific processorders.id) for precise matching.
+                // Falling back to orderId only when proOrderId is NULL (legacy rows).
                 const additionalSql = `
                     SELECT 
                         oai.id,
                         oai.orderId,
+                        oai.proOrderId,
                         oai.productId,
                         oai.qty,
                         oai.unit,
@@ -160,13 +165,14 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                     FROM orderadditionalitems oai
                     LEFT JOIN marketplaceitems mi ON oai.productId = mi.id
                     LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-                    WHERE oai.orderId = ? OR oai.orderId = ?
+                    WHERE oai.proOrderId = ?
+                      OR (oai.proOrderId IS NULL AND oai.orderId = ?)
                 `;
 
                 const [items, baselineItems, additionalItems] = await Promise.all([
                     new Promise((res, rej) => db.collectionofficer.query(itemsSql, orderPackageIds, (e, r) => e ? rej(e) : res(r || []))),
                     new Promise((res, rej) => db.collectionofficer.query(baselineSql, orderPackageIds, (e, r) => e ? rej(e) : res(r || []))),
-                    new Promise((res, rej) => db.collectionofficer.query(additionalSql, [actualOrderId, processOrderId], (e, r) => e ? rej(e) : res(r || []))),
+                    new Promise((res, rej) => db.collectionofficer.query(additionalSql, [processOrderId, actualOrderId], (e, r) => e ? rej(e) : res(r || []))),
                 ]);
 
                 // Assemble packages with nested items and baselines
@@ -521,18 +527,60 @@ exports.confirmPackageReviewDao = ({
                         console.log(`[confirmPackageReviewDao] Schedule date updated:`, scheduleRes.affectedRows, "row(s)");
                     }
 
-                    // 5. Adjust processorders amount if delta > 0
-                    if (additionalAmount > 0 && processOrderId) {
-                        console.log(`[confirmPackageReviewDao] Updating processorders amount (+${additionalAmount}) for processOrderId: ${processOrderId}`);
-                        const updateAmountSql = `
-                            UPDATE processorders 
-                            SET amount = amount + ? 
-                            WHERE id = ?
-                        `;
-                        const amountRes = await new Promise((res, rej) => {
-                            connection.query(updateAmountSql, [parseFloat(additionalAmount), processOrderId], (e, r) => e ? rej(e) : res(r));
+                    // 5. Adjust totals for every order when additionalAmount > 0
+                    if (additionalAmount > 0) {
+                        const parsedAddAmount = parseFloat(additionalAmount);
+
+                        let targetProcessOrderId = processOrderId;
+                        let targetOrderId = orderId;
+
+                        const [orderCheckRows] = await new Promise((res, rej) => {
+                            connection.query(
+                                "SELECT id, orderId FROM processorders WHERE id = ? OR orderId = ? LIMIT 1",
+                                [processOrderId || 0, orderId || 0],
+                                (e, r) => e ? rej(e) : res([r])
+                            );
                         });
-                        console.log(`[confirmPackageReviewDao] Amount updated:`, amountRes.affectedRows, "row(s)");
+
+                        if (orderCheckRows && orderCheckRows.length > 0) {
+                            if (!targetProcessOrderId) targetProcessOrderId = orderCheckRows[0].id;
+                            if (!targetOrderId) targetOrderId = orderCheckRows[0].orderId;
+                        }
+
+                        // 5a. Update processorders: amount and moneyPaid
+                        if (targetProcessOrderId) {
+                            console.log(`[confirmPackageReviewDao] Updating processorders (amount +${parsedAddAmount}, moneyPaid +${parsedAddAmount}) for processOrderId: ${targetProcessOrderId}`);
+                            const updateProcessOrderSql = `
+                                UPDATE processorders 
+                                SET amount = amount + ?, moneyPaid = moneyPaid + ? 
+                                WHERE id = ?
+                            `;
+                            const processRes = await new Promise((res, rej) => {
+                                connection.query(updateProcessOrderSql, [parsedAddAmount, parsedAddAmount, targetProcessOrderId], (e, r) => e ? rej(e) : res(r));
+                            });
+                            console.log(`[confirmPackageReviewDao] processorders amount & moneyPaid updated:`, processRes.affectedRows, "row(s)");
+                        }
+
+                        // 5b. Update orders: total, fullTotal, discount
+                        if (targetOrderId) {
+                            console.log(`[confirmPackageReviewDao] Updating orders table (total +${parsedAddAmount}, fullTotal +${parsedAddAmount}) for orderId: ${targetOrderId}`);
+                            const updateCashOrderSql = `
+                                UPDATE orders
+                                SET
+                                    total     = total + ?,
+                                    fullTotal = fullTotal + ?,
+                                    discount  = GREATEST(0, fullTotal + ? - (total + ?))
+                                WHERE id = ?
+                            `;
+                            const cashRes = await new Promise((res, rej) => {
+                                connection.query(
+                                    updateCashOrderSql,
+                                    [parsedAddAmount, parsedAddAmount, parsedAddAmount, parsedAddAmount, targetOrderId],
+                                    (e, r) => e ? rej(e) : res(r)
+                                );
+                            });
+                            console.log(`[confirmPackageReviewDao] orders total/fullTotal updated:`, cashRes.affectedRows, "row(s)");
+                        }
                     }
 
                     connection.commit((commitErr) => {

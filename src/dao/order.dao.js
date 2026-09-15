@@ -754,6 +754,8 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
             const processOrderId = poRows?.[0]?.id || orderId;
             const actualOrderId = poRows?.[0]?.orderId || orderId;
 
+            // Select the raw fee components separately so we can log/inspect them,
+            // instead of only ever seeing the pre-summed total.
             const packagesSql = `
               SELECT 
                 op.id AS orderPackageId,
@@ -762,6 +764,9 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
                 op.qty AS packageQty,
                 mp.displayName,
                 mp.image AS packageImage,
+                mp.productPrice AS rawProductPrice,
+                mp.packingFee AS rawPackingFee,
+                mp.serviceFee AS rawServiceFee,
                 (mp.productPrice + mp.packingFee + mp.serviceFee) AS productPrice
               FROM orderpackage op
               JOIN marketplacepackages mp ON op.packageId = mp.id
@@ -778,9 +783,27 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
                     return resolve([]);
                 }
 
+                // Defensive check: flag any package whose price components look
+                // suspicious (null, zero, or suspiciously uniform) so it shows up
+                // in server logs instead of silently reaching the client.
+                packRows.forEach((p) => {
+                    const rawProduct = parseFloat(p.rawProductPrice);
+                    const rawPacking = parseFloat(p.rawPackingFee);
+                    const rawService = parseFloat(p.rawServiceFee);
+                    if (
+                        Number.isNaN(rawProduct) || Number.isNaN(rawPacking) || Number.isNaN(rawService) ||
+                        (rawProduct === 0 && rawPacking === 0 && rawService === 0)
+                    ) {
+                        console.warn(
+                            `[getOrderPackageDetailsDao] Suspicious fee data for packageId=${p.packageId} ` +
+                            `(orderPackageId=${p.orderPackageId}): productPrice=${p.rawProductPrice}, ` +
+                            `packingFee=${p.rawPackingFee}, serviceFee=${p.rawServiceFee}`
+                        );
+                    }
+                });
+
                 const opIds = packRows.map(p => p.orderPackageId);
 
-                // Fetch items using orderpackageitems ordered as requested
                 const itemsSql = `
                   SELECT 
                     opi.id,
@@ -821,7 +844,6 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
                         });
                     });
 
-                    // Check if any package needs fallback to packagedetails
                     const fallbackPackIds = packRows
                         .filter(p => !itemsByPackId[p.orderPackageId] || itemsByPackId[p.orderPackageId].length === 0)
                         .map(p => p.packageId);
