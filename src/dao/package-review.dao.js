@@ -581,29 +581,18 @@ exports.confirmPackageReviewDao = ({
 
                     // 5a. If Card payment - update processorders (amount and moneyPaid)
                     if (isCard && targetProcessOrderId && parsedNewTotal != null) {
-                        if (parsedAdditional > 0) {
-                            console.log(`[confirmPackageReviewDao] CARD: Updating processorders (amount=${parsedNewTotal}, moneyPaid +${parsedAdditional}) for processOrderId: ${targetProcessOrderId}`);
-                            const updateProcessSql = `
-                                UPDATE processorders
-                                SET amount = ?, moneyPaid = moneyPaid + ?
-                                WHERE id = ?
-                            `;
-                            const processRes = await new Promise((res, rej) => {
-                                connection.query(updateProcessSql, [parsedNewTotal, parsedAdditional, targetProcessOrderId], (e, r) => (e ? rej(e) : res(r)));
-                            });
-                            console.log(`[confirmPackageReviewDao] processorders updated (card + additional):`, processRes.affectedRows, "row(s)");
-                        } else {
-                            console.log(`[confirmPackageReviewDao] CARD: Updating processorders (amount=${parsedNewTotal}) for processOrderId: ${targetProcessOrderId}`);
-                            const updateProcessSql = `
-                                UPDATE processorders
-                                SET amount = ?
-                                WHERE id = ?
-                            `;
-                            const processRes = await new Promise((res, rej) => {
-                                connection.query(updateProcessSql, [parsedNewTotal, targetProcessOrderId], (e, r) => (e ? rej(e) : res(r)));
-                            });
-                            console.log(`[confirmPackageReviewDao] processorders updated (card amount):`, processRes.affectedRows, "row(s)");
-                        }
+                        const targetCreditPaid = parseFloat(matchedOrder?.creditPaid) || 0;
+                        const newMoneyPaid = Math.max(0, parsedNewTotal - targetCreditPaid);
+                        console.log(`[confirmPackageReviewDao] CARD: Updating processorders (amount=${parsedNewTotal}, moneyPaid=${newMoneyPaid}) for processOrderId: ${targetProcessOrderId}`);
+                        const updateProcessSql = `
+                            UPDATE processorders
+                            SET amount = ?, moneyPaid = ?
+                            WHERE id = ?
+                        `;
+                        const processRes = await new Promise((res, rej) => {
+                            connection.query(updateProcessSql, [parsedNewTotal, newMoneyPaid, targetProcessOrderId], (e, r) => (e ? rej(e) : res(r)));
+                        });
+                        console.log(`[confirmPackageReviewDao] processorders updated (card amount & moneyPaid):`, processRes.affectedRows, "row(s)");
                     }
 
                     // 5b. Update orders table (total, fullTotal, discount) - for both Card and Cash
