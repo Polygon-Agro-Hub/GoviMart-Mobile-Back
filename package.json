@@ -1,16 +1,16 @@
 {
-  "name": "govimart-mobile-api",
+  "name": "polygon-mobile-api",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
     "test": "jest",
-    "start": "node api/index.js",
+    "start": "node src/api/index.js",
     "dev": "nodemon server.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "GoviMart Mobile API backend service",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.955.0",
     "bcrypt": "^6.0.0",
@@ -23,7 +23,8 @@
     "multer": "^2.0.2",
     "mysql2": "^3.15.3",
     "nodemailer": "^9.0.3",
-    "nodemon": "^3.1.11",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.3",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
     "uuid": "^8.3.2"
@@ -31,6 +32,7 @@
   "devDependencies": {
     "@types/supertest": "^7.2.0",
     "jest": "^30.3.0",
+    "nodemon": "^3.1.11",
     "supertest": "^6.3.4"
   }
 }
