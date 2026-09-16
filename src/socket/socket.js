@@ -102,6 +102,12 @@ const initSocket = (httpServer) => {
       }
     });
 
+    socket.on("send_test_notification", (data) => {
+      if (data && data.userId && data.notification) {
+        emitNotificationToUser(data.userId, data.notification);
+      }
+    });
+
     socket.on("disconnect", (reason) => {
       console.log(`🔌 [Socket] Client disconnected: ${socket.id}, reason: ${reason}`);
     });
