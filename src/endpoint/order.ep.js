@@ -384,7 +384,9 @@ exports.createOrder = asyncHandler(async (req, res) => {
         const pPrice = (p.discountedPrice != null && p.discountedPrice !== "" && !isNaN(Number(p.discountedPrice)) && Number(p.discountedPrice) > 0)
             ? Number(p.discountedPrice)
             : Number(p.normalPrice || 0);
-        calculatedItemsTotal += pPrice * pQty;
+        const pUnit = (p.unit || p.unitType || "g").toLowerCase();
+        const weightMultiplier = pUnit === "kg" ? pQty : pQty / 1000;
+        calculatedItemsTotal += pPrice * weightMultiplier;
     }
     for (const pkg of cartPackages) {
         const pkgQty = parseFloat(pkg.quantity) || 0;
