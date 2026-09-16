@@ -14,7 +14,7 @@ const app = express();
 const BASE_PATH = "/polygon";
 
 const corsOptions = {
-  origin: process.env.CLIENT_ORIGIN || "http://localhost:8081",
+  origin: process.env.CLIENT_ORIGIN || "*",
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true,
 };

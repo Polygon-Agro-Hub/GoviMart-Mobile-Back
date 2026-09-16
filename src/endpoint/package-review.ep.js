@@ -114,7 +114,18 @@ exports.resetPackageItem = asyncHandler(async (req, res) => {
  */
 exports.confirmPackageReview = asyncHandler(async (req, res) => {
     const { userId } = req.user;
-    const { orderId, processOrderId, lockNow = false, additionalAmount = 0, newScheduleDate = null, replacements = [], additionalItems = [] } = req.body;
+    const {
+        orderId,
+        processOrderId,
+        lockNow = false,
+        additionalAmount = 0,
+        newScheduleDate = null,
+        paymentMethod = null,
+        newTotal = null,
+        creditToAdd = 0,
+        replacements = [],
+        additionalItems = [],
+    } = req.body;
 
     console.log("[confirmPackageReview Endpoint] Received request by userId:", userId, "body:", JSON.stringify(req.body, null, 2));
 
@@ -133,6 +144,9 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
             lockNow,
             additionalAmount,
             newScheduleDate,
+            paymentMethod,
+            newTotal,
+            creditToAdd,
             replacements,
             additionalItems,
         });
