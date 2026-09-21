@@ -553,6 +553,7 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
 
     // Apply the rest of the edited account details (name, email, company, etc.)
     if (accountDetails && typeof accountDetails === "object") {
+      accountDetails.title = accountDetails.title || "Mr";
       await customerDao.updateUserDetailsDao(userId, accountDetails);
     }
 

@@ -69,18 +69,33 @@ exports.getUserCart = asyncHandler(async (req, res) => {
       minWeight = parseFloat((rawStartVal / 1000).toFixed(3));
     }
 
+    const rawChangeBy = parseFloat(prod.changeby) > 0
+      ? parseFloat(prod.changeby)
+      : (parseFloat(prod.startValue) > 0 ? parseFloat(prod.startValue) : (dbUnitType === "kg" ? 0.5 : 100));
+
+    let stepVal = rawChangeBy;
+    if (rawChangeBy < 1 && currentUnit === "g") {
+      stepVal = Math.round(rawChangeBy * 1000);
+    } else if (dbUnitType === "kg" && currentUnit === "g") {
+      stepVal = Math.round(rawChangeBy * 1000);
+    } else if (dbUnitType === "g" && currentUnit === "kg") {
+      stepVal = parseFloat((rawChangeBy / 1000).toFixed(3));
+    }
+
     const currentWeight = parseFloat(prod.quantity) || minWeight;
 
     return {
       id: prod.productId,
       name: prod.name,
       image: prod.image,
-      price: parseFloat(prod.discountedPrice || prod.normalPrice) || 0,
+      price: parseFloat(prod.normalPrice) || 0,
       normalPrice: parseFloat(prod.normalPrice) || 0,
+      discountedPrice: parseFloat(prod.discountedPrice) || 0,
+      comPrice: parseFloat(prod.comPrice) || 0,
       weight: currentWeight,
       unit: currentUnit,
       minimumWeight: minWeight,
-      step: currentUnit === "kg" ? 0.5 : (minWeight >= 500 ? 500 : 100),
+      step: stepVal,
       isUnavailable: prod.isEnable !== 1,
     };
   });

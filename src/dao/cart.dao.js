@@ -41,6 +41,7 @@ exports.getCartProductsDao = (cartId) => {
         mi.displayName AS name,
         mi.normalPrice,
         mi.discountedPrice,
+        mi.comPrice,
         mi.startValue,
         mi.changeby,
         mi.unitType,

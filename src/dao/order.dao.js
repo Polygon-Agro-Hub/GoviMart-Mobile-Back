@@ -1039,10 +1039,15 @@ exports.getUserCartTotalDao = (userId, cartId) => {
  */
 const formatBillingInfo = (info) => {
     if (!info) return {};
+    const rawCode = String(info.phoneCode1 || "94").replace(/^\++/, "");
+    const cleanPhone = String(info.phone1 || "").trim().replace(/^\++/, "");
+    const formattedPhone = cleanPhone
+        ? (cleanPhone.startsWith(rawCode) ? `+${cleanPhone}` : `+${rawCode} ${cleanPhone.startsWith("0") ? cleanPhone.slice(1) : cleanPhone}`)
+        : "N/A";
     return {
         title: info.title || "",
         fullName: info.fullName || "",
-        phone: info.phone1 ? `+${info.phoneCode1 || "94"} ${info.phone1}` : "N/A",
+        phone: formattedPhone,
         email: info.email || "N/A",
         buildingType: info.buildingType || "House",
         houseNo: info.houseNo || "N/A",
