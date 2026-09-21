@@ -58,15 +58,21 @@ exports.getUserCart = asyncHandler(async (req, res) => {
   const formattedProducts = products.map((prod) => {
     const rawStartVal = parseFloat(prod.startValue) || 1;
     const dbUnitType = (prod.unitType || "g").toLowerCase();
-    const currentUnit = (prod.unit || dbUnitType).toLowerCase();
+    const currentUnit = (prod.unit || (dbUnitType === "kg" && rawStartVal < 1 ? "g" : dbUnitType)).toLowerCase();
 
     let minWeight = rawStartVal;
-    if (rawStartVal < 1 && currentUnit === "g") {
-      minWeight = Math.round(rawStartVal * 1000);
-    } else if (dbUnitType === "kg" && currentUnit === "g") {
-      minWeight = Math.round(rawStartVal * 1000);
-    } else if (dbUnitType === "g" && currentUnit === "kg") {
-      minWeight = parseFloat((rawStartVal / 1000).toFixed(3));
+    if (currentUnit === "g") {
+      if (dbUnitType === "kg") {
+        minWeight = Math.round(rawStartVal * 1000);
+      } else {
+        minWeight = rawStartVal < 1 ? Math.round(rawStartVal * 1000) : Math.round(rawStartVal);
+      }
+    } else {
+      if (dbUnitType === "kg") {
+        minWeight = rawStartVal;
+      } else {
+        minWeight = rawStartVal < 1 ? rawStartVal : parseFloat((rawStartVal / 1000).toFixed(3));
+      }
     }
 
     const rawChangeBy = parseFloat(prod.changeby) > 0
@@ -74,12 +80,18 @@ exports.getUserCart = asyncHandler(async (req, res) => {
       : (parseFloat(prod.startValue) > 0 ? parseFloat(prod.startValue) : (dbUnitType === "kg" ? 0.5 : 100));
 
     let stepVal = rawChangeBy;
-    if (rawChangeBy < 1 && currentUnit === "g") {
-      stepVal = Math.round(rawChangeBy * 1000);
-    } else if (dbUnitType === "kg" && currentUnit === "g") {
-      stepVal = Math.round(rawChangeBy * 1000);
-    } else if (dbUnitType === "g" && currentUnit === "kg") {
-      stepVal = parseFloat((rawChangeBy / 1000).toFixed(3));
+    if (currentUnit === "g") {
+      if (dbUnitType === "kg") {
+        stepVal = Math.round(rawChangeBy * 1000);
+      } else {
+        stepVal = rawChangeBy < 1 ? Math.round(rawChangeBy * 1000) : Math.round(rawChangeBy);
+      }
+    } else {
+      if (dbUnitType === "kg") {
+        stepVal = rawChangeBy;
+      } else {
+        stepVal = rawChangeBy < 1 ? rawChangeBy : parseFloat((rawChangeBy / 1000).toFixed(3));
+      }
     }
 
     const currentWeight = parseFloat(prod.quantity) || minWeight;

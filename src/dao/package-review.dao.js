@@ -133,6 +133,8 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                         mi.displayName AS productName,
                         mi.normalPrice AS baseUnitPrice,
                         mi.unitType,
+                        mi.startValue,
+                        mi.changeby AS step,
                         cv.image AS productImage,
                         pt.typeName AS productTypeName,
                         pt.shortCode AS productTypeShortCode,
@@ -161,6 +163,9 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                         oai.price,
                         oai.discount,
                         mi.displayName AS productName,
+                        mi.unitType,
+                        mi.startValue,
+                        mi.changeby,
                         cv.image AS productImage
                     FROM orderadditionalitems oai
                     LEFT JOIN marketplaceitems mi ON oai.productId = mi.id
