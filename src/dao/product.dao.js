@@ -28,6 +28,7 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
       JOIN plant_care.cropvariety v ON m.varietyId = v.id
       JOIN plant_care.cropgroup c ON v.cropGroupId = c.id
       WHERE LOWER(m.category) = LOWER(?)
+        AND m.isEnable = 1
     `;
 
     const params = [buyerType || "Retail"];
@@ -106,7 +107,7 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
 exports.getAllSlidesDao = () => {
   return new Promise((resolve, reject) => {
     db.collectionofficer.query(
-      "SELECT * FROM banners  ORDER BY createdAt DESC",
+      "SELECT * FROM banners ORDER BY COALESCE(indexId, 999999) ASC, createdAt DESC",
       (err, results) => {
         if (err) return reject(err);
         resolve(results);

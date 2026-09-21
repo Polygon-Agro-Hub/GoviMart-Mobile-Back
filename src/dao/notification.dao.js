@@ -43,17 +43,20 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
         let msg = row.message || "";
         const returnReason = row.returnReason;
         const returnNote = row.returnNote;
-        if (returnReason && (returnReason.toLowerCase() === "other" || returnNote)) {
-          const effectiveReason =
-            returnReason.toLowerCase() === "other" && returnNote
-              ? returnNote
-              : returnNote || returnReason;
-          if (effectiveReason) {
-            msg = msg.replace(/Reason\s*:\s*[“"']Other[”"']/gi, `Reason : “${effectiveReason}”`);
-          }
+        const effectiveReason =
+          returnReason && returnReason.toLowerCase() === "other" && returnNote
+            ? returnNote
+            : returnNote || (returnReason && returnReason.toLowerCase() !== "other" ? returnReason : "");
+
+        if (effectiveReason) {
+          msg = msg.replace(
+            /Reason\s*:\s*[“"'\`\u201C\u201D\u2018\u2019]?Other[”"'\`\u201C\u201D\u2018\u2019]?/gi,
+            `Reason : “${effectiveReason}”`
+          );
         }
         return {
           ...row,
+          returnReason: effectiveReason || returnReason,
           message: msg,
         };
       });
@@ -191,17 +194,19 @@ exports.createNotificationDao = ({ orderId, title, message }) => {
         }
 
         const notifData = rows[0];
-        if (notifData.returnReason && (notifData.returnReason.toLowerCase() === "other" || notifData.returnNote)) {
-          const effectiveReason =
-            notifData.returnReason.toLowerCase() === "other" && notifData.returnNote
-              ? notifData.returnNote
-              : notifData.returnNote || notifData.returnReason;
-          if (effectiveReason) {
-            notifData.message = notifData.message.replace(
-              /Reason\s*:\s*[“"']Other[”"']/gi,
-              `Reason : “${effectiveReason}”`
-            );
-          }
+        const returnReason = notifData.returnReason;
+        const returnNote = notifData.returnNote;
+        const effectiveReason =
+          returnReason && returnReason.toLowerCase() === "other" && returnNote
+            ? returnNote
+            : returnNote || (returnReason && returnReason.toLowerCase() !== "other" ? returnReason : "");
+
+        if (effectiveReason) {
+          notifData.message = notifData.message.replace(
+            /Reason\s*:\s*[“"'\`\u201C\u201D\u2018\u2019]?Other[”"'\`\u201C\u201D\u2018\u2019]?/gi,
+            `Reason : “${effectiveReason}”`
+          );
+          notifData.returnReason = effectiveReason;
         }
 
         // Emit in real-time via Socket.IO

@@ -642,6 +642,9 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
             if (!orders || orders.length === 0) return reject("Order not found or unauthorized");
 
             const order = orders[0];
+            if (order.returnReason && order.returnReason.toLowerCase() === "other" && order.returnNote) {
+                order.returnReason = order.returnNote;
+            }
 
             // Attach hold history and then resolve
             const resolveWithHolds = (finalOrder) => {
