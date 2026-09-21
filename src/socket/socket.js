@@ -143,9 +143,22 @@ const emitCityAvailabilityUpdate = (citiesData) => {
   return true;
 };
 
+const emitUnreadCountToUser = (userId, unreadCount) => {
+  if (!io) {
+    console.warn("[Socket] IO not initialized, cannot emit unread count");
+    return false;
+  }
+
+  const room = `user_${userId}`;
+  io.to(room).emit("notification_unread_count", { unreadCount: Number(unreadCount) || 0 });
+  console.log(`🔢 [Socket] Emitted notification_unread_count (${unreadCount}) to ${room}`);
+  return true;
+};
+
 module.exports = {
   initSocket,
   getIO,
   emitNotificationToUser,
+  emitUnreadCountToUser,
   emitCityAvailabilityUpdate,
 };

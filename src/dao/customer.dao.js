@@ -244,14 +244,8 @@ exports.addAddressDao = async (customerId, addressData) => {
   const {
     buildingType,
     saveAs,
-    title,
-    fullName,
-    phonecode1,
-    phone1,
-    phonecode2,
-    phone2,
-    longitude,
     latitude,
+    longitude,
     buildingNo,
     buildingName,
     unitNo,
@@ -259,7 +253,38 @@ exports.addAddressDao = async (customerId, addressData) => {
     houseNo,
     streetName,
     city,
+    nearestCity,
   } = addressData;
+
+  const billingTitle = addressData.billingTitle || addressData.title || null;
+  const billingName = addressData.billingName || addressData.fullName || null;
+  const phonecode1 = addressData.billingPhoneCode1 || addressData.phonecode1 || "+94";
+  const phone1 = addressData.billingPhone1 || addressData.phone1 || null;
+  const phonecode2 = addressData.billingPhoneCode2 || addressData.phonecode2 || "+94";
+  const phone2 = addressData.billingPhone2 || addressData.phone2 || null;
+  const resolvedHouseNo = houseNo || buildingNo || null;
+  const resolvedCity = city || nearestCity || null;
+
+  // 1. Check for duplicate saveAs across both tables for this customer
+  const [[hDup]] = await db.collectionofficer
+    .promise()
+    .query(
+      `SELECT id FROM house WHERE customerId = ? AND LOWER(saveAs) = LOWER(?) LIMIT 1`,
+      [customerId, saveAs]
+    );
+  const [[aDup]] = await db.collectionofficer
+    .promise()
+    .query(
+      `SELECT id FROM apartment WHERE customerId = ? AND LOWER(saveAs) = LOWER(?) LIMIT 1`,
+      [customerId, saveAs]
+    );
+  if (hDup || aDup) {
+    const err = new Error(
+      `An address named "${saveAs}" already exists for this customer.`
+    );
+    err.code = "DUPLICATE_SAVE_AS";
+    throw err;
+  }
 
   if (buildingType === "Apartment") {
     const query = `
@@ -275,21 +300,21 @@ exports.addAddressDao = async (customerId, addressData) => {
       .query(query, [
         customerId,
         saveAs,
-        title,
-        fullName,
+        billingTitle,
+        billingName,
         phonecode1,
         phone1,
         phonecode2,
         phone2,
-        longitude,
-        latitude,
-        buildingNo,
-        buildingName,
-        unitNo,
-        floorNo,
-        houseNo,
-        streetName,
-        city,
+        longitude || null,
+        latitude || null,
+        buildingNo || null,
+        buildingName || null,
+        unitNo || null,
+        floorNo || null,
+        resolvedHouseNo,
+        streetName || null,
+        resolvedCity,
       ]);
     return { insertId: result.insertId, buildingType };
   }
@@ -307,17 +332,17 @@ exports.addAddressDao = async (customerId, addressData) => {
     .query(query, [
       customerId,
       saveAs,
-      title,
-      fullName,
+      billingTitle,
+      billingName,
       phonecode1,
       phone1,
       phonecode2,
       phone2,
-      longitude,
-      latitude,
-      houseNo,
-      streetName,
-      city,
+      longitude || null,
+      latitude || null,
+      resolvedHouseNo,
+      streetName || null,
+      resolvedCity,
     ]);
   return { insertId: result.insertId, buildingType };
 };
@@ -326,14 +351,8 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
   const {
     buildingType,
     saveAs,
-    title,
-    fullName,
-    phonecode1,
-    phone1,
-    phonecode2,
-    phone2,
-    longitude,
     latitude,
+    longitude,
     buildingNo,
     buildingName,
     unitNo,
@@ -341,7 +360,38 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
     houseNo,
     streetName,
     city,
+    nearestCity,
   } = addressData;
+
+  const billingTitle = addressData.billingTitle || addressData.title || null;
+  const billingName = addressData.billingName || addressData.fullName || null;
+  const phonecode1 = addressData.billingPhoneCode1 || addressData.phonecode1 || "+94";
+  const phone1 = addressData.billingPhone1 || addressData.phone1 || null;
+  const phonecode2 = addressData.billingPhoneCode2 || addressData.phonecode2 || "+94";
+  const phone2 = addressData.billingPhone2 || addressData.phone2 || null;
+  const resolvedHouseNo = houseNo || buildingNo || null;
+  const resolvedCity = city || nearestCity || null;
+
+  // Check for duplicate saveAs across both tables excluding this address
+  const [[hDup]] = await db.collectionofficer
+    .promise()
+    .query(
+      `SELECT id FROM house WHERE customerId = ? AND LOWER(saveAs) = LOWER(?) AND (id != ? OR ? != 'House') LIMIT 1`,
+      [customerId, saveAs, addressId, buildingType]
+    );
+  const [[aDup]] = await db.collectionofficer
+    .promise()
+    .query(
+      `SELECT id FROM apartment WHERE customerId = ? AND LOWER(saveAs) = LOWER(?) AND (id != ? OR ? != 'Apartment') LIMIT 1`,
+      [customerId, saveAs, addressId, buildingType]
+    );
+  if (hDup || aDup) {
+    const err = new Error(
+      `An address named "${saveAs}" already exists for this customer.`
+    );
+    err.code = "DUPLICATE_SAVE_AS";
+    throw err;
+  }
 
   if (buildingType === "Apartment") {
     const query = `
@@ -356,21 +406,21 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
       .promise()
       .query(query, [
         saveAs,
-        title,
-        fullName,
+        billingTitle,
+        billingName,
         phonecode1,
         phone1,
         phonecode2,
         phone2,
-        longitude,
-        latitude,
-        buildingNo,
-        buildingName,
-        unitNo,
-        floorNo,
-        houseNo,
-        streetName,
-        city,
+        longitude || null,
+        latitude || null,
+        buildingNo || null,
+        buildingName || null,
+        unitNo || null,
+        floorNo || null,
+        resolvedHouseNo,
+        streetName || null,
+        resolvedCity,
         addressId,
         customerId,
       ]);
@@ -389,17 +439,17 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
     .promise()
     .query(query, [
       saveAs,
-      title,
-      fullName,
+      billingTitle,
+      billingName,
       phonecode1,
       phone1,
       phonecode2,
       phone2,
-      longitude,
-      latitude,
-      houseNo,
-      streetName,
-      city,
+      longitude || null,
+      latitude || null,
+      resolvedHouseNo,
+      streetName || null,
+      resolvedCity,
       addressId,
       customerId,
     ]);
