@@ -60,40 +60,21 @@ exports.getUserCart = asyncHandler(async (req, res) => {
     const dbUnitType = (prod.unitType || "g").toLowerCase();
     const currentUnit = (prod.unit || (dbUnitType === "kg" && rawStartVal < 1 ? "g" : dbUnitType)).toLowerCase();
 
-    let minWeight = rawStartVal;
-    if (currentUnit === "g") {
-      if (dbUnitType === "kg") {
-        minWeight = Math.round(rawStartVal * 1000);
-      } else {
-        minWeight = rawStartVal < 1 ? Math.round(rawStartVal * 1000) : Math.round(rawStartVal);
-      }
-    } else {
-      if (dbUnitType === "kg") {
-        minWeight = rawStartVal;
-      } else {
-        minWeight = rawStartVal < 1 ? rawStartVal : parseFloat((rawStartVal / 1000).toFixed(3));
-      }
-    }
-
     const rawChangeBy = parseFloat(prod.changeby) > 0
       ? parseFloat(prod.changeby)
-      : (parseFloat(prod.startValue) > 0 ? parseFloat(prod.startValue) : (dbUnitType === "kg" ? 0.5 : 100));
+      : (parseFloat(prod.startValue) > 0 ? parseFloat(prod.startValue) : (dbUnitType === "kg" ? 0.5 : 500));
 
-    let stepVal = rawChangeBy;
-    if (currentUnit === "g") {
-      if (dbUnitType === "kg") {
-        stepVal = Math.round(rawChangeBy * 1000);
+    // Convert value according to unit
+    const convertVal = (val, isG) => {
+      if (isG) {
+        return (dbUnitType === "kg" || val <= 10) ? Math.round(val * 1000) : Math.round(val);
       } else {
-        stepVal = rawChangeBy < 1 ? Math.round(rawChangeBy * 1000) : Math.round(rawChangeBy);
+        return (dbUnitType === "kg" || val <= 10) ? parseFloat(val.toFixed(3)) : parseFloat((val / 1000).toFixed(3));
       }
-    } else {
-      if (dbUnitType === "kg") {
-        stepVal = rawChangeBy;
-      } else {
-        stepVal = rawChangeBy < 1 ? rawChangeBy : parseFloat((rawChangeBy / 1000).toFixed(3));
-      }
-    }
+    };
 
+    const minWeight = convertVal(rawStartVal, currentUnit === "g");
+    const stepVal = convertVal(rawChangeBy, currentUnit === "g");
     const currentWeight = parseFloat(prod.quantity) || minWeight;
 
     return {
