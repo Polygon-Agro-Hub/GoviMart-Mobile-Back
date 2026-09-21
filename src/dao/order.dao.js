@@ -976,7 +976,9 @@ exports.getAvailableCouponsDao = () => {
             SELECT 
                 id, code, type, percentage, status, checkLimit, priceLimit, fixDiscount, startDate, endDate, createdAt
             FROM coupon
-            WHERE status = 'Enabled' OR status = 'Active'
+            WHERE (LOWER(status) = 'enabled' OR LOWER(status) = 'active')
+              AND (startDate IS NULL OR DATE(startDate) <= CURDATE())
+              AND (endDate IS NULL OR DATE(endDate) >= CURDATE())
             ORDER BY id DESC
         `;
         db.collectionofficer.query(sql, (err, results) => {
@@ -1050,6 +1052,28 @@ const formatBillingInfo = (info) => {
     };
 };
 
+const getDeliveryChargeDao = (isPickup, hasDeliveryItems, city, isFreeDelivery = false, fallbackCharge = 0) => {
+    return new Promise((resolve) => {
+        if (isFreeDelivery || isPickup || !hasDeliveryItems) {
+            return resolve("0.00");
+        }
+        if (fallbackCharge && parseFloat(fallbackCharge) > 0) {
+            return resolve(parseFloat(fallbackCharge).toFixed(2));
+        }
+        if (!city || city === "N/A") {
+            return resolve("50.00");
+        }
+        const deliveryChargeQuery = `SELECT charge FROM deliverycharge WHERE LOWER(city) LIKE LOWER(?)`;
+        db.collectionofficer.query(deliveryChargeQuery, [`%${city}%`], (err, chargeResult) => {
+            if (err || !chargeResult || chargeResult.length === 0) {
+                return resolve("50.00");
+            }
+            const charge = parseFloat(chargeResult[0].charge || 50.00).toFixed(2);
+            resolve(charge);
+        });
+    });
+};
+
 const getPickupInfoDao = (isPickup, centerId) => {
     return new Promise((resolve) => {
         if (!isPickup || !centerId) return resolve(null);
@@ -1064,15 +1088,15 @@ const getPickupInfoDao = (isPickup, centerId) => {
             const r = rows[0];
             resolve({
                 centerId: String(r.id),
-                centerName: r.name,
-                contact01: r.phone1,
+                centerName: r.name || "Unknown",
+                contact01: r.phone1 || "Not Available",
                 address: {
-                    street: r.street || "N/A",
-                    city: r.city || "N/A",
-                    district: r.district || "N/A",
-                    province: r.province || "N/A",
+                    street: r.street || "",
+                    city: r.city || "",
+                    district: r.district || "",
+                    province: r.province || "",
                     country: r.country || "Sri Lanka",
-                    zipCode: r.zipcode || "N/A",
+                    zipCode: r.zipcode || "",
                 },
             });
         });
@@ -1173,11 +1197,11 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                     oai.id,
                     mi.displayName AS name,
                     oai.unit,
-                    mi.normalPrice AS unitPrice,
+                    COALESCE(mi.normalPrice, mi.normalprice, 0) AS unitPrice,
                     oai.qty AS quantity,
-                    oai.normalPrice AS amount,
+                    COALESCE(oai.normalPrice, oai.normalprice, 0) AS amount,
                     oai.discount AS itemDiscount,
-                    oai.price AS finalPrice,
+                    COALESCE(oai.price, oai.normalPrice, oai.normalprice, 0) AS finalPrice,
                     cv.image AS image
                 FROM orderadditionalitems oai
                 JOIN marketplaceitems mi ON oai.productId = mi.id
@@ -1221,7 +1245,16 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
             ]).then(async ([familyPackItems, additionalItems, billingInfo]) => {
                 const isPickup = (invoice.deliveryMethod || "").toUpperCase() === "PICKUP";
                 const isFreeDeliveryCoupon = invoice.isCoupon && (invoice.couponType === "Free Delivery" || invoice.couponType === "Free Delivary");
-                const deliveryFee = isPickup || isFreeDeliveryCoupon ? "0.00" : (parseFloat(invoice.deliveryCharge || 0).toFixed(2));
+                const hasDeliveryItems = (Array.isArray(familyPackItems) && familyPackItems.length > 0) || (Array.isArray(additionalItems) && additionalItems.length > 0);
+                
+                const deliveryFee = await getDeliveryChargeDao(
+                    isPickup,
+                    hasDeliveryItems,
+                    billingInfo.city,
+                    isFreeDeliveryCoupon,
+                    invoice.deliveryCharge
+                );
+                
                 const pickupInfo = await getPickupInfoDao(isPickup, invoice.centerId);
 
                 const processedFamilyPackItems = [];

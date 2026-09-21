@@ -400,8 +400,9 @@ exports.createOrder = asyncHandler(async (req, res) => {
             String(couponType).toLowerCase().includes("delivery")
         )
     );
+    const finalCouponValue = isFreeDeliveryCoupon ? 0 : (parseFloat(couponValue) || 0);
     const finalDeliveryCharge = isFreeDeliveryCoupon ? 0 : (isHomeDelivery ? (parseFloat(deliveryCharge) || 0) : 0);
-    const finalDiscount = Math.min(parseFloat(discountAmount) || 0, calculatedItemsTotal);
+    const finalDiscount = Math.min((parseFloat(discountAmount) || 0) + finalCouponValue, calculatedItemsTotal);
 
     const calculatedGrandTotal = Math.max(0, parseFloat((calculatedItemsTotal + finalDeliveryCharge - finalDiscount).toFixed(2)));
 
@@ -480,7 +481,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     phonecode2: phoneCode2 || null,
                     phone2: phone2 || null,
                     isCoupon: isCoupon || false,
-                    couponValue: couponValue || 0,
+                    couponValue: finalCouponValue,
                     couponType: couponType || null,
                     total: calculatedGrandTotal,
                     fullTotal: calculatedGrandTotal,
