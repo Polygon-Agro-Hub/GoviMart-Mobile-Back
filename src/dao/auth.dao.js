@@ -77,7 +77,7 @@ exports.loginUser = async (identifier, password) => {
     }
 
     if (!isPasswordValid) {
-      throw new Error("Invalid mobile number/email or password");
+      throw new Error("The password you entered is incorrect.\nPlease check and re-enter.");
     }
 
     return {

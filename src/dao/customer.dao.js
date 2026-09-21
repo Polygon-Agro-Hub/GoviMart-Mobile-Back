@@ -350,6 +350,7 @@ exports.addAddressDao = async (customerId, addressData) => {
 exports.updateAddressDao = async (addressId, customerId, addressData) => {
   const {
     buildingType,
+    originalBuildingType,
     saveAs,
     latitude,
     longitude,
@@ -372,18 +373,27 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
   const resolvedHouseNo = houseNo || buildingNo || null;
   const resolvedCity = city || nearestCity || null;
 
+  // Determine actual current building type in database if not provided
+  let currentType = originalBuildingType;
+  if (!currentType) {
+    const [[houseRow]] = await db.collectionofficer
+      .promise()
+      .query(`SELECT id FROM house WHERE id = ? AND customerId = ? LIMIT 1`, [addressId, customerId]);
+    currentType = houseRow ? "House" : "Apartment";
+  }
+
   // Check for duplicate saveAs across both tables excluding this address
   const [[hDup]] = await db.collectionofficer
     .promise()
     .query(
       `SELECT id FROM house WHERE customerId = ? AND LOWER(saveAs) = LOWER(?) AND (id != ? OR ? != 'House') LIMIT 1`,
-      [customerId, saveAs, addressId, buildingType]
+      [customerId, saveAs, addressId, currentType]
     );
   const [[aDup]] = await db.collectionofficer
     .promise()
     .query(
       `SELECT id FROM apartment WHERE customerId = ? AND LOWER(saveAs) = LOWER(?) AND (id != ? OR ? != 'Apartment') LIMIT 1`,
-      [customerId, saveAs, addressId, buildingType]
+      [customerId, saveAs, addressId, currentType]
     );
   if (hDup || aDup) {
     const err = new Error(
@@ -393,6 +403,79 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
     throw err;
   }
 
+  // Handle switching building type between House <-> Apartment
+  if (currentType !== buildingType) {
+    if (buildingType === "Apartment") {
+      // Switched from House -> Apartment: delete from house, insert into apartment
+      await db.collectionofficer
+        .promise()
+        .query(`DELETE FROM house WHERE id = ? AND customerId = ?`, [addressId, customerId]);
+
+      const insertQuery = `
+        INSERT INTO apartment (
+          customerId, saveAs, billingTitle, billingName,
+          billingPhoneCode1, billingPhone1, billingPhoneCode2, billingPhone2,
+          longitude, latitude, buildingNo, buildingName, unitNo, floorNo,
+          houseNo, streetName, city
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+      const [insertResult] = await db.collectionofficer
+        .promise()
+        .query(insertQuery, [
+          customerId,
+          saveAs,
+          billingTitle,
+          billingName,
+          phonecode1,
+          phone1,
+          phonecode2,
+          phone2,
+          longitude || null,
+          latitude || null,
+          buildingNo || null,
+          buildingName || null,
+          unitNo || null,
+          floorNo || null,
+          resolvedHouseNo,
+          streetName || null,
+          resolvedCity,
+        ]);
+      return { insertId: insertResult.insertId, buildingType: "Apartment", affectedRows: 1 };
+    } else {
+      // Switched from Apartment -> House: delete from apartment, insert into house
+      await db.collectionofficer
+        .promise()
+        .query(`DELETE FROM apartment WHERE id = ? AND customerId = ?`, [addressId, customerId]);
+
+      const insertQuery = `
+        INSERT INTO house (
+          customerId, saveAs, billingTitle, billingName,
+          billingPhoneCode1, billingPhone1, billingPhoneCode2, billingPhone2,
+          longitude, latitude, houseNo, streetName, city
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+      const [insertResult] = await db.collectionofficer
+        .promise()
+        .query(insertQuery, [
+          customerId,
+          saveAs,
+          billingTitle,
+          billingName,
+          phonecode1,
+          phone1,
+          phonecode2,
+          phone2,
+          longitude || null,
+          latitude || null,
+          resolvedHouseNo,
+          streetName || null,
+          resolvedCity,
+        ]);
+      return { insertId: insertResult.insertId, buildingType: "House", affectedRows: 1 };
+    }
+  }
+
+  // Same building type: regular update
   if (buildingType === "Apartment") {
     const query = `
       UPDATE apartment
@@ -504,22 +587,7 @@ exports.updateUserDetailsDao = async (userId, userData) => {
   `;
   const [result] = await db.collectionofficer
     .promise()
-    .query(query, [
-      title,
-      firstName,
-      lastName,
-      phoneCode,
-      phoneNumber,
-      phoneCode2,
-      phoneNumber2,
-      nic,
-      email,
-      companyPhoneCode,
-      companyPhone,
-      companyName,
-      buyerType,
-      userId,
-    ]);
+    .query(query, values);
   return result;
 };
 
