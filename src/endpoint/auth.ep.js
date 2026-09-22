@@ -141,11 +141,19 @@ exports.updateCityAvailability = asyncHandler(async (req, res) => {
   }
 });
 
-const sendEmailOtp = async (email, otp) => {
+const sendEmailOtp = async (email, otp, options = {}) => {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
     console.error("Email SMTP credentials not configured in env");
     throw new Error("Email service not configured.");
   }
+
+  const title = options.title || "Complete Your Polygon Registration";
+  const subject = options.subject || title;
+  const introText = options.introText !== undefined ? options.introText : "Thank you for registering for Polygon.";
+  const actionText = options.actionText || "To verify your email address and complete your registration, please use the following One-Time Password (OTP):";
+  const instructionText = options.instructionText || (options.title && options.title.includes("Password")
+    ? "Enter this OTP on the verification page to reset your password."
+    : "Enter this OTP on the verification page to activate your account.");
 
   const logoPath = path.join(__dirname, "..", "assets", "polygon-logo.png");
   const logoExists = fs.existsSync(logoPath);
@@ -163,6 +171,10 @@ const sendEmailOtp = async (email, otp) => {
 
   const templatePath = path.join(__dirname, "..", "assets", "email-template.html");
   let htmlContent = "";
+  const introSectionHtml = introText && introText.trim().length > 0
+    ? `<p style="margin: 0 0 12px; font-size: 14px; color: #02072C;">${introText}</p>`
+    : "";
+
   if (fs.existsSync(templatePath)) {
     htmlContent = fs.readFileSync(templatePath, "utf8");
 
@@ -172,19 +184,24 @@ const sendEmailOtp = async (email, otp) => {
 
     htmlContent = htmlContent
       .replace("{{logo_placeholder}}", logoHtml)
+      .replace(/{{title}}/g, title)
+      .replace("{{intro_section}}", introSectionHtml)
+      .replace("{{action_text}}", actionText)
+      .replace("{{instruction_text}}", instructionText)
       .replace("{{otp}}", otp)
       .replace("{{year}}", new Date().getFullYear().toString());
   } else {
     // Fallback if template doesn't exist
     htmlContent = `
       <div style="font-family: Arial, sans-serif; padding: 20px;">
-        <h2>Complete Your Polygon Registration</h2>
-        <p>Thank you for registering for Polygon.</p>
-        <p>To verify your email address and complete your registration, please use the following One-Time Password (OTP):</p>
-        <div style="background-color: #EEE8F8; padding: 15px; font-size: 24px; font-weight: bold; letter-spacing: 5px; text-align: center; display: inline-block; border-radius: 6px;">
+        <h2>${title}</h2>
+        ${introSectionHtml}
+        <p>${actionText}</p>
+        <div style="background-color: #FFF5E9; padding: 15px; font-size: 24px; font-weight: bold; letter-spacing: 5px; text-align: center; display: inline-block; border-radius: 6px;">
           ${otp}
         </div>
         <p>This code is valid for <strong>4 minutes</strong>.</p>
+        <p>${instructionText}</p>
       </div>
     `;
   }
@@ -195,9 +212,9 @@ const sendEmailOtp = async (email, otp) => {
       address: process.env.EMAIL_FROM || process.env.EMAIL_USER,
     },
     to: email,
-    subject: "Complete Your Polygon Registration",
+    subject: subject,
     html: htmlContent,
-    text: `Your Polygon OTP is: ${otp}\nThis code is valid for 4 minutes.`,
+    text: `Hello,\n\n${introText ? introText + '\n\n' : ''}${actionText}\n\n${otp}\n\nThis code is valid for 4 minutes.\n${instructionText}`,
   };
 
   if (logoExists) {
@@ -783,6 +800,373 @@ exports.refreshToken = asyncHandler(async (req, res) => {
     return res.status(401).json({
       success: false,
       message: "Invalid or expired refresh token.",
+    });
+  }
+});
+
+// ─── Forgot Password Endpoints ──────────────────────────────────────────────────
+
+// Request OTP for Forgot Password
+exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
+  const { type, email, phoneCode, phoneNumber } = req.body;
+
+  if (!type || (type !== "email" && type !== "sms")) {
+    return res.status(400).json({
+      status: false,
+      message: "Valid reset type ('email' or 'sms') is required.",
+    });
+  }
+
+  try {
+    let user = null;
+
+    if (type === "email") {
+      if (!email || !email.trim()) {
+        return res.status(400).json({
+          status: false,
+          message: "Email address is required.",
+        });
+      }
+      user = await userDao.getUserByEmailDao(email.trim());
+      if (!user) {
+        return res.status(404).json({
+          status: false,
+          message: "No account found with this email address.",
+        });
+      }
+    } else if (type === "sms") {
+      if (!phoneCode || !phoneNumber || !phoneNumber.trim()) {
+        return res.status(400).json({
+          status: false,
+          message: "Country code and mobile number are required.",
+        });
+      }
+
+      if (phoneCode !== "+94") {
+        return res.status(400).json({
+          status: false,
+          message: "SMS OTP is only available for Sri Lankan mobile numbers (+94). Please use the email option.",
+        });
+      }
+
+      user = await userDao.getUserByPhoneDao(phoneCode, phoneNumber.trim());
+      if (!user) {
+        return res.status(404).json({
+          status: false,
+          message: "No account found with this mobile number.",
+        });
+      }
+    }
+
+    // Generate 5-digit OTP
+    const otp = crypto.randomInt(10000, 100000).toString();
+    const referenceId = uuidv4();
+    const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes expiry
+
+    // Save OTP to DB
+    const otpIdentifier = type === "email" ? user.email : (user.email || user.phoneNumber);
+    await userDao.saveOtpDao(referenceId, otpIdentifier, otp, expiresAt);
+
+    // Create session reset token
+    const resetToken = jwt.sign(
+      {
+        userId: user.id,
+        email: user.email,
+        phoneCode: user.phoneCode || phoneCode,
+        phoneNumber: user.phoneNumber,
+        type: type,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    if (type === "email") {
+      try {
+        await sendEmailOtp(user.email, otp, {
+          title: "Password Reset Verification OTP",
+          subject: "Password Reset Verification OTP",
+          introText: "",
+          actionText: "To reset your Polygon account password, please use the following One-Time Password (OTP):",
+          instructionText: "Enter this OTP on the verification page to reset your password.",
+        });
+        console.log(`[Forgot Password] Email OTP sent to ${user.email}`);
+      } catch (mailErr) {
+        console.error("Failed to send password reset email:", mailErr.message);
+      }
+    } else {
+      try {
+        const fullPhone = `${phoneCode}${phoneNumber.trim()}`.replace(/\+/g, "").replace(/\s+/g, "");
+        await sendShoutoutSms(fullPhone, otp);
+        console.log(`[Forgot Password] SMS OTP sent to ${fullPhone}`);
+      } catch (smsErr) {
+        console.error("Failed to send password reset SMS:", smsErr.message);
+      }
+    }
+
+    return res.status(200).json({
+      status: true,
+      referenceId: referenceId,
+      resetToken: resetToken,
+      method: type,
+      identifier: type === "email" ? user.email : `${phoneCode} ${phoneNumber.trim()}`,
+      message: type === "email"
+        ? "Verification code has been sent to your email address."
+        : "Verification code has been sent to your mobile number.",
+    });
+  } catch (err) {
+    console.error("Error in forgotPasswordRequestOtp:", err);
+    return res.status(500).json({
+      status: false,
+      message: "An unexpected error occurred while requesting verification code.",
+      error: err.message,
+    });
+  }
+});
+
+// Resend OTP for Forgot Password
+exports.forgotPasswordResendOtp = asyncHandler(async (req, res) => {
+  const { resetToken } = req.body;
+
+  if (!resetToken) {
+    return res.status(400).json({
+      status: false,
+      message: "resetToken is required.",
+    });
+  }
+
+  try {
+    let decoded;
+    try {
+      decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
+    } catch (tokenErr) {
+      return res.status(400).json({
+        status: false,
+        message: "Password reset session has expired or is invalid.",
+      });
+    }
+
+    const { userId, email, phoneCode, phoneNumber, type } = decoded;
+
+    // Generate 5-digit OTP
+    const otp = crypto.randomInt(10000, 100000).toString();
+    const referenceId = uuidv4();
+    signupOtpAttempts.delete(referenceId);
+    const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes
+
+    const otpIdentifier = type === "email" ? email : (email || phoneNumber);
+    await userDao.saveOtpDao(referenceId, otpIdentifier, otp, expiresAt);
+
+    const newResetToken = jwt.sign(
+      { userId, email, phoneCode, phoneNumber, type },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    if (type === "email") {
+      try {
+        await sendEmailOtp(email, otp, {
+          title: "Password Reset Verification OTP",
+          subject: "Password Reset Verification OTP",
+          introText: "",
+          actionText: "To reset your Polygon account password, please use the following One-Time Password (OTP):",
+          instructionText: "Enter this OTP on the verification page to reset your password.",
+        });
+      } catch (mailErr) {
+        console.error("Failed to resend password reset email:", mailErr.message);
+      }
+    } else {
+      try {
+        const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
+        await sendShoutoutSms(fullPhone, otp);
+      } catch (smsErr) {
+        console.error("Failed to resend password reset SMS:", smsErr.message);
+      }
+    }
+
+    return res.status(200).json({
+      status: true,
+      referenceId: referenceId,
+      resetToken: newResetToken,
+      message: type === "email"
+        ? "Verification code has been resent to your email address."
+        : "Verification code has been resent to your mobile number.",
+    });
+  } catch (err) {
+    console.error("Error in forgotPasswordResendOtp:", err);
+    return res.status(500).json({
+      status: false,
+      message: "An unexpected error occurred while resending verification code.",
+      error: err.message,
+    });
+  }
+});
+
+// Verify OTP for Forgot Password
+exports.forgotPasswordVerifyOtp = asyncHandler(async (req, res) => {
+  const { code, referenceId, resetToken } = req.body;
+
+  if (!code || !referenceId || !resetToken) {
+    return res.status(400).json({
+      status: false,
+      message: "code, referenceId, and resetToken are required.",
+    });
+  }
+
+  try {
+    const otpRecord = await userDao.getOtpDao(referenceId);
+
+    if (!otpRecord) {
+      return res.status(400).json({
+        status: false,
+        message: "Invalid verification code.",
+      });
+    }
+
+    if (new Date() > new Date(otpRecord.expiresAt)) {
+      await userDao.deleteOtpDao(referenceId);
+      return res.status(400).json({
+        status: false,
+        message: "Verification code has expired. Please request a new code.",
+      });
+    }
+
+    if (otpRecord.otp !== code) {
+      const attempts = (signupOtpAttempts.get(referenceId) || 0) + 1;
+      signupOtpAttempts.set(referenceId, attempts);
+
+      if (attempts >= 5) {
+        signupOtpAttempts.delete(referenceId);
+        await userDao.deleteOtpDao(referenceId);
+        return res.status(429).json({
+          status: false,
+          message: "Too many incorrect verification attempts. This code is now invalidated. Please request a new code.",
+        });
+      }
+
+      return res.status(400).json({
+        status: false,
+        message: `Incorrect verification code. ${5 - attempts} attempts remaining.`,
+      });
+    }
+
+    signupOtpAttempts.delete(referenceId);
+
+    let decoded;
+    try {
+      decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
+    } catch (tokenErr) {
+      return res.status(400).json({
+        status: false,
+        message: "Password reset session has expired or is invalid.",
+      });
+    }
+
+    // Delete OTP record since it's verified
+    await userDao.deleteOtpDao(referenceId);
+
+    // Issue verifiedResetToken for Reset Password step
+    const verifiedResetToken = jwt.sign(
+      {
+        userId: decoded.userId,
+        action: "password_reset",
+        verified: true,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    return res.status(200).json({
+      status: true,
+      message: "Verification successful.",
+      verifiedResetToken: verifiedResetToken,
+    });
+  } catch (err) {
+    console.error("Error in forgotPasswordVerifyOtp:", err);
+    return res.status(500).json({
+      status: false,
+      message: "An unexpected error occurred during OTP verification.",
+      error: err.message,
+    });
+  }
+});
+
+// Complete Password Reset
+exports.forgotPasswordReset = asyncHandler(async (req, res) => {
+  const { verifiedResetToken, newPassword, confirmNewPassword } = req.body;
+
+  if (!verifiedResetToken || !newPassword || !confirmNewPassword) {
+    return res.status(400).json({
+      status: false,
+      message: "All fields are required.",
+    });
+  }
+
+  if (newPassword !== confirmNewPassword) {
+    return res.status(400).json({
+      status: false,
+      message: "Passwords do not match.",
+    });
+  }
+
+  // Password requirements
+  if (newPassword.length < 8) {
+    return res.status(400).json({
+      status: false,
+      message: "Password must be at least 8 characters long.",
+    });
+  }
+
+  const hasUppercase = /[A-Z]/.test(newPassword);
+  const hasNumber = /[0-9]/.test(newPassword);
+  const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(newPassword);
+
+  if (!hasUppercase || !hasNumber || !hasSpecialChar) {
+    return res.status(400).json({
+      status: false,
+      message: "Password must contain at least 1 uppercase letter, 1 number, and 1 special character.",
+    });
+  }
+
+  try {
+    let decoded;
+    try {
+      decoded = jwt.verify(verifiedResetToken, process.env.JWT_SECRET);
+    } catch (tokenErr) {
+      return res.status(400).json({
+        status: false,
+        message: "Password reset session has expired or is invalid.",
+      });
+    }
+
+    if (!decoded.verified || decoded.action !== "password_reset" || !decoded.userId) {
+      return res.status(400).json({
+        status: false,
+        message: "Invalid password reset authorization.",
+      });
+    }
+
+    const SALT_ROUNDS = parseInt(process.env.SALT_ROUNDS || "10", 10);
+    const hashedPassword = bcrypt.hashSync(newPassword, SALT_ROUNDS);
+
+    const success = await userDao.updatePasswordDao(decoded.userId, hashedPassword);
+
+    if (success) {
+      return res.status(200).json({
+        status: true,
+        message: "Your password has been successfully reset. Please log in with your new password.",
+      });
+    } else {
+      return res.status(500).json({
+        status: false,
+        message: "Failed to reset password. Please try again.",
+      });
+    }
+  } catch (err) {
+    console.error("Error in forgotPasswordReset:", err);
+    return res.status(500).json({
+      status: false,
+      message: "An unexpected error occurred while resetting the password.",
+      error: err.message,
     });
   }
 });
