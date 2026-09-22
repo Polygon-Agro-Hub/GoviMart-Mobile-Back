@@ -205,18 +205,27 @@ exports.getAllPackageItemsDao = (packageId) => {
   return new Promise((resolve, reject) => {
     const sql = `
         SELECT 
-            pd.id, 
-            pd.packageId, 
-            pd.qty as quantity, 
-            pt.typeName as displayName,
+            dpi.id,
+            dp.packageId,
+            dpi.qty AS quantity,
+            MPI.name AS displayName,
+            MPI.name AS productName,
+            dpi.productType AS productTypeId,
+            pt.typeName AS typeName,
             pt.shortCode,
-            pd.productTypeId,
-            pd.createdAt
-        FROM packagedetails pd
-        LEFT JOIN producttypes pt ON pd.productTypeId = pt.id
-        WHERE pd.packageId = ?;
+            dpi.price,
+            dpi.productId
+        FROM definepackage dp
+        INNER JOIN definepackageitems dpi ON dpi.definePackageId = dp.id
+        LEFT JOIN marketplaceitems MPI ON MPI.id = dpi.productId
+        LEFT JOIN producttypes pt ON pt.id = dpi.productType
+        WHERE dp.packageId = ?
+        AND dp.id = (
+            SELECT id FROM definepackage WHERE packageId = ? ORDER BY id DESC LIMIT 1
+        )
+        ORDER BY dpi.productType, MPI.name;
         `;
-    db.collectionofficer.query(sql, [packageId], (err, results) => {
+    db.collectionofficer.query(sql, [packageId, packageId], (err, results) => {
       if (err) {
         reject(err);
       } else {
