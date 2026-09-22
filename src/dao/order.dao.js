@@ -750,8 +750,8 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
             return reject(new Error("Invalid orderId"));
         }
 
-        const poSql = "SELECT id, orderId FROM processorders WHERE id = ? OR orderId = ? ORDER BY (id = ?) DESC LIMIT 1";
-        db.collectionofficer.query(poSql, [orderId, orderId, orderId], (poErr, poRows) => {
+        const poSql = "SELECT id, orderId FROM processorders WHERE id = ? LIMIT 1";
+        db.collectionofficer.query(poSql, [orderId], (poErr, poRows) => {
             if (poErr) return reject(new Error("Database error: " + poErr.message));
 
             const processOrderId = poRows?.[0]?.id || orderId;
@@ -777,7 +777,7 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
               ORDER BY op.id
             `;
 
-            db.collectionofficer.query(packagesSql, [actualOrderId], (err, packRows) => {
+            db.collectionofficer.query(packagesSql, [processOrderId], (err, packRows) => {
                 if (err) {
                     return reject(new Error("Database error: " + err.message));
                 }
