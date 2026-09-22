@@ -20,6 +20,7 @@ const getOrCreateCart = async (userId, buyerType = "Retail") => {
  */
 exports.getUserCart = asyncHandler(async (req, res) => {
   const userId = req.user.id;
+  const buyerType = req.user.buyerType || "Retail";
   const cart = await cartDao.getCartByUserIdDao(userId);
 
   if (!cart) {
@@ -34,8 +35,16 @@ exports.getUserCart = asyncHandler(async (req, res) => {
     });
   }
 
+  // Clean up any cross-contamination items that might have been saved in error
+  if (buyerType.toLowerCase() === "wholesale") {
+    await cartDao.clearCartPackagesDao(cart.id);
+    await cartDao.removeMismatchedCartProductsDao(cart.id, "Wholesale");
+  } else {
+    await cartDao.removeMismatchedCartProductsDao(cart.id, "Retail");
+  }
+
   const products = await cartDao.getCartProductsDao(cart.id);
-  const packages = await cartDao.getCartPackagesDao(cart.id);
+  const packages = buyerType.toLowerCase() === "wholesale" ? [] : await cartDao.getCartPackagesDao(cart.id);
 
   // Format packages to include totalItems
   const formattedPackages = await Promise.all(
@@ -110,6 +119,7 @@ exports.getUserCart = asyncHandler(async (req, res) => {
  */
 exports.addOrUpdateCartProduct = asyncHandler(async (req, res) => {
   const userId = req.user.id;
+  const buyerType = req.user.buyerType || "Retail";
   const { productId, quantity, unit = "g" } = req.body;
 
   if (!productId || !quantity || quantity <= 0) {
@@ -119,7 +129,16 @@ exports.addOrUpdateCartProduct = asyncHandler(async (req, res) => {
     });
   }
 
-  const cart = await getOrCreateCart(userId);
+  // Validate product buyer type matches user buyer type
+  const productBuyerType = await cartDao.getProductBuyerTypeDao(productId);
+  if (productBuyerType && productBuyerType.toLowerCase() !== buyerType.toLowerCase()) {
+    return res.status(400).json({
+      status: false,
+      message: `Cannot add a ${productBuyerType} product to a ${buyerType} user's cart`,
+    });
+  }
+
+  const cart = await getOrCreateCart(userId, buyerType);
   const existing = await cartDao.checkProductInCartDao(cart.id, productId);
 
   if (existing) {
@@ -141,7 +160,15 @@ exports.addOrUpdateCartProduct = asyncHandler(async (req, res) => {
  */
 exports.addOrUpdateCartPackage = asyncHandler(async (req, res) => {
   const userId = req.user.id;
+  const buyerType = req.user.buyerType || "Retail";
   const { packageId, quantity = 1 } = req.body;
+
+  if (buyerType.toLowerCase() === "wholesale") {
+    return res.status(400).json({
+      status: false,
+      message: "Packages are not available for wholesale users",
+    });
+  }
 
   if (!packageId || !quantity || quantity <= 0) {
     return res.status(400).json({
@@ -150,7 +177,7 @@ exports.addOrUpdateCartPackage = asyncHandler(async (req, res) => {
     });
   }
 
-  const cart = await getOrCreateCart(userId);
+  const cart = await getOrCreateCart(userId, buyerType);
   const existing = await cartDao.checkPackageInCartDao(cart.id, packageId);
 
   if (existing) {
@@ -218,14 +245,11 @@ exports.removeCartPackage = asyncHandler(async (req, res) => {
  */
 exports.clearCart = asyncHandler(async (req, res) => {
   const userId = req.user.id;
-  const cart = await cartDao.getCartByUserIdDao(userId);
-
-  if (cart) {
-    await cartDao.clearCartDao(cart.id);
-  }
+  await cartDao.clearCartByUserIdDao(userId);
 
   return res.status(200).json({
     status: true,
     message: "Cart cleared successfully",
   });
 });
+
