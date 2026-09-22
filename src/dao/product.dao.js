@@ -208,8 +208,8 @@ exports.getAllPackageItemsDao = (packageId) => {
             dpi.id,
             dp.packageId,
             dpi.qty AS quantity,
-            MPI.name AS displayName,
-            MPI.name AS productName,
+            MPI.displayName AS displayName,
+            MPI.displayName AS productName,
             dpi.productType AS productTypeId,
             pt.typeName AS typeName,
             pt.shortCode,
@@ -223,7 +223,7 @@ exports.getAllPackageItemsDao = (packageId) => {
         AND dp.id = (
             SELECT id FROM definepackage WHERE packageId = ? ORDER BY id DESC LIMIT 1
         )
-        ORDER BY dpi.productType, MPI.name;
+        ORDER BY dpi.productType, MPI.displayName;
         `;
     db.collectionofficer.query(sql, [packageId, packageId], (err, results) => {
       if (err) {
