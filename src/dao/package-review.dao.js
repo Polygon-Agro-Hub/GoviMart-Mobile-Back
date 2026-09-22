@@ -820,16 +820,29 @@ exports.confirmPackageReviewDao = ({
                     if (isCard && targetProcessOrderId && parsedNewTotal != null) {
                         const targetCreditPaid = parseFloat(matchedOrder?.creditPaid) || 0;
                         const newMoneyPaid = Math.max(0, parsedNewTotal - targetCreditPaid);
-                        console.log(`[confirmPackageReviewDao] CARD: Updating processorders (amount=${parsedNewTotal}, moneyPaid=${newMoneyPaid}) for processOrderId: ${targetProcessOrderId}`);
+                        console.log(`[confirmPackageReviewDao] CARD: Updating processorders (amount=${parsedNewTotal}, moneyPaid=${newMoneyPaid}, isFinalized=1) for processOrderId: ${targetProcessOrderId}`);
                         const updateProcessSql = `
                             UPDATE processorders
-                            SET amount = ?, moneyPaid = ?
+                            SET amount = ?, moneyPaid = ?, isFinalized = 1
                             WHERE id = ?
                         `;
                         const processRes = await new Promise((res, rej) => {
                             connection.query(updateProcessSql, [parsedNewTotal, newMoneyPaid, targetProcessOrderId], (e, r) => (e ? rej(e) : res(r)));
                         });
-                        console.log(`[confirmPackageReviewDao] processorders updated (card amount & moneyPaid):`, processRes.affectedRows, "row(s)");
+                        console.log(`[confirmPackageReviewDao] processorders updated (card amount, moneyPaid & isFinalized=1):`, processRes.affectedRows, "row(s)");
+                    } else {
+                        // For non-card / cash orders or when amount not updating, ensure isFinalized is marked 1
+                        const finalProcId = targetProcessOrderId || processOrderId;
+                        console.log(`[confirmPackageReviewDao] Updating processorders isFinalized = 1 for processOrderId: ${finalProcId} / orderId: ${orderId}`);
+                        const updateFinalizedSql = `
+                            UPDATE processorders
+                            SET isFinalized = 1
+                            WHERE id = ? OR orderId = ?
+                        `;
+                        const finalizeRes = await new Promise((res, rej) => {
+                            connection.query(updateFinalizedSql, [finalProcId || 0, orderId || 0], (e, r) => (e ? rej(e) : res(r)));
+                        });
+                        console.log(`[confirmPackageReviewDao] processorders isFinalized set to 1:`, finalizeRes.affectedRows, "row(s)");
                     }
 
                     // 5b. Update orders table (total, fullTotal, discount) - for both Card and Cash
