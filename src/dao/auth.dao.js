@@ -59,7 +59,7 @@ exports.loginUser = async (identifier, password) => {
     ]);
 
     if (results.length === 0) {
-      throw new Error("Invalid mobile number/email or password");
+      throw new Error("Invalid mobile number or email address");
     }
 
     const user = results[0];
