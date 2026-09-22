@@ -155,6 +155,7 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                     LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
                     LEFT JOIN plant_care.cropgroup cg ON cv.cropGroupId = cg.id
                     WHERE df.packageId IN (${pkgPlaceholders})
+                      AND (mi.id IS NULL OR mi.category = 'Retail')
                 `;
 
                 // 4. Fetch baseline products (prevdefineproduct)
@@ -282,17 +283,30 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                     });
 
                     const enrichedItems = pkgItems.map((item) => {
-                        // Find matching baseline
-                        const baseline = pkgBaselines.find(
-                            (b) => b.replceId === item.itemId || b.productId === item.productId || (b.productType && b.productType === item.productType)
-                        ) || item;
+                        // Match baseline using itemId (replceId) first — most specific.
+                        // Fall back to productId match only if replceId is unavailable.
+                        // Do NOT use productType as a match criterion — multiple items
+                        // in the same package can share a productType, causing the wrong
+                        // baseline to be selected and isReplaced to become true incorrectly.
+                        const baseline =
+                            pkgBaselines.find((b) => b.replceId != null && b.replceId === item.itemId) ||
+                            pkgBaselines.find((b) => b.productId === item.productId);
 
-                        const isReplaced = baseline ? baseline.productId !== item.productId : false;
+                        // Only flag as replaced when the baseline exists in prevdefineproduct
+                        // AND it carries a different product than what is currently active.
+                        // When there is no real baseline (i.e. baseline === item itself as fallback)
+                        // or it's a definepackage default, isReplaced must be false.
+                        const isReplaced =
+                            baseline &&
+                            baseline !== item &&
+                            baseline.productId != null &&
+                            item.productId != null &&
+                            baseline.productId !== item.productId;
 
                         return {
                             ...item,
-                            isReplaced,
-                            originalProduct: baseline ? {
+                            isReplaced: !!isReplaced,
+                            originalProduct: isReplaced && baseline ? {
                                 id: baseline.productId,
                                 itemId: baseline.replceId || baseline.itemId || item.itemId,
                                 productId: baseline.productId,
