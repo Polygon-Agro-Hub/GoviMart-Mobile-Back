@@ -668,7 +668,8 @@ exports.updatePassword = asyncHandler(async (req, res) => {
 
   const hasLetter = /[a-zA-Z]/.test(newPassword);
   const hasNumber = /[0-9]/.test(newPassword);
-  const hasSymbol = /[!@#$%^&*(),.?":{}|<>]/.test(newPassword);
+  const hasSymbol =
+    /[@#$%&*\-=()?\/;:'"!~±×÷•°`´{}\]\[+_¥®\^€£©¡<>¢|\\¿,.]/.test(newPassword);
 
   if (!hasLetter || !hasNumber || !hasSymbol) {
     return res.status(400).json({
@@ -1120,7 +1121,8 @@ exports.forgotPasswordReset = asyncHandler(async (req, res) => {
 
   const hasUppercase = /[A-Z]/.test(newPassword);
   const hasNumber = /[0-9]/.test(newPassword);
-  const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(newPassword);
+  const hasSpecialChar =
+    /[@#$%&*\-=()?\/;:'"!~±×÷•°`´{}\]\[+_¥®\^€£©¡<>¢|\\¿,.]/.test(newPassword);
 
   if (!hasUppercase || !hasNumber || !hasSpecialChar) {
     return res.status(400).json({
