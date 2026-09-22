@@ -34,6 +34,7 @@ exports.login = asyncHandler(async (req, res) => {
       id: result.id,
       email: result.email,
       phoneNumber: result.phoneNumber,
+      buyerType: result.buyerType,
       iat: Math.floor(Date.now() / 1000),
     };
 
@@ -764,6 +765,7 @@ exports.refreshToken = asyncHandler(async (req, res) => {
       id: decoded.id,
       email: decoded.email,
       phoneNumber: decoded.phoneNumber,
+      buyerType: decoded.buyerType,
       iat: Math.floor(Date.now() / 1000),
     };
 
