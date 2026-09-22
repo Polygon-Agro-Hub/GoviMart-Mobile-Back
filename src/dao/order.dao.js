@@ -773,11 +773,11 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
                 (mp.productPrice + mp.packingFee + mp.serviceFee) AS productPrice
               FROM orderpackage op
               JOIN marketplacepackages mp ON op.packageId = mp.id
-              WHERE op.orderId = ? OR op.orderId = ?
+              WHERE op.orderId = ?
               ORDER BY op.id
             `;
 
-            db.collectionofficer.query(packagesSql, [processOrderId, actualOrderId], (err, packRows) => {
+            db.collectionofficer.query(packagesSql, [actualOrderId], (err, packRows) => {
                 if (err) {
                     return reject(new Error("Database error: " + err.message));
                 }
