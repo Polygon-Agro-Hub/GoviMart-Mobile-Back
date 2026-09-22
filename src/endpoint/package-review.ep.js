@@ -125,6 +125,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
         creditToAdd = 0,
         replacements = [],
         additionalItems = [],
+        packages = [],
     } = req.body;
 
     console.log("[confirmPackageReview Endpoint] Received request by userId:", userId, "body:", JSON.stringify(req.body, null, 2));
@@ -149,6 +150,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
             creditToAdd,
             replacements,
             additionalItems,
+            packages,
         });
 
         console.log("[confirmPackageReview Endpoint] Success response:", result);

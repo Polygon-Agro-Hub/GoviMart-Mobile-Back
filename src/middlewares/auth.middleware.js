@@ -53,6 +53,7 @@ const authMiddleware = (req, res, next) => {
       userId: decoded.id, // For compatibility with getIncludedSuggestionsItems
       email: decoded.email,
       phoneNumber: decoded.phoneNumber,
+      buyerType: decoded.buyerType || "Retail",
     };
     
     next();

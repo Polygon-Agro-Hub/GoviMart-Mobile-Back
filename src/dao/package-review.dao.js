@@ -70,11 +70,11 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                         (mp.productPrice + mp.packingFee + mp.serviceFee) AS packageTotalUnit
                     FROM orderpackage op
                     INNER JOIN marketplacepackages mp ON op.packageId = mp.id
-                    WHERE op.orderId = ?
+                    WHERE op.orderId = ? OR op.orderId = ?
                 `;
 
                 const packages = await new Promise((res, rej) => {
-                    db.collectionofficer.query(packagesSql, [processOrderId], (e, r) => e ? rej(e) : res(r || []));
+                    db.collectionofficer.query(packagesSql, [processOrderId, actualOrderId], (e, r) => e ? rej(e) : res(r || []));
                 });
 
                 if (packages.length === 0) {
@@ -86,9 +86,11 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                 }
 
                 const orderPackageIds = packages.map(p => p.orderPackageId);
+                const packageIds = Array.from(new Set(packages.map(p => p.packageId)));
                 const placeholders = orderPackageIds.map(() => "?").join(", ");
+                const pkgPlaceholders = packageIds.map(() => "?").join(", ");
 
-                // 3. Fetch active package items (orderpackageitems)
+                // 3. Fetch active package items (orderpackageitems) if already exist
                 const itemsSql = `
                     SELECT 
                         opi.id AS itemId,
@@ -119,6 +121,43 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                     WHERE opi.orderPackageId IN (${placeholders})
                 `;
 
+                // 3b. Fetch default items from latest definepackage for each packageId (fallback for Todo packages)
+                const defineItemsSql = `
+                    SELECT 
+                        dfi.id AS itemId,
+                        df.packageId,
+                        dfi.productType,
+                        COALESCE(dfi.productType, pt.id) AS productTypeId,
+                        dfi.productId,
+                        dfi.qty,
+                        dfi.price,
+                        COALESCE(dfi.price, mi.normalPrice, 0) AS baseUnitPrice,
+                        mi.displayName AS productName,
+                        mi.normalPrice,
+                        mi.discountedPrice,
+                        mi.unitType,
+                        mi.startValue,
+                        mi.changeby AS step,
+                        cv.image AS productImage,
+                        pt.typeName AS productTypeName,
+                        pt.shortCode AS productTypeShortCode,
+                        COALESCE(pt.typeName, cg.category, mi.category, 'Package Item') AS categoryName
+                    FROM definepackage df
+                    INNER JOIN (
+                        SELECT packageId, MAX(createdAt) AS max_createdAt
+                        FROM definepackage
+                        WHERE packageId IN (${pkgPlaceholders})
+                        GROUP BY packageId
+                    ) df_latest ON df.packageId = df_latest.packageId AND df.createdAt = df_latest.max_createdAt
+                    INNER JOIN definepackageitems dfi ON df.id = dfi.definePackageId
+                    LEFT JOIN producttypes pt ON pt.id = dfi.productType
+                    LEFT JOIN marketplaceitems mi ON mi.id = dfi.productId
+                    LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
+                    LEFT JOIN plant_care.cropgroup cg ON cv.cropGroupId = cg.id
+                    WHERE df.packageId IN (${pkgPlaceholders})
+                      AND (mi.id IS NULL OR mi.category = 'Retail')
+                `;
+
                 // 4. Fetch baseline products (prevdefineproduct)
                 const baselineSql = `
                     SELECT 
@@ -132,7 +171,10 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                         pdp.price,
                         mi.displayName AS productName,
                         mi.normalPrice AS baseUnitPrice,
+                        mi.discountedPrice,
                         mi.unitType,
+                        mi.startValue,
+                        mi.changeby AS step,
                         cv.image AS productImage,
                         pt.typeName AS productTypeName,
                         pt.shortCode AS productTypeShortCode,
@@ -145,10 +187,7 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                     WHERE pdp.orderPackageId IN (${placeholders})
                 `;
 
-
                 // 5. Fetch additional items (orderadditionalitems)
-                // Use proOrderId (the specific processorders.id) for precise matching.
-                // Falling back to orderId only when proOrderId is NULL (legacy rows).
                 const additionalSql = `
                     SELECT 
                         oai.id,
@@ -161,6 +200,9 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                         oai.price,
                         oai.discount,
                         mi.displayName AS productName,
+                        mi.unitType,
+                        mi.startValue,
+                        mi.changeby,
                         cv.image AS productImage
                     FROM orderadditionalitems oai
                     LEFT JOIN marketplaceitems mi ON oai.productId = mi.id
@@ -169,33 +211,108 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                       OR (oai.proOrderId IS NULL AND oai.orderId = ?)
                 `;
 
-                const [items, baselineItems, additionalItems] = await Promise.all([
+                // 6. Fetch user's excludelist for warning badges
+                const excludeSql = `
+                    SELECT 
+                        MPI.id AS productId,
+                        MPI.displayName AS productName
+                    FROM excludelist XL
+                    JOIN marketplaceitems MPI ON XL.mpItemId = MPI.id
+                    WHERE XL.userId = ? 
+                        AND MPI.category = 'Retail'
+                `;
+
+                const [items, defineItems, baselineItems, additionalItems, excludeRows] = await Promise.all([
                     new Promise((res, rej) => db.collectionofficer.query(itemsSql, orderPackageIds, (e, r) => e ? rej(e) : res(r || []))),
+                    new Promise((res, rej) => db.collectionofficer.query(defineItemsSql, [...packageIds, ...packageIds], (e, r) => e ? rej(e) : res(r || []))),
                     new Promise((res, rej) => db.collectionofficer.query(baselineSql, orderPackageIds, (e, r) => e ? rej(e) : res(r || []))),
                     new Promise((res, rej) => db.collectionofficer.query(additionalSql, [processOrderId, actualOrderId], (e, r) => e ? rej(e) : res(r || []))),
+                    new Promise((res, rej) => db.collectionofficer.query(excludeSql, [userId], (e, r) => e ? rej(e) : res(r || []))),
                 ]);
+
+                const excludedProductIds = new Set((excludeRows || []).map(x => Number(x.productId)));
 
                 // Assemble packages with nested items and baselines
                 const structuredPackages = packages.map((pkg) => {
-                    const pkgItems = items.filter((i) => i.orderPackageId === pkg.orderPackageId);
-                    const pkgBaselines = baselineItems.filter((b) => b.orderPackageId === pkg.orderPackageId);
+                    let pkgItems = items.filter((i) => i.orderPackageId === pkg.orderPackageId);
+                    let pkgBaselines = baselineItems.filter((b) => b.orderPackageId === pkg.orderPackageId);
+
+                    // Fallback to definepackageitems if orderpackageitems is empty (e.g. Todo packingStatus)
+                    if (pkgItems.length === 0) {
+                        const fallbackItems = defineItems.filter((d) => d.packageId === pkg.packageId);
+                        pkgItems = fallbackItems.map((d) => ({
+                            ...d,
+                            orderPackageId: pkg.orderPackageId,
+                        }));
+                        if (pkgBaselines.length === 0) {
+                            pkgBaselines = fallbackItems.map((d) => ({
+                                baselineId: d.itemId,
+                                orderPackageId: pkg.orderPackageId,
+                                replceId: d.itemId,
+                                productType: d.productType,
+                                productTypeId: d.productTypeId,
+                                productId: d.productId,
+                                qty: d.qty,
+                                price: d.price,
+                                productName: d.productName,
+                                baseUnitPrice: d.baseUnitPrice,
+                                unitType: d.unitType,
+                                startValue: d.startValue,
+                                step: d.step,
+                                productImage: d.productImage,
+                                productTypeName: d.productTypeName,
+                                productTypeShortCode: d.productTypeShortCode,
+                                categoryName: d.categoryName,
+                            }));
+                        }
+                    }
+
+                    // Sequential category numbering (e.g. "Low Country Fruit (1)", "Low Country Fruit (2)")
+                    const catIndex = {};
+                    pkgItems.forEach((it) => {
+                        const rawCat = it.categoryName || "Package Item";
+                        catIndex[rawCat] = (catIndex[rawCat] || 0) + 1;
+                        it.categoryName = `${rawCat} (${catIndex[rawCat]})`;
+                    });
+
+                    // Add excludedWarning if product is on user's exclude list
+                    pkgItems.forEach((it) => {
+                        if (excludedProductIds.has(Number(it.productId))) {
+                            it.excludedWarning = `You marked ${it.productName} as an exclude product for your packages. Please Change Product if you don't need this.`;
+                        }
+                    });
 
                     const enrichedItems = pkgItems.map((item) => {
-                        // Find matching baseline
-                        const baseline = pkgBaselines.find(
-                            (b) => b.replceId === item.itemId || b.productId === item.productId || (b.productType && b.productType === item.productType)
-                        );
+                        // Match baseline using itemId (replceId) first — most specific.
+                        // Fall back to productId match only if replceId is unavailable.
+                        // Do NOT use productType as a match criterion — multiple items
+                        // in the same package can share a productType, causing the wrong
+                        // baseline to be selected and isReplaced to become true incorrectly.
+                        const baseline =
+                            pkgBaselines.find((b) => b.replceId != null && b.replceId === item.itemId) ||
+                            pkgBaselines.find((b) => b.productId === item.productId);
 
-                        const isReplaced = baseline ? baseline.productId !== item.productId : false;
+                        // Only flag as replaced when the baseline exists in prevdefineproduct
+                        // AND it carries a different product than what is currently active.
+                        // When there is no real baseline (i.e. baseline === item itself as fallback)
+                        // or it's a definepackage default, isReplaced must be false.
+                        const isReplaced =
+                            baseline &&
+                            baseline !== item &&
+                            baseline.productId != null &&
+                            item.productId != null &&
+                            baseline.productId !== item.productId;
 
                         return {
                             ...item,
-                            isReplaced,
-                            originalProduct: baseline ? {
+                            isReplaced: !!isReplaced,
+                            originalProduct: isReplaced && baseline ? {
                                 id: baseline.productId,
+                                itemId: baseline.replceId || baseline.itemId || item.itemId,
+                                productId: baseline.productId,
                                 name: baseline.productName,
                                 image: baseline.productImage,
-                                price: baseline.price,
+                                price: baseline.price || baseline.baseUnitPrice,
                                 quantity: baseline.qty,
                                 unit: baseline.unitType || "kg",
                                 category: baseline.categoryName || item.categoryName,
@@ -393,6 +510,7 @@ exports.confirmPackageReviewDao = ({
     creditToAdd = 0,
     replacements = [],
     additionalItems = [],
+    packages = [],
 }) => {
     return new Promise((resolve, reject) => {
         console.log("\n================ [confirmPackageReviewDao] START ================");
@@ -408,9 +526,11 @@ exports.confirmPackageReviewDao = ({
             creditToAdd,
             replacementsCount: Array.isArray(replacements) ? replacements.length : 0,
             additionalItemsCount: Array.isArray(additionalItems) ? additionalItems.length : 0,
+            packagesCount: Array.isArray(packages) ? packages.length : 0,
         });
         console.log("[confirmPackageReviewDao] Replacements Data:", JSON.stringify(replacements, null, 2));
         console.log("[confirmPackageReviewDao] Additional Items Data:", JSON.stringify(additionalItems, null, 2));
+        console.log("[confirmPackageReviewDao] Packages Data:", JSON.stringify(packages, null, 2));
 
         db.collectionofficer.getConnection((connErr, connection) => {
             if (connErr) {
@@ -426,6 +546,126 @@ exports.confirmPackageReviewDao = ({
                 }
 
                 try {
+                    // 0. Resolve all orderpackage rows from DB for this order
+                    const dbPackages = await new Promise((res, rej) => {
+                        const pkgLookupSql = `
+                            SELECT op.id AS orderPackageId, op.packageId, op.qty, op.packingStatus
+                            FROM orderpackage op
+                            WHERE op.orderId = ? OR op.orderId = ?
+                        `;
+                        connection.query(pkgLookupSql, [processOrderId || 0, orderId || 0], (e, r) => (e ? rej(e) : res(r || [])));
+                    });
+                    console.log(`[confirmPackageReviewDao] Found ${dbPackages.length} package(s) in DB for orderId: ${orderId} / processOrderId: ${processOrderId}:`, dbPackages);
+
+                    // Combine packages from payload and dbPackages
+                    const allTargetPackages = dbPackages.length > 0 ? dbPackages : (Array.isArray(packages) ? packages : []);
+
+                    for (const dbPkg of allTargetPackages) {
+                        const targetPkgDbId = dbPkg.orderPackageId || dbPkg.id;
+                        if (!targetPkgDbId) continue;
+
+                        // Find items from frontend payload (matched by orderPackageId or packageId)
+                        let pkgItems = [];
+                        if (Array.isArray(packages)) {
+                            const matched = packages.find(
+                                (p) => Number(p.orderPackageId) === Number(targetPkgDbId) || Number(p.packageId) === Number(dbPkg.packageId)
+                            );
+                            if (matched && Array.isArray(matched.items) && matched.items.length > 0) {
+                                pkgItems = matched.items;
+                            }
+                        }
+
+                        // Fallback: If no items in payload, fetch from definepackage / definepackageitems for dbPkg.packageId
+                        if (pkgItems.length === 0 && dbPkg.packageId) {
+                            console.log(`[confirmPackageReviewDao] Loading default definepackageitems for packageId: ${dbPkg.packageId}`);
+                            const defaultItems = await new Promise((res) => {
+                                const defSql = `
+                                    SELECT 
+                                        dfi.productType, 
+                                        dfi.productId, 
+                                        dfi.qty, 
+                                        dfi.price
+                                    FROM definepackage df
+                                    INNER JOIN (
+                                        SELECT packageId, MAX(createdAt) AS max_createdAt
+                                        FROM definepackage
+                                        WHERE packageId = ?
+                                        GROUP BY packageId
+                                    ) df_latest ON df.packageId = df_latest.packageId AND df.createdAt = df_latest.max_createdAt
+                                    INNER JOIN definepackageitems dfi ON df.id = dfi.definePackageId
+                                    WHERE df.packageId = ?
+                                `;
+                                connection.query(defSql, [dbPkg.packageId, dbPkg.packageId], (e, r) => res(r || []));
+                            });
+                            pkgItems = defaultItems;
+                        }
+
+                        // Sync orderpackageitems
+                        if (pkgItems.length > 0) {
+                            console.log(`[confirmPackageReviewDao] Syncing ${pkgItems.length} item(s) to orderpackageitems for orderPackageId: ${targetPkgDbId}`);
+                            await new Promise((res, rej) => {
+                                connection.query("DELETE FROM orderpackageitems WHERE orderPackageId = ?", [targetPkgDbId], (e, r) => (e ? rej(e) : res(r)));
+                            });
+
+                            for (const item of pkgItems) {
+                                const prodId = item.productId ? parseInt(Number(item.productId), 10) : null;
+                                if (!prodId) continue;
+
+                                let finalProductType = null;
+                                if (item.productType != null && !isNaN(Number(item.productType)) && Number(item.productType) > 0) {
+                                    finalProductType = parseInt(Number(item.productType), 10);
+                                }
+                                if (!finalProductType) {
+                                    const [ptRow] = await new Promise((res) => {
+                                        connection.query("SELECT productTypeId FROM marketplaceitems WHERE id = ? LIMIT 1", [prodId], (e, r) => res([r]));
+                                    });
+                                    if (ptRow && ptRow[0] && ptRow[0].productTypeId) {
+                                        finalProductType = ptRow[0].productTypeId;
+                                    }
+                                }
+
+                                const qty = item.qty != null && !isNaN(Number(item.qty)) ? parseFloat(Number(item.qty).toFixed(3)) : 1.0;
+                                const price = item.price != null && !isNaN(Number(item.price)) ? parseFloat(Number(item.price).toFixed(2)) : 0.0;
+
+                                const insertItemSql = `
+                                    INSERT INTO orderpackageitems (orderPackageId, productType, productId, qty, price, isPacked, packingTime, createdAt)
+                                    VALUES (?, ?, ?, ?, ?, 0, NULL, NOW())
+                                `;
+                                const insertRes = await new Promise((res, rej) => {
+                                    connection.query(
+                                        insertItemSql,
+                                        [targetPkgDbId, finalProductType, prodId, qty, price],
+                                        (e, r) => (e ? rej(e) : res(r))
+                                    );
+                                });
+                                const newItemId = insertRes.insertId;
+
+                                // Also insert baseline record into prevdefineproduct with replceId = newItemId
+                                const insertBaselineSql = `
+                                    INSERT INTO prevdefineproduct (orderPackageId, replceId, productType, productId, qty, price)
+                                    VALUES (?, ?, ?, ?, ?, ?)
+                                `;
+                                await new Promise((res, rej) => {
+                                    connection.query(
+                                        insertBaselineSql,
+                                        [targetPkgDbId, newItemId, finalProductType, prodId, qty, price],
+                                        (e, r) => (e ? rej(e) : res(r))
+                                    );
+                                });
+                            }
+                        }
+
+                        // Specifically update each resolved orderpackage row to 'Dispatch' and isLock = 1
+                        await new Promise((res, rej) => {
+                            connection.query(
+                                "UPDATE orderpackage SET packingStatus = 'Dispatch', isLock = 1 WHERE id = ?",
+                                [targetPkgDbId],
+                                (e, r) => (e ? rej(e) : res(r))
+                            );
+                        });
+                        console.log(`[confirmPackageReviewDao] Updated orderpackage id ${targetPkgDbId} packingStatus = 'Dispatch' and isLock = 1`);
+                    }
+
                     // 1. Process batch replacements (if any)
                     if (Array.isArray(replacements) && replacements.length > 0) {
                         console.log(`[confirmPackageReviewDao] Processing ${replacements.length} replacement(s)...`);
@@ -507,16 +747,27 @@ exports.confirmPackageReviewDao = ({
                         }
                     }
 
-                    // 3. Lock order packages (only if explicitly requested)
-                    if (lockNow === true || lockNow === 1 || lockNow === "true") {
-                        console.log(`[confirmPackageReviewDao] Setting isLock = 1 on orderpackage for orderId: ${orderId} / processOrderId: ${processOrderId}`);
-                        const lockSql = `UPDATE orderpackage SET isLock = 1 WHERE orderId = ? OR orderId = ?`;
-                        const lockRes = await new Promise((res, rej) => {
-                            connection.query(lockSql, [processOrderId || 0, orderId || 0], (e, r) => e ? rej(e) : res(r));
-                        });
-                        console.log(`[confirmPackageReviewDao] Packages locked:`, lockRes.affectedRows, "row(s) updated");
-                    } else {
-                        console.log(`[confirmPackageReviewDao] lockNow is false. Packages will remain unlocked.`);
+                    // 3. Update orderpackage packingStatus to 'Dispatch' and isLock = 1
+                    console.log(`[confirmPackageReviewDao] Updating orderpackage packingStatus to 'Dispatch' and isLock = 1 for orderId: ${orderId} / processOrderId: ${processOrderId}`);
+                    const dispatchSql = `UPDATE orderpackage SET packingStatus = 'Dispatch', isLock = 1 WHERE orderId = ? OR orderId = ?`;
+                    const dispatchRes = await new Promise((res, rej) => {
+                        connection.query(dispatchSql, [processOrderId || 0, orderId || 0], (e, r) => e ? rej(e) : res(r));
+                    });
+                    console.log(`[confirmPackageReviewDao] orderpackage updated to 'Dispatch':`, dispatchRes.affectedRows, "row(s)");
+
+                    if (Array.isArray(packages) && packages.length > 0) {
+                        const pkgDbIds = packages.map((p) => p.orderPackageId).filter(Boolean);
+                        if (pkgDbIds.length > 0) {
+                            const pkgPlaceholders = pkgDbIds.map(() => "?").join(", ");
+                            await new Promise((res, rej) => {
+                                connection.query(
+                                    `UPDATE orderpackage SET packingStatus = 'Dispatch', isLock = 1 WHERE id IN (${pkgPlaceholders})`,
+                                    pkgDbIds,
+                                    (e, r) => (e ? rej(e) : res(r))
+                                );
+                            });
+                            console.log(`[confirmPackageReviewDao] Specifically updated orderpackage IDs to 'Dispatch':`, pkgDbIds);
+                        }
                     }
 
                     // 4. Update schedule date on processorders if changed
@@ -568,10 +819,10 @@ exports.confirmPackageReviewDao = ({
                     // Determine payment method (prefer DB record, fallback to payload)
                     const dbPaymentMethod = (matchedOrder?.paymentMethod || paymentMethod || "").trim().toLowerCase();
                     const isDbPaid = matchedOrder?.isPaid === 1 || matchedOrder?.isPaid === true || String(matchedOrder?.isPaid) === "1";
-                    const isCard = dbPaymentMethod.includes("card") || 
-                                   dbPaymentMethod.includes("payhere") || 
-                                   dbPaymentMethod.includes("online") || 
-                                   (isDbPaid && !dbPaymentMethod.includes("cash") && !dbPaymentMethod.includes("cod"));
+                    const isCard = dbPaymentMethod.includes("card") ||
+                        dbPaymentMethod.includes("payhere") ||
+                        dbPaymentMethod.includes("online") ||
+                        (isDbPaid && !dbPaymentMethod.includes("cash") && !dbPaymentMethod.includes("cod"));
 
                     const parsedNewTotal = newTotal != null ? parseFloat(newTotal) : null;
                     const parsedAdditional = parseFloat(additionalAmount) || 0;
@@ -583,16 +834,29 @@ exports.confirmPackageReviewDao = ({
                     if (isCard && targetProcessOrderId && parsedNewTotal != null) {
                         const targetCreditPaid = parseFloat(matchedOrder?.creditPaid) || 0;
                         const newMoneyPaid = Math.max(0, parsedNewTotal - targetCreditPaid);
-                        console.log(`[confirmPackageReviewDao] CARD: Updating processorders (amount=${parsedNewTotal}, moneyPaid=${newMoneyPaid}) for processOrderId: ${targetProcessOrderId}`);
+                        console.log(`[confirmPackageReviewDao] CARD: Updating processorders (amount=${parsedNewTotal}, moneyPaid=${newMoneyPaid}, isFinalized=1) for processOrderId: ${targetProcessOrderId}`);
                         const updateProcessSql = `
                             UPDATE processorders
-                            SET amount = ?, moneyPaid = ?
+                            SET amount = ?, moneyPaid = ?, isFinalized = 1
                             WHERE id = ?
                         `;
                         const processRes = await new Promise((res, rej) => {
                             connection.query(updateProcessSql, [parsedNewTotal, newMoneyPaid, targetProcessOrderId], (e, r) => (e ? rej(e) : res(r)));
                         });
-                        console.log(`[confirmPackageReviewDao] processorders updated (card amount & moneyPaid):`, processRes.affectedRows, "row(s)");
+                        console.log(`[confirmPackageReviewDao] processorders updated (card amount, moneyPaid & isFinalized=1):`, processRes.affectedRows, "row(s)");
+                    } else {
+                        // For non-card / cash orders or when amount not updating, ensure isFinalized is marked 1
+                        const finalProcId = targetProcessOrderId || processOrderId;
+                        console.log(`[confirmPackageReviewDao] Updating processorders isFinalized = 1 for processOrderId: ${finalProcId} / orderId: ${orderId}`);
+                        const updateFinalizedSql = `
+                            UPDATE processorders
+                            SET isFinalized = 1
+                            WHERE id = ? OR orderId = ?
+                        `;
+                        const finalizeRes = await new Promise((res, rej) => {
+                            connection.query(updateFinalizedSql, [finalProcId || 0, orderId || 0], (e, r) => (e ? rej(e) : res(r)));
+                        });
+                        console.log(`[confirmPackageReviewDao] processorders isFinalized set to 1:`, finalizeRes.affectedRows, "row(s)");
                     }
 
                     // 5b. Update orders table (total, fullTotal, discount) - for both Card and Cash

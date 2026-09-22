@@ -20,6 +20,7 @@ const getOrCreateCart = async (userId, buyerType = "Retail") => {
  */
 exports.getUserCart = asyncHandler(async (req, res) => {
   const userId = req.user.id;
+  const buyerType = req.user.buyerType || "Retail";
   const cart = await cartDao.getCartByUserIdDao(userId);
 
   if (!cart) {
@@ -34,8 +35,16 @@ exports.getUserCart = asyncHandler(async (req, res) => {
     });
   }
 
+  // Clean up any cross-contamination items that might have been saved in error
+  if (buyerType.toLowerCase() === "wholesale") {
+    await cartDao.clearCartPackagesDao(cart.id);
+    await cartDao.removeMismatchedCartProductsDao(cart.id, "Wholesale");
+  } else {
+    await cartDao.removeMismatchedCartProductsDao(cart.id, "Retail");
+  }
+
   const products = await cartDao.getCartProductsDao(cart.id);
-  const packages = await cartDao.getCartPackagesDao(cart.id);
+  const packages = buyerType.toLowerCase() === "wholesale" ? [] : await cartDao.getCartPackagesDao(cart.id);
 
   // Format packages to include totalItems
   const formattedPackages = await Promise.all(
@@ -58,29 +67,37 @@ exports.getUserCart = asyncHandler(async (req, res) => {
   const formattedProducts = products.map((prod) => {
     const rawStartVal = parseFloat(prod.startValue) || 1;
     const dbUnitType = (prod.unitType || "g").toLowerCase();
-    const currentUnit = (prod.unit || dbUnitType).toLowerCase();
+    const currentUnit = (prod.unit || (dbUnitType === "kg" && rawStartVal < 1 ? "g" : dbUnitType)).toLowerCase();
 
-    let minWeight = rawStartVal;
-    if (rawStartVal < 1 && currentUnit === "g") {
-      minWeight = Math.round(rawStartVal * 1000);
-    } else if (dbUnitType === "kg" && currentUnit === "g") {
-      minWeight = Math.round(rawStartVal * 1000);
-    } else if (dbUnitType === "g" && currentUnit === "kg") {
-      minWeight = parseFloat((rawStartVal / 1000).toFixed(3));
-    }
+    const rawChangeBy = parseFloat(prod.changeby) > 0
+      ? parseFloat(prod.changeby)
+      : (parseFloat(prod.startValue) > 0 ? parseFloat(prod.startValue) : (dbUnitType === "kg" ? 0.5 : 500));
 
+    // Convert value according to unit
+    const convertVal = (val, isG) => {
+      if (isG) {
+        return (dbUnitType === "kg" || val <= 10) ? Math.round(val * 1000) : Math.round(val);
+      } else {
+        return (dbUnitType === "kg" || val <= 10) ? parseFloat(val.toFixed(3)) : parseFloat((val / 1000).toFixed(3));
+      }
+    };
+
+    const minWeight = convertVal(rawStartVal, currentUnit === "g");
+    const stepVal = convertVal(rawChangeBy, currentUnit === "g");
     const currentWeight = parseFloat(prod.quantity) || minWeight;
 
     return {
       id: prod.productId,
       name: prod.name,
       image: prod.image,
-      price: parseFloat(prod.discountedPrice || prod.normalPrice) || 0,
+      price: parseFloat(prod.normalPrice) || 0,
       normalPrice: parseFloat(prod.normalPrice) || 0,
+      discountedPrice: parseFloat(prod.discountedPrice) || 0,
+      comPrice: parseFloat(prod.comPrice) || 0,
       weight: currentWeight,
       unit: currentUnit,
       minimumWeight: minWeight,
-      step: currentUnit === "kg" ? 0.5 : (minWeight >= 500 ? 500 : 100),
+      step: stepVal,
       isUnavailable: prod.isEnable !== 1,
     };
   });
@@ -102,6 +119,7 @@ exports.getUserCart = asyncHandler(async (req, res) => {
  */
 exports.addOrUpdateCartProduct = asyncHandler(async (req, res) => {
   const userId = req.user.id;
+  const buyerType = req.user.buyerType || "Retail";
   const { productId, quantity, unit = "g" } = req.body;
 
   if (!productId || !quantity || quantity <= 0) {
@@ -111,7 +129,16 @@ exports.addOrUpdateCartProduct = asyncHandler(async (req, res) => {
     });
   }
 
-  const cart = await getOrCreateCart(userId);
+  // Validate product buyer type matches user buyer type
+  const productBuyerType = await cartDao.getProductBuyerTypeDao(productId);
+  if (productBuyerType && productBuyerType.toLowerCase() !== buyerType.toLowerCase()) {
+    return res.status(400).json({
+      status: false,
+      message: `Cannot add a ${productBuyerType} product to a ${buyerType} user's cart`,
+    });
+  }
+
+  const cart = await getOrCreateCart(userId, buyerType);
   const existing = await cartDao.checkProductInCartDao(cart.id, productId);
 
   if (existing) {
@@ -133,7 +160,15 @@ exports.addOrUpdateCartProduct = asyncHandler(async (req, res) => {
  */
 exports.addOrUpdateCartPackage = asyncHandler(async (req, res) => {
   const userId = req.user.id;
+  const buyerType = req.user.buyerType || "Retail";
   const { packageId, quantity = 1 } = req.body;
+
+  if (buyerType.toLowerCase() === "wholesale") {
+    return res.status(400).json({
+      status: false,
+      message: "Packages are not available for wholesale users",
+    });
+  }
 
   if (!packageId || !quantity || quantity <= 0) {
     return res.status(400).json({
@@ -142,7 +177,7 @@ exports.addOrUpdateCartPackage = asyncHandler(async (req, res) => {
     });
   }
 
-  const cart = await getOrCreateCart(userId);
+  const cart = await getOrCreateCart(userId, buyerType);
   const existing = await cartDao.checkPackageInCartDao(cart.id, packageId);
 
   if (existing) {
@@ -210,14 +245,11 @@ exports.removeCartPackage = asyncHandler(async (req, res) => {
  */
 exports.clearCart = asyncHandler(async (req, res) => {
   const userId = req.user.id;
-  const cart = await cartDao.getCartByUserIdDao(userId);
-
-  if (cart) {
-    await cartDao.clearCartDao(cart.id);
-  }
+  await cartDao.clearCartByUserIdDao(userId);
 
   return res.status(200).json({
     status: true,
     message: "Cart cleared successfully",
   });
 });
+

@@ -642,6 +642,9 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
             if (!orders || orders.length === 0) return reject("Order not found or unauthorized");
 
             const order = orders[0];
+            if (order.returnReason && order.returnReason.toLowerCase() === "other" && order.returnNote) {
+                order.returnReason = order.returnNote;
+            }
 
             // Attach hold history and then resolve
             const resolveWithHolds = (finalOrder) => {
@@ -747,8 +750,8 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
             return reject(new Error("Invalid orderId"));
         }
 
-        const poSql = "SELECT id, orderId FROM processorders WHERE id = ? OR orderId = ? ORDER BY (id = ?) DESC LIMIT 1";
-        db.collectionofficer.query(poSql, [orderId, orderId, orderId], (poErr, poRows) => {
+        const poSql = "SELECT id, orderId FROM processorders WHERE id = ? LIMIT 1";
+        db.collectionofficer.query(poSql, [orderId], (poErr, poRows) => {
             if (poErr) return reject(new Error("Database error: " + poErr.message));
 
             const processOrderId = poRows?.[0]?.id || orderId;
@@ -770,11 +773,11 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
                 (mp.productPrice + mp.packingFee + mp.serviceFee) AS productPrice
               FROM orderpackage op
               JOIN marketplacepackages mp ON op.packageId = mp.id
-              WHERE op.orderId = ? OR op.orderId = ?
+              WHERE op.orderId = ?
               ORDER BY op.id
             `;
 
-            db.collectionofficer.query(packagesSql, [processOrderId, actualOrderId], (err, packRows) => {
+            db.collectionofficer.query(packagesSql, [processOrderId], (err, packRows) => {
                 if (err) {
                     return reject(new Error("Database error: " + err.message));
                 }
@@ -976,7 +979,9 @@ exports.getAvailableCouponsDao = () => {
             SELECT 
                 id, code, type, percentage, status, checkLimit, priceLimit, fixDiscount, startDate, endDate, createdAt
             FROM coupon
-            WHERE status = 'Enabled' OR status = 'Active'
+            WHERE (LOWER(status) = 'enabled' OR LOWER(status) = 'active')
+              AND (startDate IS NULL OR DATE(startDate) <= CURDATE())
+              AND (endDate IS NULL OR DATE(endDate) >= CURDATE())
             ORDER BY id DESC
         `;
         db.collectionofficer.query(sql, (err, results) => {
@@ -1034,10 +1039,15 @@ exports.getUserCartTotalDao = (userId, cartId) => {
  */
 const formatBillingInfo = (info) => {
     if (!info) return {};
+    const rawCode = String(info.phoneCode1 || "94").replace(/^\++/, "");
+    const cleanPhone = String(info.phone1 || "").trim().replace(/^\++/, "");
+    const formattedPhone = cleanPhone
+        ? (cleanPhone.startsWith(rawCode) ? `+${cleanPhone}` : `+${rawCode} ${cleanPhone.startsWith("0") ? cleanPhone.slice(1) : cleanPhone}`)
+        : "N/A";
     return {
         title: info.title || "",
         fullName: info.fullName || "",
-        phone: info.phone1 ? `+${info.phoneCode1 || "94"} ${info.phone1}` : "N/A",
+        phone: formattedPhone,
         email: info.email || "N/A",
         buildingType: info.buildingType || "House",
         houseNo: info.houseNo || "N/A",
@@ -1048,6 +1058,28 @@ const formatBillingInfo = (info) => {
         flatNo: info.flatNo || "N/A",
         floorNo: info.floorNo || "N/A",
     };
+};
+
+const getDeliveryChargeDao = (isPickup, hasDeliveryItems, city, isFreeDelivery = false, fallbackCharge = 0) => {
+    return new Promise((resolve) => {
+        if (isFreeDelivery || isPickup || !hasDeliveryItems) {
+            return resolve("0.00");
+        }
+        if (fallbackCharge && parseFloat(fallbackCharge) > 0) {
+            return resolve(parseFloat(fallbackCharge).toFixed(2));
+        }
+        if (!city || city === "N/A") {
+            return resolve("50.00");
+        }
+        const deliveryChargeQuery = `SELECT charge FROM deliverycharge WHERE LOWER(city) LIKE LOWER(?)`;
+        db.collectionofficer.query(deliveryChargeQuery, [`%${city}%`], (err, chargeResult) => {
+            if (err || !chargeResult || chargeResult.length === 0) {
+                return resolve("50.00");
+            }
+            const charge = parseFloat(chargeResult[0].charge || 50.00).toFixed(2);
+            resolve(charge);
+        });
+    });
 };
 
 const getPickupInfoDao = (isPickup, centerId) => {
@@ -1064,15 +1096,15 @@ const getPickupInfoDao = (isPickup, centerId) => {
             const r = rows[0];
             resolve({
                 centerId: String(r.id),
-                centerName: r.name,
-                contact01: r.phone1,
+                centerName: r.name || "Unknown",
+                contact01: r.phone1 || "Not Available",
                 address: {
-                    street: r.street || "N/A",
-                    city: r.city || "N/A",
-                    district: r.district || "N/A",
-                    province: r.province || "N/A",
+                    street: r.street || "",
+                    city: r.city || "",
+                    district: r.district || "",
+                    province: r.province || "",
                     country: r.country || "Sri Lanka",
-                    zipCode: r.zipcode || "N/A",
+                    zipCode: r.zipcode || "",
                 },
             });
         });
@@ -1173,11 +1205,11 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                     oai.id,
                     mi.displayName AS name,
                     oai.unit,
-                    mi.normalPrice AS unitPrice,
+                    COALESCE(mi.normalPrice, mi.normalprice, 0) AS unitPrice,
                     oai.qty AS quantity,
-                    oai.normalPrice AS amount,
+                    COALESCE(oai.normalPrice, oai.normalprice, 0) AS amount,
                     oai.discount AS itemDiscount,
-                    oai.price AS finalPrice,
+                    COALESCE(oai.price, oai.normalPrice, oai.normalprice, 0) AS finalPrice,
                     cv.image AS image
                 FROM orderadditionalitems oai
                 JOIN marketplaceitems mi ON oai.productId = mi.id
@@ -1221,7 +1253,16 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
             ]).then(async ([familyPackItems, additionalItems, billingInfo]) => {
                 const isPickup = (invoice.deliveryMethod || "").toUpperCase() === "PICKUP";
                 const isFreeDeliveryCoupon = invoice.isCoupon && (invoice.couponType === "Free Delivery" || invoice.couponType === "Free Delivary");
-                const deliveryFee = isPickup || isFreeDeliveryCoupon ? "0.00" : (parseFloat(invoice.deliveryCharge || 0).toFixed(2));
+                const hasDeliveryItems = (Array.isArray(familyPackItems) && familyPackItems.length > 0) || (Array.isArray(additionalItems) && additionalItems.length > 0);
+                
+                const deliveryFee = await getDeliveryChargeDao(
+                    isPickup,
+                    hasDeliveryItems,
+                    billingInfo.city,
+                    isFreeDeliveryCoupon,
+                    invoice.deliveryCharge
+                );
+                
                 const pickupInfo = await getPickupInfoDao(isPickup, invoice.centerId);
 
                 const processedFamilyPackItems = [];

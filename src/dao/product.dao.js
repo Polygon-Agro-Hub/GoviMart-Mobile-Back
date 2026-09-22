@@ -28,6 +28,7 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
       JOIN plant_care.cropvariety v ON m.varietyId = v.id
       JOIN plant_care.cropgroup c ON v.cropGroupId = c.id
       WHERE LOWER(m.category) = LOWER(?)
+        AND m.isEnable = 1
     `;
 
     const params = [buyerType || "Retail"];
@@ -106,7 +107,7 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
 exports.getAllSlidesDao = () => {
   return new Promise((resolve, reject) => {
     db.collectionofficer.query(
-      "SELECT * FROM banners  ORDER BY createdAt DESC",
+      "SELECT * FROM banners ORDER BY COALESCE(indexId, 999999) ASC, createdAt DESC",
       (err, results) => {
         if (err) return reject(err);
         resolve(results);
@@ -203,17 +204,17 @@ exports.checkAvailabilityDao = (productIds, packageIds) => {
 exports.getAllPackageItemsDao = (packageId) => {
   return new Promise((resolve, reject) => {
     const sql = `
-        SELECT 
-            pd.id, 
-            pd.packageId, 
-            pd.qty as quantity, 
-            pt.typeName as displayName,
-            pt.shortCode,
-            pd.productTypeId,
-            pd.createdAt
+        SELECT
+            pd.id,
+            pd.packageId,
+            pd.qty AS quantity,
+            pt.typeName AS displayName,
+            pt.typeName AS itemName,
+            pd.productTypeId
         FROM packagedetails pd
-        LEFT JOIN producttypes pt ON pd.productTypeId = pt.id
-        WHERE pd.packageId = ?;
+        LEFT JOIN producttypes pt ON pt.id = pd.productTypeId
+        WHERE pd.packageId = ?
+        ORDER BY pd.productTypeId;
         `;
     db.collectionofficer.query(sql, [packageId], (err, results) => {
       if (err) {
