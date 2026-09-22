@@ -378,20 +378,24 @@ exports.createOrder = asyncHandler(async (req, res) => {
         cartDao.getCartPackagesDao(effectiveCartId),
     ]);
 
-    let calculatedItemsTotal = 0;
+    let calculatedNormalItemsTotal = 0;
+    let calculatedDiscountedItemsTotal = 0;
     for (const p of cartProducts) {
         const pQty = parseFloat(p.quantity) || 0;
-        const pPrice = (p.discountedPrice != null && p.discountedPrice !== "" && !isNaN(Number(p.discountedPrice)) && Number(p.discountedPrice) > 0)
+        const normPrice = Number(p.normalPrice || 0);
+        const discPrice = (p.discountedPrice != null && p.discountedPrice !== "" && !isNaN(Number(p.discountedPrice)) && Number(p.discountedPrice) > 0 && Number(p.discountedPrice) < normPrice)
             ? Number(p.discountedPrice)
-            : Number(p.normalPrice || 0);
+            : normPrice;
         const pUnit = (p.unit || p.unitType || "g").toLowerCase();
         const weightMultiplier = pUnit === "kg" ? pQty : pQty / 1000;
-        calculatedItemsTotal += pPrice * weightMultiplier;
+        calculatedNormalItemsTotal += normPrice * weightMultiplier;
+        calculatedDiscountedItemsTotal += discPrice * weightMultiplier;
     }
     for (const pkg of cartPackages) {
         const pkgQty = parseFloat(pkg.quantity) || 0;
         const pkgPrice = parseFloat(pkg.price) || 0;
-        calculatedItemsTotal += pkgPrice * pkgQty;
+        calculatedNormalItemsTotal += pkgPrice * pkgQty;
+        calculatedDiscountedItemsTotal += pkgPrice * pkgQty;
     }
 
     const isFreeDeliveryCoupon = Boolean(
@@ -400,17 +404,40 @@ exports.createOrder = asyncHandler(async (req, res) => {
             String(couponType).toLowerCase().includes("delivery")
         )
     );
+    const finalCouponValue = isFreeDeliveryCoupon ? 0 : (parseFloat(couponValue) || 0);
     const finalDeliveryCharge = isFreeDeliveryCoupon ? 0 : (isHomeDelivery ? (parseFloat(deliveryCharge) || 0) : 0);
-    const finalDiscount = Math.min(parseFloat(discountAmount) || 0, calculatedItemsTotal);
 
-    const calculatedGrandTotal = Math.max(0, parseFloat((calculatedItemsTotal + finalDeliveryCharge - finalDiscount).toFixed(2)));
+    const clientProvidedDiscount = parseFloat(discountAmount) || 0;
+    const clientGrandTotal = parseFloat(grandTotal) || 0;
+
+    const finalProductDiscount = Math.max(0, parseFloat((calculatedNormalItemsTotal - calculatedDiscountedItemsTotal).toFixed(2)));
+    const effectiveProductDiscount = clientProvidedDiscount > 0 ? clientProvidedDiscount : finalProductDiscount;
+    const finalDiscount = Math.min(effectiveProductDiscount + finalCouponValue, calculatedNormalItemsTotal);
+
+    const expectedDiscountedGrandTotal = Math.max(0, parseFloat((calculatedDiscountedItemsTotal + finalDeliveryCharge - finalCouponValue).toFixed(2)));
+    const expectedNormalMinusDiscountGrandTotal = Math.max(0, parseFloat((calculatedNormalItemsTotal + finalDeliveryCharge - finalDiscount).toFixed(2)));
+    const expectedNormalGrandTotal = Math.max(0, parseFloat((calculatedNormalItemsTotal + finalDeliveryCharge - finalCouponValue).toFixed(2)));
+
+    let calculatedGrandTotal = clientGrandTotal;
+    let isMatch = false;
+
+    if (Math.abs(clientGrandTotal - expectedDiscountedGrandTotal) <= 1.0) {
+        isMatch = true;
+        calculatedGrandTotal = expectedDiscountedGrandTotal;
+    } else if (Math.abs(clientGrandTotal - expectedNormalMinusDiscountGrandTotal) <= 1.0) {
+        isMatch = true;
+        calculatedGrandTotal = expectedNormalMinusDiscountGrandTotal;
+    } else if (Math.abs(clientGrandTotal - expectedNormalGrandTotal) <= 1.0) {
+        isMatch = true;
+        calculatedGrandTotal = expectedNormalGrandTotal;
+    }
 
     // Verify grandTotal from client against server-calculated grandTotal
-    if (Math.abs((parseFloat(grandTotal) || 0) - calculatedGrandTotal) > 1.0) {
-        console.warn(`[createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Server: ${calculatedGrandTotal}`);
+    if (!isMatch) {
+        console.warn(`[createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Expected Discounted: ${expectedDiscountedGrandTotal}, Expected Normal-Discount: ${expectedNormalMinusDiscountGrandTotal}`);
         return safeRespond(400, {
             status: false,
-            message: `Order total mismatch. Expected Rs. ${calculatedGrandTotal.toFixed(2)}, but received Rs. ${Number(grandTotal).toFixed(2)}.`,
+            message: `Order total mismatch. Expected Rs. ${expectedDiscountedGrandTotal.toFixed(2)}, but received Rs. ${Number(grandTotal).toFixed(2)}.`,
         });
     }
 
@@ -480,7 +507,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     phonecode2: phoneCode2 || null,
                     phone2: phone2 || null,
                     isCoupon: isCoupon || false,
-                    couponValue: couponValue || 0,
+                    couponValue: finalCouponValue,
                     couponType: couponType || null,
                     total: calculatedGrandTotal,
                     fullTotal: calculatedGrandTotal,

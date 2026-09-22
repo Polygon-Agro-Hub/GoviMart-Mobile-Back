@@ -1,5 +1,5 @@
 const db = require("../startup/database");
-const { emitNotificationToUser } = require("../socket/socket");
+const { emitNotificationToUser, emitUnreadCountToUser } = require("../socket/socket");
 
 /**
  * Fetch all notifications for a given user.
@@ -19,10 +19,15 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
         po.amount,
         po.sheduleDate,
         po.status AS orderStatus,
-        o.delivaryMethod
+        o.delivaryMethod,
+        rr.rsnEnglish AS returnReason,
+        dro.note AS returnNote
       FROM ordernotfication n
       JOIN processorders po ON n.orderId = po.id
       JOIN orders o ON po.orderId = o.id
+      LEFT JOIN driverorders do_item ON do_item.orderId = po.id
+      LEFT JOIN driverreturnorders dro ON dro.drvOrderId = do_item.id
+      LEFT JOIN returnreason rr ON rr.id = dro.returnReasonId
       WHERE o.userId = ?
       ORDER BY n.createdAt DESC, n.id DESC
       LIMIT ? OFFSET ?
@@ -33,7 +38,30 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
         console.error("Error fetching user notifications:", err);
         return reject(err);
       }
-      resolve(results || []);
+
+      const formatted = (results || []).map((row) => {
+        let msg = row.message || "";
+        const returnReason = row.returnReason;
+        const returnNote = row.returnNote;
+        const effectiveReason =
+          returnReason && returnReason.toLowerCase() === "other" && returnNote
+            ? returnNote
+            : returnNote || (returnReason && returnReason.toLowerCase() !== "other" ? returnReason : "");
+
+        if (effectiveReason) {
+          msg = msg.replace(
+            /Reason\s*:\s*[“"'\`\u201C\u201D\u2018\u2019]?Other[”"'\`\u201C\u201D\u2018\u2019]?/gi,
+            `Reason : “${effectiveReason}”`
+          );
+        }
+        return {
+          ...row,
+          returnReason: effectiveReason || returnReason,
+          message: msg,
+        };
+      });
+
+      resolve(formatted);
     });
   });
 };
@@ -74,11 +102,17 @@ exports.markAsReadDao = (notificationId, userId) => {
       WHERE n.id = ? AND o.userId = ?
     `;
 
-    db.collectionofficer.query(sql, [notificationId, userId], (err, result) => {
+    db.collectionofficer.query(sql, [notificationId, userId], async (err, result) => {
       if (err) {
         console.error("Error marking notification as read:", err);
         return reject(err);
       }
+
+      try {
+        const unreadCount = await exports.getUnreadCountDao(userId);
+        emitUnreadCountToUser(userId, unreadCount);
+      } catch (_) {}
+
       resolve(result.affectedRows > 0);
     });
   });
@@ -102,6 +136,8 @@ exports.markAllAsReadDao = (userId) => {
         console.error("Error marking all notifications as read:", err);
         return reject(err);
       }
+
+      emitUnreadCountToUser(userId, 0);
       resolve(result.affectedRows);
     });
   });
@@ -140,22 +176,49 @@ exports.createNotificationDao = ({ orderId, title, message }) => {
           po.sheduleDate,
           po.status AS orderStatus,
           o.userId,
-          o.delivaryMethod
+          o.delivaryMethod,
+          rr.rsnEnglish AS returnReason,
+          dro.note AS returnNote
         FROM ordernotfication n
         JOIN processorders po ON n.orderId = po.id
         JOIN orders o ON po.orderId = o.id
+        LEFT JOIN driverorders do_item ON do_item.orderId = po.id
+        LEFT JOIN driverreturnorders dro ON dro.drvOrderId = do_item.id
+        LEFT JOIN returnreason rr ON rr.id = dro.returnReasonId
         WHERE n.id = ?
       `;
 
-      db.collectionofficer.query(fetchSql, [newId], (err2, rows) => {
+      db.collectionofficer.query(fetchSql, [newId], async (err2, rows) => {
         if (err2 || !rows.length) {
           return resolve({ id: newId, orderId, title, message, isRead: 0 });
         }
 
         const notifData = rows[0];
+        const returnReason = notifData.returnReason;
+        const returnNote = notifData.returnNote;
+        const effectiveReason =
+          returnReason && returnReason.toLowerCase() === "other" && returnNote
+            ? returnNote
+            : returnNote || (returnReason && returnReason.toLowerCase() !== "other" ? returnReason : "");
+
+        if (effectiveReason) {
+          notifData.message = notifData.message.replace(
+            /Reason\s*:\s*[“"'\`\u201C\u201D\u2018\u2019]?Other[”"'\`\u201C\u201D\u2018\u2019]?/gi,
+            `Reason : “${effectiveReason}”`
+          );
+          notifData.returnReason = effectiveReason;
+        }
+
         // Emit in real-time via Socket.IO
         if (notifData.userId) {
-          emitNotificationToUser(notifData.userId, notifData);
+          try {
+            const unreadCount = await exports.getUnreadCountDao(notifData.userId);
+            notifData.unreadCount = unreadCount;
+            emitNotificationToUser(notifData.userId, notifData);
+            emitUnreadCountToUser(notifData.userId, unreadCount);
+          } catch (_) {
+            emitNotificationToUser(notifData.userId, notifData);
+          }
         }
 
         resolve(notifData);

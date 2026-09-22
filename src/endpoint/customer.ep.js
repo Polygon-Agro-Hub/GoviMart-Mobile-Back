@@ -6,6 +6,10 @@ const { v4: uuidv4 } = require("uuid");
 const asyncHandler = require("express-async-handler");
 const uploadFileToS3 = require("../middlewares/s3upload");
 const crypto = require("crypto");
+const {
+  addAddressSchema,
+  updateAddressSchema,
+} = require("../validations/customer.validations");
 
 // Brute force lockout for phone change OTP (Risk 4.B)
 const phoneOtpAttempts = new Map();
@@ -214,19 +218,29 @@ exports.getAccountDetails = asyncHandler(async (req, res) => {
 exports.addAddress = asyncHandler(async (req, res) => {
   try {
     const customerId = req.user.id;
-    const { buildingType } = req.body;
 
-    if (!buildingType || !["Apartment", "House"].includes(buildingType)) {
-      return res
-        .status(400)
-        .json({ status: false, message: "Valid buildingType is required" });
+    const { error, value } = addAddressSchema.validate(req.body, {
+      abortEarly: true,
+      stripUnknown: true,
+    });
+    if (error) {
+      return res.status(400).json({
+        status: false,
+        message: error.details[0].message,
+      });
     }
 
-    const result = await customerDao.addAddressDao(customerId, req.body);
+    const result = await customerDao.addAddressDao(customerId, value);
     return res
       .status(201)
       .json({ status: true, message: "Address added successfully", result });
   } catch (error) {
+    if (error.code === "DUPLICATE_SAVE_AS") {
+      return res.status(409).json({
+        status: false,
+        message: "An address with this name already exists. Please use a different name.",
+      });
+    }
     console.error("Add address error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
@@ -237,18 +251,22 @@ exports.updateAddress = asyncHandler(async (req, res) => {
   try {
     const customerId = req.user.id;
     const { addressId } = req.params;
-    const { buildingType } = req.body;
 
-    if (!buildingType || !["Apartment", "House"].includes(buildingType)) {
-      return res
-        .status(400)
-        .json({ status: false, message: "Valid buildingType is required" });
+    const { error, value } = updateAddressSchema.validate(req.body, {
+      abortEarly: true,
+      stripUnknown: true,
+    });
+    if (error) {
+      return res.status(400).json({
+        status: false,
+        message: error.details[0].message,
+      });
     }
 
     const result = await customerDao.updateAddressDao(
       addressId,
       customerId,
-      req.body,
+      value,
     );
 
     if (result.affectedRows === 0) {
@@ -261,6 +279,12 @@ exports.updateAddress = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Address updated successfully" });
   } catch (error) {
+    if (error.code === "DUPLICATE_SAVE_AS") {
+      return res.status(409).json({
+        status: false,
+        message: "An address with this name already exists. Please use a different name.",
+      });
+    }
     console.error("Update address error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
@@ -529,6 +553,7 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
 
     // Apply the rest of the edited account details (name, email, company, etc.)
     if (accountDetails && typeof accountDetails === "object") {
+      accountDetails.title = accountDetails.title || "Mr";
       await customerDao.updateUserDetailsDao(userId, accountDetails);
     }
 

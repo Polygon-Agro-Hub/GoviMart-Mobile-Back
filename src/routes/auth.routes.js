@@ -322,7 +322,11 @@ router.post('/logout', userAuthEp.logout);
  *       401:
  *         description: Invalid or expired refresh token.
  */
-router.post('/refresh-token', userAuthEp.refreshToken);
+// Forgot Password Routes
+router.post('/forgot-password/request-otp', userAuthEp.forgotPasswordRequestOtp);
+router.post('/forgot-password/resend-otp', userAuthEp.forgotPasswordResendOtp);
+router.post('/forgot-password/verify-otp', userAuthEp.forgotPasswordVerifyOtp);
+router.post('/forgot-password/reset-password', userAuthEp.forgotPasswordReset);
 
 // Update / Clear Credit Balance (matches Web API /api/auth/update-credit-balance)
 const customerEp = require('../endpoint/customer.ep');
