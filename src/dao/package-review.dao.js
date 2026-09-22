@@ -170,6 +170,7 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                         pdp.price,
                         mi.displayName AS productName,
                         mi.normalPrice AS baseUnitPrice,
+                        mi.discountedPrice,
                         mi.unitType,
                         mi.startValue,
                         mi.changeby AS step,
