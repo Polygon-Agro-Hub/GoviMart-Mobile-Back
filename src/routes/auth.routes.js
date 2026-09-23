@@ -132,7 +132,7 @@ router.post('/city-availability', userAuthEp.updateCityAvailability);
  *                 example: "+94"
  *               phoneNumber:
  *                 type: string
- *                 example: "770111999"
+ *                 example: "114313433"
  *               buyerType:
  *                 type: string
  *                 enum: [Retail, Wholesale]
