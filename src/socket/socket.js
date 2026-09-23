@@ -8,10 +8,10 @@ const initSocket = (httpServer) => {
     cors: {
       origin: "*",
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      credentials: true,
     },
-    transports: ["websocket", "polling"],
-    allowEIO3: true,
+    // polling first so Vercel Fluid compute handles the initial handshake,
+    // then upgrades to websocket when available — exactly like Sales Dash
+    transports: ["polling", "websocket"],
   });
 
   io.use((socket, next) => {
