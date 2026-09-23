@@ -20,6 +20,7 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
         v.varietyNameSinhala,
         v.varietyNameTamil,
         v.image,
+        v.bgColor,
         c.cropNameEnglish,
         c.cropNameSinhala,
         c.cropNameTamil,

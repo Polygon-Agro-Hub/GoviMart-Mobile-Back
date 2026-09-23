@@ -708,3 +708,18 @@ exports.uploadProfileImage = asyncHandler(async (req, res) => {
     return res.status(500).json({ status: false, message: error.message });
   }
 });
+
+exports.getDeliveryEligibility = asyncHandler(async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const result = await customerDao.getDeliveryEligibilityDao(userId);
+    return res.status(200).json({
+      status: true,
+      hasDeliveredOrder: result.hasDeliveredOrder,
+      nearestCity: result.nearestCity,
+    });
+  } catch (error) {
+    console.error("Delivery eligibility fetch error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+});

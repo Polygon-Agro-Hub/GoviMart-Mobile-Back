@@ -727,3 +727,31 @@ exports.getDeleteAccountStatusDao = async (userId) => {
     hasProcessingOrders: processingCount > 0,
   };
 };
+
+
+exports.getDeliveryEligibilityDao = async (userId) => {
+  const deliveredQuery = `
+    SELECT COUNT(*) AS deliveredCount
+    FROM orders o
+    JOIN processorders po ON po.orderId = o.id
+    WHERE o.userId = ? AND po.status = 'Delivered'
+    LIMIT 1
+  `;
+  const [[deliveredResult]] = await db.collectionofficer
+    .promise()
+    .query(deliveredQuery, [userId]);
+
+  const userQuery = `
+    SELECT nearesCity AS nearestCity
+    FROM marketplaceusers
+    WHERE id = ?
+  `;
+  const [[userResult]] = await db.collectionofficer
+    .promise()
+    .query(userQuery, [userId]);
+
+  return {
+    hasDeliveredOrder: Number(deliveredResult?.deliveredCount || 0) > 0,
+    nearestCity: userResult?.nearestCity || null,
+  };
+};

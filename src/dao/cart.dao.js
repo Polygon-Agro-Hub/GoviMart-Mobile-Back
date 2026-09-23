@@ -54,7 +54,7 @@ exports.getCartProductsDao = (cartId) => {
       JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
       JOIN plant_care.cropgroup cg ON cv.cropGroupId = cg.id
       WHERE cai.cartId = ?
-      ORDER BY cai.createdAt DESC
+      ORDER BY cai.id ASC
     `;
     db.collectionofficer.query(sql, [cartId], (err, results) => {
       if (err) return reject(err);
@@ -82,7 +82,7 @@ exports.getCartPackagesDao = (cartId) => {
       FROM cartpackage cp
       JOIN marketplacepackages mp ON cp.packageId = mp.id
       WHERE cp.cartId = ?
-      ORDER BY cp.createdAt DESC
+      ORDER BY cp.id ASC
     `;
     db.collectionofficer.query(sql, [cartId], (err, results) => {
       if (err) return reject(err);

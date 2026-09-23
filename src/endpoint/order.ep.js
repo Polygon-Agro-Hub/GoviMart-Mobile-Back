@@ -668,9 +668,14 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                     connection.release();
 
-                    // ── 5f. Clear cart (best-effort, after commit) ────────────
+                    // ── Clear cart (best-effort, after commit) ────────────
                     RetailOrderDao.clearCartAfterOrderDao(effectiveCartId).catch((clearErr) => {
                         console.error("[createOrder] Cart clear failed (non-fatal):", clearErr);
+                    });
+
+                    // ── Refresh marketplaceusers.creditLimit (best-effort, after commit) ──
+                    RetailOrderDao.recalculateAndPersistCreditLimitDao(userId).catch((limitErr) => {
+                        console.error("[createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
                     });
 
                     return safeRespond(201, {
