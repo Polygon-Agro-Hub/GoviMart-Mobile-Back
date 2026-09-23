@@ -1254,7 +1254,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                 const isPickup = (invoice.deliveryMethod || "").toUpperCase() === "PICKUP";
                 const isFreeDeliveryCoupon = invoice.isCoupon && (invoice.couponType === "Free Delivery" || invoice.couponType === "Free Delivary");
                 const hasDeliveryItems = (Array.isArray(familyPackItems) && familyPackItems.length > 0) || (Array.isArray(additionalItems) && additionalItems.length > 0);
-                
+
                 const deliveryFee = await getDeliveryChargeDao(
                     isPickup,
                     hasDeliveryItems,
@@ -1262,7 +1262,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                     isFreeDeliveryCoupon,
                     invoice.deliveryCharge
                 );
-                
+
                 const pickupInfo = await getPickupInfoDao(isPickup, invoice.centerId);
 
                 const processedFamilyPackItems = [];
@@ -1350,28 +1350,82 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
     });
 };
 
-exports.getDeliveredOrdersTotal = async (userId) => {
+/**
+ * Recalculates a user's cash/credit tier limit from their delivered order
+ * total and writes it to marketplaceusers.creditLimit.
+ *
+ * IMPORTANT: sums o.fullTotal, NOT p.amount. processorders.amount is only
+ * populated for card payments (createProcessOrderWithTransactionDao forces
+ * it to 0 for cash orders — see finalAmount = 0 in the cash branch), so
+ * summing p.amount silently undercounts every cash-paid delivered order
+ * and produces a wrong, too-low limit. o.fullTotal is the true grand total
+ * regardless of payment method.
+ *
+ * Call this any time delivered totals may have changed for a user —
+ * currently wired into createOrder (right after commit) and into
+ * getDeliveredOrdersTotal below. Wire it into your delivery-status-update
+ * flow too (wherever processorders.status transitions to 'Delivered' /
+ * 'Picked up') so the column stays accurate in near real time.
+ */
+exports.recalculateAndPersistCreditLimitDao = async (userId) => {
     let connection;
     try {
         connection = await db.collectionofficer.promise().getConnection();
+
         const [rows] = await connection.query(
-            `SELECT COALESCE(SUM(p.amount), 0) AS deliveredTotal
-       FROM processorders p
-       INNER JOIN orders o ON o.id = p.orderId
-       WHERE o.userId = ?
-         AND p.status IN ('Delivered', 'Picked up')`,
+            `SELECT COALESCE(SUM(o.fullTotal), 0) AS deliveredTotal
+             FROM processorders p
+             INNER JOIN orders o ON o.id = p.orderId
+             WHERE o.userId = ?
+               AND p.status IN ('Delivered', 'Picked up')`,
             [userId],
         );
+
         const deliveredTotal = parseFloat(rows[0]?.deliveredTotal || 0);
-        // Base 2000, +250 for every full 25000 in total order value
+
+        // Base 2000, +250 for every full 25000 in delivered order value
         const tiersEarned = Math.floor(deliveredTotal / 25000);
-        const creditBalance = 2000 + tiersEarned * 250;
-        return { deliveredTotal, creditBalance };
+        const computedLimit = 2000 + tiersEarned * 250;
+
+        await connection.query(
+            `UPDATE marketplaceusers SET creditLimit = ? WHERE id = ?`,
+            [computedLimit, userId],
+        );
+
+        return { deliveredTotal, creditLimit: computedLimit };
     } catch (err) {
-        console.error("Error in getDeliveredOrdersTotal:", err);
+        console.error("Error in recalculateAndPersistCreditLimitDao:", err);
         throw err;
     } finally {
         if (connection) connection.release();
+    }
+};
+
+/**
+ * Returns the user's delivered order total and current cash/credit limit,
+ * refreshing marketplaceusers.creditLimit as a side effect (via
+ * recalculateAndPersistCreditLimitDao) so the stored column and the value
+ * handed back to callers are always in sync.
+ *
+ * NOTE: return shape keeps `creditBalance` for backward compatibility with
+ * existing callers (e.g. PaymentMethod.tsx reads
+ * response.data.data.creditBalance as the cash limit) — this is really the
+ * cash/credit LIMIT, not the separate `creditBalance` wallet column on
+ * marketplaceusers. Worth renaming across callers eventually.
+ */
+exports.getDeliveredOrdersTotal = async (userId) => {
+    try {
+        const { deliveredTotal, creditLimit } =
+            await exports.recalculateAndPersistCreditLimitDao(userId);
+
+        return {
+            deliveredTotal,
+            creditBalance: creditLimit,
+            creditLimit,
+        };
+    } catch (err) {
+        console.error("Error in getDeliveredOrdersTotal:", err);
+        throw err;
     }
 };
 
