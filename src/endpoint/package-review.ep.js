@@ -1,11 +1,25 @@
 const asyncHandler = require("express-async-handler");
 const packageReviewDao = require("../dao/package-review.dao");
 
+const ensureRetailUser = (req, res) => {
+    const buyerType = req.user?.buyerType;
+    if (!buyerType || buyerType.toLowerCase() !== "retail") {
+        res.status(403).json({
+            status: false,
+            message: "Package review feature is only available for Retail users.",
+        });
+        return false;
+    }
+    return true;
+};
+
 /**
  * GET /api/order/package/review/:orderId
  * Fetches the complete package review data for an order or process order.
  */
 exports.getOrderPackageReview = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
     const { orderId } = req.params;
     const { userId } = req.user;
 
@@ -37,6 +51,8 @@ exports.getOrderPackageReview = asyncHandler(async (req, res) => {
  * Replaces an item in an order package and records in replacerequest
  */
 exports.replacePackageItem = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
     const { userId } = req.user;
     const { orderPackageId, replceId, newProductId, productType, newQty, newPrice } = req.body;
 
@@ -77,6 +93,8 @@ exports.replacePackageItem = asyncHandler(async (req, res) => {
  * Resets a replaced item back to its default baseline state
  */
 exports.resetPackageItem = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
     const { userId } = req.user;
     const { orderPackageId, replceId, originalBaselineId } = req.body;
 
@@ -113,6 +131,8 @@ exports.resetPackageItem = asyncHandler(async (req, res) => {
  * Finalizes review, updates order lock status, and handles additional payment if any
  */
 exports.confirmPackageReview = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
     const { userId } = req.user;
     const {
         orderId,
@@ -175,6 +195,8 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
  * Returns current packing target limit and remaining available order slots.
  */
 exports.getPackingTargetSlots = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
     const { date, processOrderId } = req.query;
 
     const data = await packageReviewDao.getPackingSlotAvailabilityDao(date, processOrderId);
@@ -191,6 +213,8 @@ exports.getPackingTargetSlots = asyncHandler(async (req, res) => {
  * Cancel order and refund paid amount as credit balance
  */
 exports.cancelPackageOrder = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
     const userId = req.user?.id;
     const { orderId, processOrderId } = req.body;
 

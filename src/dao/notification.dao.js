@@ -4,8 +4,13 @@ const { emitNotificationToUser, emitUnreadCountToUser } = require("../socket/soc
 /**
  * Fetch all notifications for a given user.
  */
-exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
+exports.getUserNotificationsDao = (userId, limit = 50, offset = 0, buyerType = "Retail") => {
   return new Promise((resolve, reject) => {
+    const isWholesale = buyerType && String(buyerType).toLowerCase() === "wholesale";
+    const roleFilter = isWholesale
+      ? "AND LOWER(n.Title) NOT LIKE '%package finalization review%' AND LOWER(n.Title) NOT LIKE '%package review%'"
+      : "";
+
     const sql = `
       SELECT 
         n.id,
@@ -29,6 +34,7 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
       LEFT JOIN driverreturnorders dro ON dro.drvOrderId = do_item.id
       LEFT JOIN returnreason rr ON rr.id = dro.returnReasonId
       WHERE o.userId = ?
+        ${roleFilter}
       ORDER BY n.createdAt DESC, n.id DESC
       LIMIT ? OFFSET ?
     `;
@@ -69,14 +75,20 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
 /**
  * Count unread notifications for a user.
  */
-exports.getUnreadCountDao = (userId) => {
+exports.getUnreadCountDao = (userId, buyerType = "Retail") => {
   return new Promise((resolve, reject) => {
+    const isWholesale = buyerType && String(buyerType).toLowerCase() === "wholesale";
+    const roleFilter = isWholesale
+      ? "AND LOWER(n.Title) NOT LIKE '%package finalization review%' AND LOWER(n.Title) NOT LIKE '%package review%'"
+      : "";
+
     const sql = `
       SELECT COUNT(*) AS unreadCount
       FROM ordernotfication n
       JOIN processorders po ON n.orderId = po.id
       JOIN orders o ON po.orderId = o.id
       WHERE o.userId = ? AND n.isRead = 0
+        ${roleFilter}
     `;
 
     db.collectionofficer.query(sql, [userId], (err, results) => {
