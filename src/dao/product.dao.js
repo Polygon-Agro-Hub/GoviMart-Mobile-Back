@@ -246,6 +246,8 @@ exports.getProductsByProductTypeDao = (productTypeId, buyerType = "Retail") => {
         m.changeby,
         m.displayType,
         m.tags,
+        m.isEnable,
+        m.category AS marketplaceCategory,
         m.productTypeId,
         pt.id AS typeId,
         pt.typeName AS productTypeName,
@@ -260,12 +262,17 @@ exports.getProductsByProductTypeDao = (productTypeId, buyerType = "Retail") => {
       LEFT JOIN plant_care.cropgroup c ON v.cropGroupId = c.id
       WHERE (m.productTypeId = ? OR pt.typeName = ? OR pt.shortCode = ?)
         AND (m.isEnable = 1 OR m.isEnable IS NULL)
+        AND LOWER(m.category) = LOWER(?)
       ORDER BY m.displayName ASC
     `;
-    db.collectionofficer.query(sql, [productTypeId, productTypeId, productTypeId], (err, results) => {
-      if (err) return reject(err);
-      resolve(results || []);
-    });
+    db.collectionofficer.query(
+      sql,
+      [productTypeId, productTypeId, productTypeId, buyerType || "Retail"],
+      (err, results) => {
+        if (err) return reject(err);
+        resolve(results || []);
+      }
+    );
   });
 };
 
