@@ -1663,6 +1663,20 @@ exports.recalculateAndPersistCreditLimitDao = async (userId) => {
     try {
         connection = await db.collectionofficer.promise().getConnection();
 
+        const BONUS_PER_TIER = 250;
+        const TIER_THRESHOLD = 25000;
+
+        const [userRows] = await connection.query(
+            `SELECT creditLimit, creditLimitBonusTier FROM marketplaceusers WHERE id = ?`,
+            [userId],
+        );
+        if (!userRows.length) {
+            throw new Error(`User ${userId} not found`);
+        }
+        const currentCreditLimit = parseFloat(userRows[0].creditLimit || 0);
+        const currentTierValue = parseFloat(userRows[0].creditLimitBonusTier || 0);
+        const currentTierCount = Math.floor(currentTierValue / TIER_THRESHOLD);
+
         const [rows] = await connection.query(
             `SELECT COALESCE(SUM(o.fullTotal), 0) AS deliveredTotal
              FROM processorders p
@@ -1671,19 +1685,32 @@ exports.recalculateAndPersistCreditLimitDao = async (userId) => {
                AND p.status IN ('Delivered', 'Picked up')`,
             [userId],
         );
-
         const deliveredTotal = parseFloat(rows[0]?.deliveredTotal || 0);
 
-        // Base 2000, +250 for every full 25000 in delivered order value
-        const tiersEarned = Math.floor(deliveredTotal / 25000);
-        const computedLimit = 2000 + tiersEarned * 250;
+        const earnedTierCount = Math.floor(deliveredTotal / TIER_THRESHOLD);
 
-        await connection.query(
-            `UPDATE marketplaceusers SET creditLimit = ? WHERE id = ?`,
-            [computedLimit, userId],
-        );
+        const finalTierCount = Math.max(currentTierCount, earnedTierCount);
+        const newTiersCrossed = finalTierCount - currentTierCount;
 
-        return { deliveredTotal, creditLimit: computedLimit };
+        const finalCreditLimit =
+            newTiersCrossed > 0
+                ? currentCreditLimit + newTiersCrossed * BONUS_PER_TIER
+                : currentCreditLimit;
+
+        const finalTierValue = finalTierCount * TIER_THRESHOLD;
+
+        if (newTiersCrossed > 0) {
+            await connection.query(
+                `UPDATE marketplaceusers SET creditLimit = ?, creditLimitBonusTier = ? WHERE id = ?`,
+                [finalCreditLimit, finalTierValue, userId],
+            );
+        }
+
+        return {
+            deliveredTotal,
+            creditLimit: finalCreditLimit,
+            creditLimitBonusTier: finalTierValue,
+        };
     } catch (err) {
         console.error("Error in recalculateAndPersistCreditLimitDao:", err);
         throw err;
