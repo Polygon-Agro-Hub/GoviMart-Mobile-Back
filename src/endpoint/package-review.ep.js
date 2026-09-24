@@ -125,6 +125,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
         creditToAdd = 0,
         replacements = [],
         additionalItems = [],
+        deletedAdditionalItemIds = [],
         packages = [],
     } = req.body;
 
@@ -150,6 +151,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
             creditToAdd,
             replacements,
             additionalItems,
+            deletedAdditionalItemIds,
             packages,
         });
 

@@ -510,6 +510,7 @@ exports.confirmPackageReviewDao = ({
     creditToAdd = 0,
     replacements = [],
     additionalItems = [],
+    deletedAdditionalItemIds = [],
     packages = [],
 }) => {
     return new Promise((resolve, reject) => {
@@ -526,10 +527,12 @@ exports.confirmPackageReviewDao = ({
             creditToAdd,
             replacementsCount: Array.isArray(replacements) ? replacements.length : 0,
             additionalItemsCount: Array.isArray(additionalItems) ? additionalItems.length : 0,
+            deletedAdditionalItemsCount: Array.isArray(deletedAdditionalItemIds) ? deletedAdditionalItemIds.length : 0,
             packagesCount: Array.isArray(packages) ? packages.length : 0,
         });
         console.log("[confirmPackageReviewDao] Replacements Data:", JSON.stringify(replacements, null, 2));
         console.log("[confirmPackageReviewDao] Additional Items Data:", JSON.stringify(additionalItems, null, 2));
+        console.log("[confirmPackageReviewDao] Deleted Additional Item IDs:", JSON.stringify(deletedAdditionalItemIds, null, 2));
         console.log("[confirmPackageReviewDao] Packages Data:", JSON.stringify(packages, null, 2));
 
         db.collectionofficer.getConnection((connErr, connection) => {
@@ -744,6 +747,29 @@ exports.confirmPackageReviewDao = ({
                                 );
                             });
                             console.log(`[confirmPackageReviewDao] -> Inserted orderadditionalitems row ID:`, addRes.insertId);
+                        }
+                    }
+
+                    // 2b. Process deleted Ala Carte items (orderadditionalitems)
+                    if (Array.isArray(deletedAdditionalItemIds) && deletedAdditionalItemIds.length > 0) {
+                        const validDeleteIds = deletedAdditionalItemIds
+                            .map((id) => Number(id))
+                            .filter((id) => !isNaN(id) && id > 0);
+
+                        if (validDeleteIds.length > 0) {
+                            console.log(`[confirmPackageReviewDao] Deleting ${validDeleteIds.length} removed additional item(s) from DB:`, validDeleteIds);
+                            const deleteAddSql = `
+                                DELETE FROM orderadditionalitems 
+                                WHERE id IN (?) AND (proOrderId = ? OR orderId = ?)
+                            `;
+                            const deleteRes = await new Promise((res, rej) => {
+                                connection.query(
+                                    deleteAddSql,
+                                    [validDeleteIds, processOrderId || 0, orderId || 0],
+                                    (e, r) => e ? rej(e) : res(r)
+                                );
+                            });
+                            console.log(`[confirmPackageReviewDao] -> Deleted orderadditionalitems:`, deleteRes.affectedRows, "row(s)");
                         }
                     }
 
