@@ -7,11 +7,12 @@ const notificationDao = require("../dao/notification.dao");
  */
 exports.getNotifications = asyncHandler(async (req, res) => {
   const userId = req.user.id;
+  const buyerType = req.user.buyerType || "Retail";
   const { limit = 50, offset = 0 } = req.query;
 
   const [notifications, unreadCount] = await Promise.all([
-    notificationDao.getUserNotificationsDao(userId, limit, offset),
-    notificationDao.getUnreadCountDao(userId),
+    notificationDao.getUserNotificationsDao(userId, limit, offset, buyerType),
+    notificationDao.getUnreadCountDao(userId, buyerType),
   ]);
 
   return res.status(200).json({
