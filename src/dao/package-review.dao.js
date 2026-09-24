@@ -314,7 +314,7 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                                 image: baseline.productImage,
                                 price: baseline.price || baseline.baseUnitPrice,
                                 quantity: baseline.qty,
-                                unit: baseline.unitType || "kg",
+                                unit: "kg",
                                 category: baseline.categoryName || item.categoryName,
                             } : null,
                         };
