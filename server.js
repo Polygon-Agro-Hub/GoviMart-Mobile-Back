@@ -1,4 +1,5 @@
 const express = require("express");
+const path = require("path");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 const compression = require("compression");
@@ -63,6 +64,7 @@ const orderroute = require("./src/routes/order.routes");
 const cartroute = require("./src/routes/cart.routes");
 const paymentroute = require("./src/routes/payment.routes");
 const notificationroute = require("./src/routes/notification.routes");
+const appversionroute = require("./src/routes/app-version.routes");
 
 const registerRoutes = (prefix) => {
   app.use(`${prefix}/api/auth`, userroute);
@@ -74,6 +76,7 @@ const registerRoutes = (prefix) => {
   app.use(`${prefix}/api/cart`, cartroute);
   app.use(`${prefix}/api/payment`, paymentroute);
   app.use(`${prefix}/api/notification`, notificationroute);
+  app.use(`${prefix}/api/app-version`, appversionroute);
   app.use(`${prefix}`, healthroute);
 };
 

@@ -320,16 +320,6 @@ exports.userSignup = asyncHandler(async (req, res) => {
           message: "Company Phone Number already exists",
         });
       }
-
-      // Check if personal mobile and company phone are the same
-      const cleanCustomerPhone = String(phoneNumber).replace(/[^0-9]/g, "").replace(/^0+/, "").replace(/^94/, "");
-      const cleanCompanyPhone = String(companyPhoneNumber).replace(/[^0-9]/g, "").replace(/^0+/, "").replace(/^94/, "");
-      if (cleanCustomerPhone === cleanCompanyPhone) {
-        return res.status(400).json({
-          status: false,
-          message: "Customer Mobile Number and Company Number cannot be the same",
-        });
-      }
     }
 
     // Check if NIC already exists
