@@ -22,9 +22,9 @@ const signupSchema = Joi.object({
   buyerType: Joi.string().valid("Retail", "Wholesale").required(),
   email: Joi.string().email().trim().required(),
   nic: Joi.string().trim().pattern(/^(?:\d{9}[vVxX]|\d{12})$/).required().messages({
-    "string.empty": "NIC Number is required",
-    "string.pattern.base": "Invalid NIC Number format",
-    "any.required": "NIC Number is required",
+    "string.empty": "NIC number is required",
+    "string.pattern.base": "Invalid NIC number format",
+    "any.required": "NIC number is required",
   }),
   password: Joi.string().required(),
   agreeToMarketing: Joi.boolean().optional(),

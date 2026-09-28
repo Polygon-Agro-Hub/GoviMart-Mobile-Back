@@ -31,6 +31,8 @@ exports.loginUser = async (identifier, password) => {
     const sql = `
       SELECT 
         id, 
+        cusId,
+        title,
         firstName, 
         lastName, 
         email, 
