@@ -65,6 +65,7 @@ const cartroute = require("./src/routes/cart.routes");
 const paymentroute = require("./src/routes/payment.routes");
 const notificationroute = require("./src/routes/notification.routes");
 const appversionroute = require("./src/routes/app-version.routes");
+const errorHandler = require("./src/middlewares/error.middleware");
 
 const registerRoutes = (prefix) => {
   app.use(`${prefix}/api/auth`, userroute);
@@ -84,14 +85,7 @@ registerRoutes(BASE_PATH);
 registerRoutes("");
 
 // Error handling middleware
-app.use((err, req, res, next) => {
-  if (process.env.NODE_ENV !== "production") {
-    console.error(err.stack);
-  } else {
-    console.error(`[Error] ${err.message}`);
-  }
-  res.status(500).send("Something broke!!");
-});
+app.use(errorHandler);
 
 // Create HTTP server & initialize Socket.IO
 const server = http.createServer(app);
