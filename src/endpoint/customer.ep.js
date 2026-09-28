@@ -332,7 +332,7 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
     if (req.body.nic) {
       const isNicTaken = await customerDao.isNicTakenDao(userId, req.body.nic);
       if (isNicTaken) {
-        return res.status(400).json({ status: false, message: "NIC Number already exists" });
+        return res.status(400).json({ status: false, message: "NIC number already exists" });
       }
     }
 

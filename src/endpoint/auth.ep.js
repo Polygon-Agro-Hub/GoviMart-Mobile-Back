@@ -64,6 +64,8 @@ exports.login = asyncHandler(async (req, res) => {
       message: "Login successful",
       data: {
         id: result.id,
+        cusId: result.cusId,
+        title: result.title,
         token,
         refreshToken,
         firstName: result.firstName,
@@ -327,7 +329,7 @@ exports.userSignup = asyncHandler(async (req, res) => {
     if (existingNic) {
       return res.status(400).json({
         status: false,
-        message: "NIC Number already exists",
+        message: "NIC number already exists",
       });
     }
 
@@ -504,7 +506,7 @@ exports.verifySignup = asyncHandler(async (req, res) => {
       await userDao.deleteOtpDao(referenceId);
       return res.status(400).json({
         status: false,
-        message: "NIC Number already exists",
+        message: "NIC number already exists",
       });
     }
 
