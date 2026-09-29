@@ -69,3 +69,32 @@ exports.seedDummyNotifications = asyncHandler(async (req, res) => {
     result,
   });
 });
+
+/**
+ * POST /polygon/api/notification/save-push-token
+ * Save user device push token (FCM or Expo) matching Codi Net pattern.
+ */
+exports.savePushToken = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const { pushToken, tokenType = "fcm", deviceType = "android" } = req.body;
+
+  if (!pushToken) {
+    return res.status(400).json({
+      status: false,
+      message: "pushToken is required",
+    });
+  }
+
+  const pushNotificationService = require("../services/pushNotificationService");
+  await pushNotificationService.saveUserPushToken(
+    userId,
+    pushToken,
+    tokenType,
+    deviceType
+  );
+
+  return res.status(200).json({
+    status: true,
+    message: "Push token registered successfully",
+  });
+});
