@@ -215,7 +215,7 @@ exports.getAllPackageItemsDao = (packageId) => {
         FROM packagedetails pd
         LEFT JOIN producttypes pt ON pt.id = pd.productTypeId
         WHERE pd.packageId = ?
-        ORDER BY pd.productTypeId;
+        ORDER BY pt.typeName ASC;
         `;
     db.collectionofficer.query(sql, [packageId], (err, results) => {
       if (err) {
