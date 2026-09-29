@@ -338,32 +338,29 @@ exports.userSignup = asyncHandler(async (req, res) => {
   } = req.body;
 
   try {
+    const conflictErrors = {};
+    const errorMessages = [];
+
     // Check if user already exists
     const existingUser = await userDao.getUserByEmailDao(email);
     if (existingUser) {
-      return res.status(400).json({
-        status: false,
-        message: "Email already in use.",
-      });
+      conflictErrors.email = "Email already exists.";
+      errorMessages.push("Email already exists.");
     }
 
     // Check if phone number already exists in phoneNumber, phoneNumber2, or companyPhone
     const existingPhone = await userDao.getUserByPhoneDao(phoneCode, phoneNumber);
     if (existingPhone) {
-      return res.status(400).json({
-        status: false,
-        message: "Mobile Number already exists",
-      });
+      conflictErrors.phoneNumber = "Mobile Number already exists";
+      errorMessages.push("Mobile Number already exists");
     }
 
     // Check secondary phone number if provided
     if (phoneNumber2) {
       const existingPhone2 = await userDao.getUserByPhoneDao(phoneCode2 || phoneCode, phoneNumber2);
       if (existingPhone2) {
-        return res.status(400).json({
-          status: false,
-          message: "Secondary Mobile Number already exists",
-        });
+        conflictErrors.phoneNumber2 = "Secondary Mobile Number already exists";
+        errorMessages.push("Secondary Mobile Number already exists");
       }
     }
 
@@ -371,19 +368,26 @@ exports.userSignup = asyncHandler(async (req, res) => {
     if (companyPhoneNumber) {
       const existingCompanyPhone = await userDao.getUserByPhoneDao(companyPhoneCode || phoneCode, companyPhoneNumber);
       if (existingCompanyPhone) {
-        return res.status(400).json({
-          status: false,
-          message: "Company Phone Number already exists",
-        });
+        conflictErrors.companyNumber = "Company Phone Number already exists";
+        errorMessages.push("Company Phone Number already exists");
       }
     }
 
     // Check if NIC already exists
-    const existingNic = await userDao.getUserByNicDao(nic);
-    if (existingNic) {
+    if (nic) {
+      const existingNic = await userDao.getUserByNicDao(nic);
+      if (existingNic) {
+        conflictErrors.nic = "NIC number already exists";
+        errorMessages.push("NIC number already exists");
+      }
+    }
+
+    if (errorMessages.length > 0) {
       return res.status(400).json({
         status: false,
-        message: "NIC number already exists",
+        message: errorMessages.join(". "),
+        errors: errorMessages,
+        fieldErrors: conflictErrors,
       });
     }
 
@@ -510,35 +514,29 @@ exports.verifySignup = asyncHandler(async (req, res) => {
 
     const { signupData } = decoded;
 
+    const conflictErrors = {};
+    const errorMessages = [];
+
     // Check again if email was taken since signup started
     const existingUser = await userDao.getUserByEmailDao(signupData.email);
     if (existingUser) {
-      await userDao.deleteOtpDao(referenceId);
-      return res.status(400).json({
-        status: false,
-        message: "Email already in use.",
-      });
+      conflictErrors.email = "Email already in use.";
+      errorMessages.push("Email already in use.");
     }
 
     // Check again if phone was taken since signup started
     const existingPhone = await userDao.getUserByPhoneDao(signupData.phoneCode, signupData.phoneNumber);
     if (existingPhone) {
-      await userDao.deleteOtpDao(referenceId);
-      return res.status(400).json({
-        status: false,
-        message: "Mobile Number already exists",
-      });
+      conflictErrors.phoneNumber = "Mobile Number already exists";
+      errorMessages.push("Mobile Number already exists");
     }
 
     // Check again if secondary phone was taken
     if (signupData.phoneNumber2) {
       const existingPhone2 = await userDao.getUserByPhoneDao(signupData.phoneCode2 || signupData.phoneCode, signupData.phoneNumber2);
       if (existingPhone2) {
-        await userDao.deleteOtpDao(referenceId);
-        return res.status(400).json({
-          status: false,
-          message: "Secondary Mobile Number already exists",
-        });
+        conflictErrors.phoneNumber2 = "Secondary Mobile Number already exists";
+        errorMessages.push("Secondary Mobile Number already exists");
       }
     }
 
@@ -546,21 +544,27 @@ exports.verifySignup = asyncHandler(async (req, res) => {
     if (signupData.companyPhoneNumber) {
       const existingCompanyPhone = await userDao.getUserByPhoneDao(signupData.companyPhoneCode || signupData.phoneCode, signupData.companyPhoneNumber);
       if (existingCompanyPhone) {
-        await userDao.deleteOtpDao(referenceId);
-        return res.status(400).json({
-          status: false,
-          message: "Company Phone Number already exists",
-        });
+        conflictErrors.companyNumber = "Company Phone Number already exists";
+        errorMessages.push("Company Phone Number already exists");
       }
     }
 
     // Check again if NIC was taken since signup started
-    const existingNic = await userDao.getUserByNicDao(signupData.nic);
-    if (existingNic) {
+    if (signupData.nic) {
+      const existingNic = await userDao.getUserByNicDao(signupData.nic);
+      if (existingNic) {
+        conflictErrors.nic = "NIC number already exists";
+        errorMessages.push("NIC number already exists");
+      }
+    }
+
+    if (errorMessages.length > 0) {
       await userDao.deleteOtpDao(referenceId);
       return res.status(400).json({
         status: false,
-        message: "NIC number already exists",
+        message: errorMessages.join(". "),
+        errors: errorMessages,
+        fieldErrors: conflictErrors,
       });
     }
 
@@ -731,43 +735,43 @@ exports.updatePassword = asyncHandler(async (req, res) => {
     });
   }
 
-    if (currentPassword === newPassword) {
+  if (currentPassword === newPassword) {
+    return res.status(400).json({
+      status: false,
+      message: "New password cannot be the same as your current password.",
+    });
+  }
+
+  try {
+    const user = await userDao.getUserPasswordByIdDao(userId);
+    if (!user) {
+      return res.status(404).json({
+        status: false,
+        message: "User not found.",
+      });
+    }
+
+    let isPasswordValid = false;
+    if (user.password) {
+      isPasswordValid = bcrypt.compareSync(currentPassword, user.password);
+      if (!isPasswordValid && /^[0-9]{9}[vVxX]$/.test(currentPassword)) {
+        isPasswordValid = bcrypt.compareSync(currentPassword.toUpperCase(), user.password);
+      }
+    }
+
+    if (!isPasswordValid) {
+      return res.status(400).json({
+        status: false,
+        message: "Invalid current password.",
+      });
+    }
+
+    if (user.password && bcrypt.compareSync(newPassword, user.password)) {
       return res.status(400).json({
         status: false,
         message: "New password cannot be the same as your current password.",
       });
     }
-
-    try {
-      const user = await userDao.getUserPasswordByIdDao(userId);
-      if (!user) {
-        return res.status(404).json({
-          status: false,
-          message: "User not found.",
-        });
-      }
-
-      let isPasswordValid = false;
-      if (user.password) {
-        isPasswordValid = bcrypt.compareSync(currentPassword, user.password);
-        if (!isPasswordValid && /^[0-9]{9}[vVxX]$/.test(currentPassword)) {
-          isPasswordValid = bcrypt.compareSync(currentPassword.toUpperCase(), user.password);
-        }
-      }
-
-      if (!isPasswordValid) {
-        return res.status(400).json({
-          status: false,
-          message: "Invalid current password.",
-        });
-      }
-
-      if (user.password && bcrypt.compareSync(newPassword, user.password)) {
-        return res.status(400).json({
-          status: false,
-          message: "New password cannot be the same as your current password.",
-        });
-      }
 
     const SALT_ROUNDS = parseInt(process.env.SALT_ROUNDS || "10", 10);
     const hashedPassword = bcrypt.hashSync(newPassword, SALT_ROUNDS);
