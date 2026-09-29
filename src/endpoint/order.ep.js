@@ -115,8 +115,6 @@ exports.checkCouponAvalability = async (req, res) => {
 
         const couponData = await RetailOrderDao.getCouponDetailsDao(coupon);
         console.log("Coupon data:", couponData);
-        const startDate = new Date(couponData.startDate);
-        const endDate = new Date(couponData.endDate);
 
         if (!couponData || couponData === null) {
             return res.status(404).json({
@@ -145,9 +143,12 @@ exports.checkCouponAvalability = async (req, res) => {
             });
         }
 
+        const startDate = couponData.startDate ? new Date(couponData.startDate) : null;
+        const endDate = couponData.endDate ? new Date(couponData.endDate) : null;
+
         console.log(currentDate, startDate);
 
-        if (currentDate < startDate) {
+        if (startDate && !isNaN(startDate.getTime()) && currentDate < startDate) {
             return res.status(400).json({
                 status: false,
                 message: `This coupon will be valid from ${startDate.toLocaleDateString()}`,
@@ -155,7 +156,7 @@ exports.checkCouponAvalability = async (req, res) => {
             });
         }
 
-        if (currentDate > endDate) {
+        if (endDate && !isNaN(endDate.getTime()) && currentDate > endDate) {
             return res.status(400).json({
                 status: false,
                 message: `This coupon has expired on ${endDate.toLocaleDateString()}`,
@@ -509,9 +510,9 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     isCoupon: isCoupon || false,
                     couponValue: finalCouponValue,
                     couponType: couponType || null,
-                    total: calculatedGrandTotal,
+                    total: parseFloat(calculatedNormalItemsTotal.toFixed(2)),
                     fullTotal: calculatedGrandTotal,
-                    discount: finalDiscount,
+                    discount: effectiveProductDiscount,
                     deliveryCharge: finalDeliveryCharge,
                     sheduleType: normScheduleType,
                     validityPeriod: effValidityPeriod,
@@ -668,9 +669,14 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                     connection.release();
 
-                    // ── 5f. Clear cart (best-effort, after commit) ────────────
+                    // ── Clear cart (best-effort, after commit) ────────────
                     RetailOrderDao.clearCartAfterOrderDao(effectiveCartId).catch((clearErr) => {
                         console.error("[createOrder] Cart clear failed (non-fatal):", clearErr);
+                    });
+
+                    // ── Refresh marketplaceusers.creditLimit (best-effort, after commit) ──
+                    RetailOrderDao.recalculateAndPersistCreditLimitDao(userId).catch((limitErr) => {
+                        console.error("[createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
                     });
 
                     return safeRespond(201, {

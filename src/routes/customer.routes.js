@@ -75,4 +75,7 @@ router.post("/resend-phone-change-otp", authMiddleware, customerEp.resendPhoneCh
 // Update / Clear Credit Balance
 router.put("/update-credit-balance", authMiddleware, customerEp.updateCreditBalance);
 
+// Check if user has a delivered order
+router.get("/delivery-eligibility", authMiddleware, customerEp.getDeliveryEligibility);
+
 module.exports = router;

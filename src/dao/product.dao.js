@@ -14,12 +14,14 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
         m.unitType,
         m.startValue,
         m.changeby,
+        m.maxQuantity,
         m.displayType,
         m.tags,
         v.varietyNameEnglish,
         v.varietyNameSinhala,
         v.varietyNameTamil,
         v.image,
+        v.bgColor,
         c.cropNameEnglish,
         c.cropNameSinhala,
         c.cropNameTamil,
@@ -214,7 +216,7 @@ exports.getAllPackageItemsDao = (packageId) => {
         FROM packagedetails pd
         LEFT JOIN producttypes pt ON pt.id = pd.productTypeId
         WHERE pd.packageId = ?
-        ORDER BY pd.productTypeId;
+        ORDER BY pt.typeName ASC;
         `;
     db.collectionofficer.query(sql, [packageId], (err, results) => {
       if (err) {
@@ -243,8 +245,11 @@ exports.getProductsByProductTypeDao = (productTypeId, buyerType = "Retail") => {
         m.unitType,
         m.startValue,
         m.changeby,
+        m.maxQuantity,
         m.displayType,
         m.tags,
+        m.isEnable,
+        m.category AS marketplaceCategory,
         m.productTypeId,
         pt.id AS typeId,
         pt.typeName AS productTypeName,
@@ -259,12 +264,17 @@ exports.getProductsByProductTypeDao = (productTypeId, buyerType = "Retail") => {
       LEFT JOIN plant_care.cropgroup c ON v.cropGroupId = c.id
       WHERE (m.productTypeId = ? OR pt.typeName = ? OR pt.shortCode = ?)
         AND (m.isEnable = 1 OR m.isEnable IS NULL)
+        AND LOWER(m.category) = LOWER(?)
       ORDER BY m.displayName ASC
     `;
-    db.collectionofficer.query(sql, [productTypeId, productTypeId, productTypeId], (err, results) => {
-      if (err) return reject(err);
-      resolve(results || []);
-    });
+    db.collectionofficer.query(
+      sql,
+      [productTypeId, productTypeId, productTypeId, buyerType || "Retail"],
+      (err, results) => {
+        if (err) return reject(err);
+        resolve(results || []);
+      }
+    );
   });
 };
 

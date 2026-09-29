@@ -4,8 +4,13 @@ const { emitNotificationToUser, emitUnreadCountToUser } = require("../socket/soc
 /**
  * Fetch all notifications for a given user.
  */
-exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
+exports.getUserNotificationsDao = (userId, limit = 50, offset = 0, buyerType = "Retail") => {
   return new Promise((resolve, reject) => {
+    const isWholesale = buyerType && String(buyerType).toLowerCase() === "wholesale";
+    const roleFilter = isWholesale
+      ? "AND LOWER(n.Title) NOT LIKE '%package finalization review%' AND LOWER(n.Title) NOT LIKE '%package review%'"
+      : "";
+
     const sql = `
       SELECT 
         n.id,
@@ -19,6 +24,7 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
         po.amount,
         po.sheduleDate,
         po.status AS orderStatus,
+        po.isFinalized,
         o.delivaryMethod,
         rr.rsnEnglish AS returnReason,
         dro.note AS returnNote
@@ -29,6 +35,7 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
       LEFT JOIN driverreturnorders dro ON dro.drvOrderId = do_item.id
       LEFT JOIN returnreason rr ON rr.id = dro.returnReasonId
       WHERE o.userId = ?
+        ${roleFilter}
       ORDER BY n.createdAt DESC, n.id DESC
       LIMIT ? OFFSET ?
     `;
@@ -54,6 +61,13 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
             `Reason : “${effectiveReason}”`
           );
         }
+
+        // Move Reason section to a second line (newline)
+        msg = msg.replace(/([^\n\r])\s*(?:[.]\s*)?(Reason\s*[:：])/gi, (match, prefix, reasonTag) => {
+          const trimmedPrefix = prefix.trimEnd();
+          const hasPunctuation = /[.!?]$/.test(trimmedPrefix);
+          return trimmedPrefix + (hasPunctuation ? "" : ".") + "\n" + reasonTag;
+        });
         return {
           ...row,
           returnReason: effectiveReason || returnReason,
@@ -69,14 +83,20 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
 /**
  * Count unread notifications for a user.
  */
-exports.getUnreadCountDao = (userId) => {
+exports.getUnreadCountDao = (userId, buyerType = "Retail") => {
   return new Promise((resolve, reject) => {
+    const isWholesale = buyerType && String(buyerType).toLowerCase() === "wholesale";
+    const roleFilter = isWholesale
+      ? "AND LOWER(n.Title) NOT LIKE '%package finalization review%' AND LOWER(n.Title) NOT LIKE '%package review%'"
+      : "";
+
     const sql = `
       SELECT COUNT(*) AS unreadCount
       FROM ordernotfication n
       JOIN processorders po ON n.orderId = po.id
       JOIN orders o ON po.orderId = o.id
       WHERE o.userId = ? AND n.isRead = 0
+        ${roleFilter}
     `;
 
     db.collectionofficer.query(sql, [userId], (err, results) => {
@@ -111,7 +131,7 @@ exports.markAsReadDao = (notificationId, userId) => {
       try {
         const unreadCount = await exports.getUnreadCountDao(userId);
         emitUnreadCountToUser(userId, unreadCount);
-      } catch (_) {}
+      } catch (_) { }
 
       resolve(result.affectedRows > 0);
     });
@@ -146,7 +166,18 @@ exports.markAllAsReadDao = (userId) => {
 /**
  * Create a new notification in DB and emit via Socket.IO.
  */
-exports.createNotificationDao = ({ orderId, title, message }) => {
+exports.createNotificationDao = (arg1, arg2, arg3) => {
+  let orderId, title, message;
+  if (typeof arg1 === "object" && arg1 !== null) {
+    orderId = arg1.orderId;
+    title = arg1.title;
+    message = arg1.message;
+  } else {
+    orderId = arg1;
+    title = arg2;
+    message = arg3;
+  }
+
   return new Promise((resolve, reject) => {
     const insertSql = `
       INSERT INTO ordernotfication (orderId, Title, message, isRead)
@@ -209,6 +240,15 @@ exports.createNotificationDao = ({ orderId, title, message }) => {
           notifData.returnReason = effectiveReason;
         }
 
+        // Move Reason section to a second line (newline)
+        if (notifData.message) {
+          notifData.message = notifData.message.replace(/([^\n\r])\s*(?:[.]\s*)?(Reason\s*[:：])/gi, (match, prefix, reasonTag) => {
+            const trimmedPrefix = prefix.trimEnd();
+            const hasPunctuation = /[.!?]$/.test(trimmedPrefix);
+            return trimmedPrefix + (hasPunctuation ? "" : ".") + "\n" + reasonTag;
+          });
+        }
+
         // Emit in real-time via Socket.IO
         if (notifData.userId) {
           try {
@@ -218,6 +258,24 @@ exports.createNotificationDao = ({ orderId, title, message }) => {
             emitUnreadCountToUser(notifData.userId, unreadCount);
           } catch (_) {
             emitNotificationToUser(notifData.userId, notifData);
+          }
+
+          // Send remote Push Notification (Expo / FCM) so user receives it when app is in background or closed
+          try {
+            const { sendPushToUser } = require("../services/pushNotificationService");
+            sendPushToUser(notifData.userId, {
+              title: notifData.title,
+              body: notifData.message,
+              data: {
+                ...notifData,
+                orderId: notifData.orderId || notifData.processOrderId,
+                invNo: notifData.invNo,
+              },
+            }).catch((err) => {
+              console.warn("⚠️ [NotificationDao] Failed to send push notification:", err.message);
+            });
+          } catch (e) {
+            console.warn("⚠️ [NotificationDao] Error calling sendPushToUser:", e.message);
           }
         }
 

@@ -8,10 +8,10 @@ const initSocket = (httpServer) => {
     cors: {
       origin: "*",
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      credentials: true,
     },
-    transports: ["websocket", "polling"],
-    allowEIO3: true,
+    // polling first so Vercel Fluid compute handles the initial handshake,
+    // then upgrades to websocket when available — exactly like Sales Dash
+    transports: ["polling", "websocket"],
   });
 
   io.use((socket, next) => {
@@ -229,7 +229,7 @@ let lastHashes = {
  * Periodically polls a fast (<5ms) checksum query to detect DB changes
  * made by external tools/admin panels and immediately notifies mobile apps via Socket.IO.
  */
-const startDbChangeWatcher = (pollIntervalMs = 2500) => {
+const startDbChangeWatcher = (pollIntervalMs = 45000) => {
   if (dbWatcherInterval) return;
 
   const db = require("../startup/database");
@@ -246,6 +246,13 @@ const startDbChangeWatcher = (pollIntervalMs = 2500) => {
   dbWatcherInterval = setInterval(() => {
     if (isChecking) return;
     if (!io) return;
+
+    // Check if any client is actually connected
+    const connectedClients = io.engine?.clientsCount || io.sockets?.sockets?.size || 0;
+    if (connectedClients === 0) {
+      // No active mobile clients connected -> skip DB query completely
+      return;
+    }
 
     isChecking = true;
     db.collectionofficer.query(checkQuery, (err, rows) => {

@@ -86,6 +86,16 @@ exports.getUserCart = asyncHandler(async (req, res) => {
     const stepVal = convertVal(rawChangeBy, currentUnit === "g");
     const currentWeight = parseFloat(prod.quantity) || minWeight;
 
+    const rawMaxVal =
+      prod.maxQuantity != null && String(prod.maxQuantity).trim() !== ""
+        ? parseFloat(prod.maxQuantity)
+        : null;
+    const maxWeight =
+      rawMaxVal != null && !isNaN(rawMaxVal) && rawMaxVal > 0
+        ? convertVal(rawMaxVal, currentUnit === "g")
+        : undefined;
+
+
     return {
       id: prod.productId,
       name: prod.name,
@@ -97,6 +107,8 @@ exports.getUserCart = asyncHandler(async (req, res) => {
       weight: currentWeight,
       unit: currentUnit,
       minimumWeight: minWeight,
+      maxWeight: maxWeight,
+      maxQuantity: rawMaxVal != null && !isNaN(rawMaxVal) && rawMaxVal > 0 ? rawMaxVal : undefined,
       step: stepVal,
       isUnavailable: prod.isEnable !== 1,
     };

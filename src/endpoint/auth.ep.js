@@ -9,8 +9,128 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
-// Brute-force lockout: Track consecutive incorrect OTP verification attempts (Risk 4.B)
-const signupOtpAttempts = new Map();
+// Brute-force lockout & rate limiting
+const signupLockouts = new Map(); // key -> lockoutUntil timestamp (ms)
+const signupAttempts = new Map(); // primaryKey -> { count, firstAttemptAt }
+const signupRequestAttempts = new Map(); // key -> array of request timestamps
+
+const SIGNUP_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+const MAX_SIGNUP_ATTEMPTS = 5;
+
+const getSignupLockoutKeys = (email, phoneCode, phoneNumber) => {
+  const keys = [];
+  if (email && String(email).trim()) {
+    keys.push(`email:${String(email).trim().toLowerCase()}`);
+  }
+  if (phoneNumber && String(phoneNumber).trim()) {
+    const rawDigits = String(phoneNumber).trim().replace(/[^0-9]/g, "");
+    const noZero = rawDigits.replace(/^0+/, "");
+    const codeDigits = String(phoneCode || "94").replace(/[^0-9]/g, "");
+
+    if (noZero) {
+      keys.push(`phone:${codeDigits}${noZero}`);
+      keys.push(`phone:${codeDigits}${rawDigits}`);
+      keys.push(`phone:${noZero}`);
+      keys.push(`phone:${rawDigits}`);
+    }
+  }
+  return [...new Set(keys)];
+};
+
+const checkSignupLockout = (keys) => {
+  const now = Date.now();
+  for (const key of keys) {
+    const lockoutUntil = signupLockouts.get(key);
+    if (lockoutUntil) {
+      if (lockoutUntil > now) {
+        const remainingSec = Math.ceil((lockoutUntil - now) / 1000);
+        return { locked: true, remainingSec, lockoutUntil };
+      } else {
+        signupLockouts.delete(key);
+      }
+    }
+  }
+  return { locked: false, remainingSec: 0 };
+};
+
+const setSignupLockout = (keys, durationMs = SIGNUP_LOCKOUT_MS) => {
+  const now = Date.now();
+  const lockoutUntil = now + durationMs;
+  for (const key of keys) {
+    signupLockouts.set(key, lockoutUntil);
+  }
+  return lockoutUntil;
+};
+
+const clearSignupLockout = (keys) => {
+  for (const key of keys) {
+    signupLockouts.delete(key);
+    signupAttempts.delete(key);
+    signupRequestAttempts.delete(key);
+  }
+};
+
+// Forgot Password Lockout & Attempt Tracker
+const forgotPasswordLockouts = new Map(); // key -> lockoutUntil timestamp (ms)
+const forgotPasswordAttempts = new Map(); // primaryKey -> { count, firstAttemptAt }
+const forgotPasswordRequestAttempts = new Map(); // key -> array of request timestamps
+
+const FORGOT_PWD_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+const MAX_FORGOT_PWD_ATTEMPTS = 5;
+
+const getForgotPwdLockoutKeys = (type, email, phoneCode, phoneNumber, userId) => {
+  const keys = [];
+  if (userId) keys.push(`user:${userId}`);
+  if (email && email.trim()) {
+    keys.push(`email:${email.trim().toLowerCase()}`);
+  }
+  if (phoneNumber && phoneNumber.trim()) {
+    const rawDigits = String(phoneNumber).trim().replace(/[^0-9]/g, "");
+    const noZero = rawDigits.replace(/^0+/, "");
+    const codeDigits = String(phoneCode || "94").replace(/[^0-9]/g, "");
+
+    if (noZero) {
+      keys.push(`phone:${codeDigits}${noZero}`);
+      keys.push(`phone:${codeDigits}${rawDigits}`);
+      keys.push(`phone:${noZero}`);
+      keys.push(`phone:${rawDigits}`);
+    }
+  }
+  return [...new Set(keys)];
+};
+
+const checkForgotPwdLockout = (keys) => {
+  const now = Date.now();
+  for (const key of keys) {
+    const lockoutUntil = forgotPasswordLockouts.get(key);
+    if (lockoutUntil) {
+      if (lockoutUntil > now) {
+        const remainingSec = Math.ceil((lockoutUntil - now) / 1000);
+        return { locked: true, remainingSec, lockoutUntil };
+      } else {
+        forgotPasswordLockouts.delete(key);
+      }
+    }
+  }
+  return { locked: false, remainingSec: 0 };
+};
+
+const setForgotPwdLockout = (keys, durationMs = FORGOT_PWD_LOCKOUT_MS) => {
+  const now = Date.now();
+  const lockoutUntil = now + durationMs;
+  for (const key of keys) {
+    forgotPasswordLockouts.set(key, lockoutUntil);
+  }
+  return lockoutUntil;
+};
+
+const clearForgotPwdLockout = (keys) => {
+  for (const key of keys) {
+    forgotPasswordLockouts.delete(key);
+    forgotPasswordRequestAttempts.delete(key);
+    forgotPasswordAttempts.delete(key);
+  }
+};
 
 // Login User
 exports.login = asyncHandler(async (req, res) => {
@@ -64,6 +184,8 @@ exports.login = asyncHandler(async (req, res) => {
       message: "Login successful",
       data: {
         id: result.id,
+        cusId: result.cusId,
+        title: result.title,
         token,
         refreshToken,
         firstName: result.firstName,
@@ -282,32 +404,29 @@ exports.userSignup = asyncHandler(async (req, res) => {
   } = req.body;
 
   try {
+    const conflictErrors = {};
+    const errorMessages = [];
+
     // Check if user already exists
     const existingUser = await userDao.getUserByEmailDao(email);
     if (existingUser) {
-      return res.status(400).json({
-        status: false,
-        message: "Email already in use.",
-      });
+      conflictErrors.email = "Email already exists.";
+      errorMessages.push("Email already exists.");
     }
 
     // Check if phone number already exists in phoneNumber, phoneNumber2, or companyPhone
     const existingPhone = await userDao.getUserByPhoneDao(phoneCode, phoneNumber);
     if (existingPhone) {
-      return res.status(400).json({
-        status: false,
-        message: "Mobile Number already exists",
-      });
+      conflictErrors.phoneNumber = "Mobile Number already exists";
+      errorMessages.push("Mobile Number already exists");
     }
 
     // Check secondary phone number if provided
     if (phoneNumber2) {
       const existingPhone2 = await userDao.getUserByPhoneDao(phoneCode2 || phoneCode, phoneNumber2);
       if (existingPhone2) {
-        return res.status(400).json({
-          status: false,
-          message: "Secondary Mobile Number already exists",
-        });
+        conflictErrors.phoneNumber2 = "Secondary Mobile Number already exists";
+        errorMessages.push("Secondary Mobile Number already exists");
       }
     }
 
@@ -315,31 +434,58 @@ exports.userSignup = asyncHandler(async (req, res) => {
     if (companyPhoneNumber) {
       const existingCompanyPhone = await userDao.getUserByPhoneDao(companyPhoneCode || phoneCode, companyPhoneNumber);
       if (existingCompanyPhone) {
-        return res.status(400).json({
-          status: false,
-          message: "Company Phone Number already exists",
-        });
-      }
-
-      // Check if personal mobile and company phone are the same
-      const cleanCustomerPhone = String(phoneNumber).replace(/[^0-9]/g, "").replace(/^0+/, "").replace(/^94/, "");
-      const cleanCompanyPhone = String(companyPhoneNumber).replace(/[^0-9]/g, "").replace(/^0+/, "").replace(/^94/, "");
-      if (cleanCustomerPhone === cleanCompanyPhone) {
-        return res.status(400).json({
-          status: false,
-          message: "Customer Mobile Number and Company Number cannot be the same",
-        });
+        conflictErrors.companyNumber = "Company Phone Number already exists";
+        errorMessages.push("Company Phone Number already exists");
       }
     }
 
     // Check if NIC already exists
-    const existingNic = await userDao.getUserByNicDao(nic);
-    if (existingNic) {
+    if (nic) {
+      const existingNic = await userDao.getUserByNicDao(nic);
+      if (existingNic) {
+        conflictErrors.nic = "NIC number already exists";
+        errorMessages.push("NIC number already exists");
+      }
+    }
+
+    if (errorMessages.length > 0) {
       return res.status(400).json({
         status: false,
-        message: "NIC Number already exists",
+        message: errorMessages.join(". "),
+        errors: errorMessages,
+        fieldErrors: conflictErrors,
       });
     }
+
+    // Check if phone or email is currently locked out
+    const lockoutKeys = getSignupLockoutKeys(email, phoneCode, phoneNumber);
+    const lockoutStatus = checkSignupLockout(lockoutKeys);
+    if (lockoutStatus.locked) {
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: lockoutStatus.remainingSec,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+
+    // Rate limit request frequency (Max 5 signup OTP requests / 15 min)
+    const primaryKey = lockoutKeys[0] || `signup:${email || phoneNumber}`;
+    const now = Date.now();
+    const requestTimestamps = (signupRequestAttempts.get(primaryKey) || [])
+      .filter((ts) => now - ts < SIGNUP_LOCKOUT_MS);
+
+    if (requestTimestamps.length >= MAX_SIGNUP_ATTEMPTS) {
+      setSignupLockout(lockoutKeys);
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: 900,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+    requestTimestamps.push(now);
+    signupRequestAttempts.set(primaryKey, requestTimestamps);
 
     // Generate cryptographically secure 5-digit OTP code (Risk 4.B)
     const otp = crypto.randomInt(10000, 100000).toString();
@@ -412,6 +558,33 @@ exports.verifySignup = asyncHandler(async (req, res) => {
   }
 
   try {
+    let decoded;
+    try {
+      decoded = jwt.verify(signupToken, process.env.JWT_SECRET);
+    } catch (tokenErr) {
+      return res.status(400).json({
+        status: false,
+        message: "Registration session has expired or is invalid.",
+      });
+    }
+
+    const { signupData } = decoded || {};
+    const lockoutKeys = getSignupLockoutKeys(
+      signupData?.email,
+      signupData?.phoneCode,
+      signupData?.phoneNumber
+    );
+
+    const lockoutStatus = checkSignupLockout(lockoutKeys);
+    if (lockoutStatus.locked) {
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: lockoutStatus.remainingSec,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+
     // 1. Verify OTP code against DB record
     const otpRecord = await userDao.getOtpDao(referenceId);
 
@@ -430,69 +603,71 @@ exports.verifySignup = asyncHandler(async (req, res) => {
       });
     }
 
-    if (otpRecord.otp !== code) {
-      const attempts = (signupOtpAttempts.get(referenceId) || 0) + 1;
-      signupOtpAttempts.set(referenceId, attempts);
+    const primaryKey = lockoutKeys[0] || `signup:${signupData?.email || signupData?.phoneNumber || referenceId}`;
 
-      if (attempts >= 5) {
-        signupOtpAttempts.delete(referenceId);
+    if (otpRecord.otp !== code) {
+      const now = Date.now();
+      let attemptData = signupAttempts.get(primaryKey);
+      if (attemptData && typeof attemptData === "object") {
+        if (now - attemptData.firstAttemptAt > SIGNUP_LOCKOUT_MS) {
+          attemptData = null;
+        }
+      } else if (typeof attemptData === "number") {
+        attemptData = { count: attemptData, firstAttemptAt: now };
+      }
+
+      const currentAttempts = (attemptData ? attemptData.count : 0) + 1;
+      signupAttempts.set(primaryKey, {
+        count: currentAttempts,
+        firstAttemptAt: attemptData ? attemptData.firstAttemptAt : now,
+      });
+
+      if (currentAttempts >= MAX_SIGNUP_ATTEMPTS) {
+        signupAttempts.delete(primaryKey);
         await userDao.deleteOtpDao(referenceId);
+        setSignupLockout(lockoutKeys);
+
         return res.status(429).json({
           status: false,
-          message: "Too many incorrect verification attempts. This code is now invalidated. Please request a new code.",
+          isRateLimited: true,
+          retryAfter: 900,
+          message: "Too many verification attempts. Please try again after 15 minutes.",
         });
       }
 
+      const remainingAttempts = MAX_SIGNUP_ATTEMPTS - currentAttempts;
       return res.status(400).json({
         status: false,
-        message: `Incorrect verification code. ${5 - attempts} attempts remaining.`,
+        message: `Incorrect verification code. ${remainingAttempts} attempts remaining.`,
       });
     }
 
-    signupOtpAttempts.delete(referenceId);
+    clearSignupLockout(lockoutKeys);
 
-    // 2. Verify and decode signupToken
-    let decoded;
-    try {
-      decoded = jwt.verify(signupToken, process.env.JWT_SECRET);
-    } catch (tokenErr) {
-      return res.status(400).json({
-        status: false,
-        message: "Registration session has expired or is invalid.",
-      });
-    }
-
-    const { signupData } = decoded;
+    // 2. Decode and check conflict errors
+    const conflictErrors = {};
+    const errorMessages = [];
 
     // Check again if email was taken since signup started
     const existingUser = await userDao.getUserByEmailDao(signupData.email);
     if (existingUser) {
-      await userDao.deleteOtpDao(referenceId);
-      return res.status(400).json({
-        status: false,
-        message: "Email already in use.",
-      });
+      conflictErrors.email = "Email already in use.";
+      errorMessages.push("Email already in use.");
     }
 
     // Check again if phone was taken since signup started
     const existingPhone = await userDao.getUserByPhoneDao(signupData.phoneCode, signupData.phoneNumber);
     if (existingPhone) {
-      await userDao.deleteOtpDao(referenceId);
-      return res.status(400).json({
-        status: false,
-        message: "Mobile Number already exists",
-      });
+      conflictErrors.phoneNumber = "Mobile Number already exists";
+      errorMessages.push("Mobile Number already exists");
     }
 
     // Check again if secondary phone was taken
     if (signupData.phoneNumber2) {
       const existingPhone2 = await userDao.getUserByPhoneDao(signupData.phoneCode2 || signupData.phoneCode, signupData.phoneNumber2);
       if (existingPhone2) {
-        await userDao.deleteOtpDao(referenceId);
-        return res.status(400).json({
-          status: false,
-          message: "Secondary Mobile Number already exists",
-        });
+        conflictErrors.phoneNumber2 = "Secondary Mobile Number already exists";
+        errorMessages.push("Secondary Mobile Number already exists");
       }
     }
 
@@ -500,21 +675,27 @@ exports.verifySignup = asyncHandler(async (req, res) => {
     if (signupData.companyPhoneNumber) {
       const existingCompanyPhone = await userDao.getUserByPhoneDao(signupData.companyPhoneCode || signupData.phoneCode, signupData.companyPhoneNumber);
       if (existingCompanyPhone) {
-        await userDao.deleteOtpDao(referenceId);
-        return res.status(400).json({
-          status: false,
-          message: "Company Phone Number already exists",
-        });
+        conflictErrors.companyNumber = "Company Phone Number already exists";
+        errorMessages.push("Company Phone Number already exists");
       }
     }
 
     // Check again if NIC was taken since signup started
-    const existingNic = await userDao.getUserByNicDao(signupData.nic);
-    if (existingNic) {
+    if (signupData.nic) {
+      const existingNic = await userDao.getUserByNicDao(signupData.nic);
+      if (existingNic) {
+        conflictErrors.nic = "NIC number already exists";
+        errorMessages.push("NIC number already exists");
+      }
+    }
+
+    if (errorMessages.length > 0) {
       await userDao.deleteOtpDao(referenceId);
       return res.status(400).json({
         status: false,
-        message: "NIC Number already exists",
+        message: errorMessages.join(". "),
+        errors: errorMessages,
+        fieldErrors: conflictErrors,
       });
     }
 
@@ -542,7 +723,7 @@ exports.verifySignup = asyncHandler(async (req, res) => {
     if (signupResult.status) {
       return res.status(201).json({
         status: true,
-        message: "User registered successfully.",
+        message: "Your Polygon account created successfully.",
         data: signupResult.data,
       });
     } else {
@@ -587,10 +768,38 @@ exports.resendSignupOtp = asyncHandler(async (req, res) => {
     const { signupData } = decoded;
     const { email, phoneCode, phoneNumber } = signupData;
 
+    // Check lockout before resending
+    const lockoutKeys = getSignupLockoutKeys(email, phoneCode, phoneNumber);
+    const lockoutStatus = checkSignupLockout(lockoutKeys);
+    if (lockoutStatus.locked) {
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: lockoutStatus.remainingSec,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+
+    const primaryKey = lockoutKeys[0] || `signup:${email || phoneNumber}`;
+    const now = Date.now();
+    const requestTimestamps = (signupRequestAttempts.get(primaryKey) || [])
+      .filter((ts) => now - ts < SIGNUP_LOCKOUT_MS);
+
+    if (requestTimestamps.length >= MAX_SIGNUP_ATTEMPTS) {
+      setSignupLockout(lockoutKeys);
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: 900,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+    requestTimestamps.push(now);
+    signupRequestAttempts.set(primaryKey, requestTimestamps);
+
     // Generate cryptographically secure 5-digit OTP code (Risk 4.B)
     const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
-    signupOtpAttempts.delete(referenceId);
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes expiry
 
     // Save OTP to DB
@@ -651,6 +860,13 @@ exports.updatePassword = asyncHandler(async (req, res) => {
     });
   }
 
+  if (/\s/.test(currentPassword) || /\s/.test(newPassword) || /\s/.test(confirmNewPassword)) {
+    return res.status(400).json({
+      status: false,
+      message: "Password cannot contain spaces.",
+    });
+  }
+
   if (newPassword !== confirmNewPassword) {
     return res.status(400).json({
       status: false,
@@ -678,6 +894,13 @@ exports.updatePassword = asyncHandler(async (req, res) => {
     });
   }
 
+  if (currentPassword === newPassword) {
+    return res.status(400).json({
+      status: false,
+      message: "New password cannot be the same as your current password.",
+    });
+  }
+
   try {
     const user = await userDao.getUserPasswordByIdDao(userId);
     if (!user) {
@@ -699,6 +922,13 @@ exports.updatePassword = asyncHandler(async (req, res) => {
       return res.status(400).json({
         status: false,
         message: "Invalid current password.",
+      });
+    }
+
+    if (user.password && bcrypt.compareSync(newPassword, user.password)) {
+      return res.status(400).json({
+        status: false,
+        message: "New password cannot be the same as your current password.",
       });
     }
 
@@ -861,6 +1091,43 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
       }
     }
 
+    // Check if this user/identifier is currently locked out
+    const keys = getForgotPwdLockoutKeys(
+      type,
+      user.email || email,
+      user.phoneCode || phoneCode,
+      user.phoneNumber || phoneNumber,
+      user.id
+    );
+
+    const lockoutStatus = checkForgotPwdLockout(keys);
+    if (lockoutStatus.locked) {
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: lockoutStatus.remainingSec,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+
+    // Rate limit request frequency (Max 5 OTP requests / 15 min)
+    const primaryKey = keys[0] || `${type}:${email || phoneNumber}`;
+    const now = Date.now();
+    const requestTimestamps = (forgotPasswordRequestAttempts.get(primaryKey) || [])
+      .filter((ts) => now - ts < FORGOT_PWD_LOCKOUT_MS);
+
+    if (requestTimestamps.length >= MAX_FORGOT_PWD_ATTEMPTS) {
+      setForgotPwdLockout(keys);
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: 900,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+    requestTimestamps.push(now);
+    forgotPasswordRequestAttempts.set(primaryKey, requestTimestamps);
+
     // Generate 5-digit OTP
     const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
@@ -950,10 +1217,38 @@ exports.forgotPasswordResendOtp = asyncHandler(async (req, res) => {
 
     const { userId, email, phoneCode, phoneNumber, type } = decoded;
 
+    // Check lockout before resending
+    const keys = getForgotPwdLockoutKeys(type, email, phoneCode, phoneNumber, userId);
+    const lockoutStatus = checkForgotPwdLockout(keys);
+    if (lockoutStatus.locked) {
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: lockoutStatus.remainingSec,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+
+    const primaryKey = keys[0] || `${type}:${email || phoneNumber}`;
+    const now = Date.now();
+    const requestTimestamps = (forgotPasswordRequestAttempts.get(primaryKey) || [])
+      .filter((ts) => now - ts < FORGOT_PWD_LOCKOUT_MS);
+
+    if (requestTimestamps.length >= MAX_FORGOT_PWD_ATTEMPTS) {
+      setForgotPwdLockout(keys);
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: 900,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+    requestTimestamps.push(now);
+    forgotPasswordRequestAttempts.set(primaryKey, requestTimestamps);
+
     // Generate 5-digit OTP
     const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
-    signupOtpAttempts.delete(referenceId);
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes
 
     const otpIdentifier = type === "email" ? email : (email || phoneNumber);
@@ -1016,6 +1311,36 @@ exports.forgotPasswordVerifyOtp = asyncHandler(async (req, res) => {
   }
 
   try {
+    let decoded;
+    try {
+      decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
+    } catch (tokenErr) {
+      return res.status(400).json({
+        status: false,
+        message: "Password reset session has expired or is invalid.",
+      });
+    }
+
+    const keys = getForgotPwdLockoutKeys(
+      decoded.type,
+      decoded.email,
+      decoded.phoneCode,
+      decoded.phoneNumber,
+      decoded.userId
+    );
+
+    const lockoutStatus = checkForgotPwdLockout(keys);
+    if (lockoutStatus.locked) {
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: lockoutStatus.remainingSec,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+
+    const primaryKey = keys[0] || `${decoded.type}:${decoded.email || decoded.phoneNumber}`;
+
     const otpRecord = await userDao.getOtpDao(referenceId);
 
     if (!otpRecord) {
@@ -1034,35 +1359,43 @@ exports.forgotPasswordVerifyOtp = asyncHandler(async (req, res) => {
     }
 
     if (otpRecord.otp !== code) {
-      const attempts = (signupOtpAttempts.get(referenceId) || 0) + 1;
-      signupOtpAttempts.set(referenceId, attempts);
+      const now = Date.now();
+      let attemptData = forgotPasswordAttempts.get(primaryKey);
+      if (attemptData && typeof attemptData === "object") {
+        if (now - attemptData.firstAttemptAt > FORGOT_PWD_LOCKOUT_MS) {
+          attemptData = null;
+        }
+      } else if (typeof attemptData === "number") {
+        attemptData = { count: attemptData, firstAttemptAt: now };
+      }
 
-      if (attempts >= 5) {
-        signupOtpAttempts.delete(referenceId);
+      const currentAttempts = (attemptData ? attemptData.count : 0) + 1;
+      forgotPasswordAttempts.set(primaryKey, {
+        count: currentAttempts,
+        firstAttemptAt: attemptData ? attemptData.firstAttemptAt : now,
+      });
+
+      if (currentAttempts >= MAX_FORGOT_PWD_ATTEMPTS) {
+        forgotPasswordAttempts.delete(primaryKey);
         await userDao.deleteOtpDao(referenceId);
+        setForgotPwdLockout(keys);
+
         return res.status(429).json({
           status: false,
-          message: "Too many incorrect verification attempts. This code is now invalidated. Please request a new code.",
+          isRateLimited: true,
+          retryAfter: 900,
+          message: "Too many verification attempts. Please try again after 15 minutes.",
         });
       }
 
+      const remainingAttempts = MAX_FORGOT_PWD_ATTEMPTS - currentAttempts;
       return res.status(400).json({
         status: false,
-        message: `Incorrect verification code. ${5 - attempts} attempts remaining.`,
+        message: `Incorrect verification code. ${remainingAttempts} attempts remaining.`,
       });
     }
 
-    signupOtpAttempts.delete(referenceId);
-
-    let decoded;
-    try {
-      decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
-    } catch (tokenErr) {
-      return res.status(400).json({
-        status: false,
-        message: "Password reset session has expired or is invalid.",
-      });
-    }
+    forgotPasswordAttempts.delete(primaryKey);
 
     // Delete OTP record since it's verified
     await userDao.deleteOtpDao(referenceId);
@@ -1071,6 +1404,10 @@ exports.forgotPasswordVerifyOtp = asyncHandler(async (req, res) => {
     const verifiedResetToken = jwt.sign(
       {
         userId: decoded.userId,
+        email: decoded.email,
+        phoneCode: decoded.phoneCode,
+        phoneNumber: decoded.phoneNumber,
+        type: decoded.type,
         action: "password_reset",
         verified: true,
       },
@@ -1101,6 +1438,13 @@ exports.forgotPasswordReset = asyncHandler(async (req, res) => {
     return res.status(400).json({
       status: false,
       message: "All fields are required.",
+    });
+  }
+
+  if (/\s/.test(newPassword) || /\s/.test(confirmNewPassword)) {
+    return res.status(400).json({
+      status: false,
+      message: "Password cannot contain spaces.",
     });
   }
 
@@ -1155,6 +1499,15 @@ exports.forgotPasswordReset = asyncHandler(async (req, res) => {
     const success = await userDao.updatePasswordDao(decoded.userId, hashedPassword);
 
     if (success) {
+      const keys = getForgotPwdLockoutKeys(
+        decoded.type,
+        decoded.email,
+        decoded.phoneCode,
+        decoded.phoneNumber,
+        decoded.userId
+      );
+      clearForgotPwdLockout(keys);
+
       return res.status(200).json({
         status: true,
         message: "Your password has been successfully reset. Please log in with your new password.",
@@ -1178,3 +1531,10 @@ exports.forgotPasswordReset = asyncHandler(async (req, res) => {
 // Exported OTP delivery helpers (reused by customer phone-change flow)
 exports.sendEmailOtp = sendEmailOtp;
 exports.sendShoutoutSms = sendShoutoutSms;
+exports.getSignupLockoutKeys = getSignupLockoutKeys;
+exports.checkSignupLockout = checkSignupLockout;
+exports.setSignupLockout = setSignupLockout;
+exports.clearSignupLockout = clearSignupLockout;
+exports.signupLockouts = signupLockouts;
+exports.signupAttempts = signupAttempts;
+exports.signupRequestAttempts = signupRequestAttempts;

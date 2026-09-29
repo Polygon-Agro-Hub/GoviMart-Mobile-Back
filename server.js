@@ -1,6 +1,8 @@
 const express = require("express");
+const path = require("path");
 const cors = require("cors");
 const bodyParser = require("body-parser");
+const compression = require("compression");
 require("dotenv").config();
 
 const {
@@ -10,13 +12,14 @@ const {
 } = require("./src/startup/database");
 
 const app = express();
+app.use(compression());
 
 const BASE_PATH = "/polygon";
 
 const corsOptions = {
   origin: process.env.CLIENT_ORIGIN || "*",
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "Accept", "X-Requested-With", "Origin"],
 };
 
 // Middleware
@@ -61,6 +64,8 @@ const orderroute = require("./src/routes/order.routes");
 const cartroute = require("./src/routes/cart.routes");
 const paymentroute = require("./src/routes/payment.routes");
 const notificationroute = require("./src/routes/notification.routes");
+const appversionroute = require("./src/routes/app-version.routes");
+const errorHandler = require("./src/middlewares/error.middleware");
 
 const registerRoutes = (prefix) => {
   app.use(`${prefix}/api/auth`, userroute);
@@ -72,6 +77,7 @@ const registerRoutes = (prefix) => {
   app.use(`${prefix}/api/cart`, cartroute);
   app.use(`${prefix}/api/payment`, paymentroute);
   app.use(`${prefix}/api/notification`, notificationroute);
+  app.use(`${prefix}/api/app-version`, appversionroute);
   app.use(`${prefix}`, healthroute);
 };
 
@@ -79,14 +85,7 @@ registerRoutes(BASE_PATH);
 registerRoutes("");
 
 // Error handling middleware
-app.use((err, req, res, next) => {
-  if (process.env.NODE_ENV !== "production") {
-    console.error(err.stack);
-  } else {
-    console.error(`[Error] ${err.message}`);
-  }
-  res.status(500).send("Something broke!!");
-});
+app.use(errorHandler);
 
 // Create HTTP server & initialize Socket.IO
 const server = http.createServer(app);
