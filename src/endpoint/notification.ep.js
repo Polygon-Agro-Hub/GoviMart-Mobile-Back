@@ -76,7 +76,7 @@ exports.seedDummyNotifications = asyncHandler(async (req, res) => {
  */
 exports.savePushToken = asyncHandler(async (req, res) => {
   const userId = req.user.id;
-  const { pushToken, tokenType = "fcm", deviceType = "android" } = req.body;
+  const { pushToken, deviceType = "android" } = req.body;
 
   if (!pushToken) {
     return res.status(400).json({
@@ -86,12 +86,7 @@ exports.savePushToken = asyncHandler(async (req, res) => {
   }
 
   const pushNotificationService = require("../services/pushNotificationService");
-  await pushNotificationService.saveUserPushToken(
-    userId,
-    pushToken,
-    tokenType,
-    deviceType
-  );
+  await pushNotificationService.saveUserPushToken(userId, pushToken, deviceType);
 
   return res.status(200).json({
     status: true,

@@ -36,29 +36,36 @@ function initFirebase() {
 
 /**
  * Save or update user push token in notificationpushtoken table
- * Using officerId column to store the marketplace user ID (same DB structure as Codi Net)
+ * Using marketplaceUserId column linked via FK to marketplaceusers(id)
  */
-async function saveUserPushToken(userId, pushToken, tokenType = "fcm", deviceType = "android") {
+async function saveUserPushToken(userId, pushToken, arg3 = "android", arg4) {
   if (!userId || !pushToken) {
     throw new Error("userId and pushToken are required");
   }
 
+  // Support both (userId, pushToken, deviceType) and legacy (userId, pushToken, tokenType, deviceType)
+  let deviceType = "android";
+  if (typeof arg4 === "string") {
+    deviceType = arg4;
+  } else if (typeof arg3 === "string" && (arg3 === "android" || arg3 === "ios")) {
+    deviceType = arg3;
+  }
+
   const sql = `
-    INSERT INTO notificationpushtoken (officerId, pushToken, tokenType, deviceType, updatedAt)
-    VALUES (?, ?, ?, ?, NOW())
+    INSERT INTO notificationpushtoken (marketplaceUserId, pushToken, deviceType, updatedAt)
+    VALUES (?, ?, ?, NOW())
     ON DUPLICATE KEY UPDATE
-      tokenType = VALUES(tokenType),
       deviceType = VALUES(deviceType),
       updatedAt = NOW()
   `;
 
   return new Promise((resolve, reject) => {
-    collectionofficer.query(sql, [userId, pushToken, tokenType, deviceType], (err, result) => {
+    collectionofficer.query(sql, [userId, pushToken, deviceType], (err, result) => {
       if (err) {
         console.error("❌ [PushService] Error saving push token:", err);
         return reject(err);
       }
-      console.log(`✅ [PushService] Push token saved for userId: ${userId} (Type: ${tokenType})`);
+      console.log(`✅ [PushService] Push token saved for marketplaceUserId: ${userId} (${deviceType})`);
       resolve(result);
     });
   });
@@ -82,9 +89,9 @@ async function sendPushToUser(userId, { title, body, data = {} }) {
   if (!userId) return;
 
   const getTokensSql = `
-    SELECT pushToken, tokenType, deviceType 
+    SELECT pushToken, deviceType 
     FROM notificationpushtoken 
-    WHERE officerId = ?
+    WHERE marketplaceUserId = ?
   `;
 
   return new Promise((resolve) => {
@@ -110,10 +117,11 @@ async function sendPushToUser(userId, { title, body, data = {} }) {
       const results = [];
 
       for (const row of rows) {
-        const { pushToken, tokenType } = row;
+        const { pushToken, deviceType } = row;
+        const isExpo = pushToken.startsWith("ExponentPushToken") || pushToken.startsWith("ExpoPushToken");
 
-        // 1. Expo Push Token handling
-        if (tokenType === "expo" || pushToken.startsWith("ExponentPushToken") || pushToken.startsWith("ExpoPushToken")) {
+        // 1. Expo Push Token handling (auto-detected)
+        if (isExpo) {
           try {
             const expoResponse = await fetch("https://exp.host/--/api/v2/push/send", {
               method: "POST",
