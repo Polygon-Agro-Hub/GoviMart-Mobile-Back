@@ -61,6 +61,13 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0, buyerType = "
             `Reason : “${effectiveReason}”`
           );
         }
+
+        // Move Reason section to a second line (newline)
+        msg = msg.replace(/([^\n\r])\s*(?:[.]\s*)?(Reason\s*[:：])/gi, (match, prefix, reasonTag) => {
+          const trimmedPrefix = prefix.trimEnd();
+          const hasPunctuation = /[.!?]$/.test(trimmedPrefix);
+          return trimmedPrefix + (hasPunctuation ? "" : ".") + "\n" + reasonTag;
+        });
         return {
           ...row,
           returnReason: effectiveReason || returnReason,
@@ -231,6 +238,15 @@ exports.createNotificationDao = (arg1, arg2, arg3) => {
             `Reason : “${effectiveReason}”`
           );
           notifData.returnReason = effectiveReason;
+        }
+
+        // Move Reason section to a second line (newline)
+        if (notifData.message) {
+          notifData.message = notifData.message.replace(/([^\n\r])\s*(?:[.]\s*)?(Reason\s*[:：])/gi, (match, prefix, reasonTag) => {
+            const trimmedPrefix = prefix.trimEnd();
+            const hasPunctuation = /[.!?]$/.test(trimmedPrefix);
+            return trimmedPrefix + (hasPunctuation ? "" : ".") + "\n" + reasonTag;
+          });
         }
 
         // Emit in real-time via Socket.IO

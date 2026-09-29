@@ -1334,27 +1334,32 @@ const getDeliveryChargeDao = (
 
 const getPickupInfoDao = (isPickup, centerId) => {
     return new Promise((resolve) => {
+        console.log("[getPickupInfoDao] input:", { isPickup, centerId });
         if (!isPickup || !centerId) return resolve(null);
-        const sql = `
-            SELECT c.id, c.name, c.phone1, c.street, c.city, c.district, c.province, c.country, c.zipcode
-            FROM collectioncenter c
-            WHERE c.id = ?
-            LIMIT 1
-        `;
+
+        const sql = `SELECT * FROM distributedcenter WHERE id = ? LIMIT 1`;
         db.collectionofficer.query(sql, [centerId], (err, rows) => {
-            if (err || !rows || rows.length === 0) return resolve(null);
+            if (err) {
+                console.error("[getPickupInfoDao] query error:", err.message);
+                return resolve(null);
+            }
+            if (!rows || rows.length === 0) {
+                console.warn(`[getPickupInfoDao] No distributedcenter row for id=${centerId}`);
+                return resolve(null);
+            }
             const r = rows[0];
+            console.log("[getPickupInfoDao] row columns:", Object.keys(r));
             resolve({
                 centerId: String(r.id),
-                centerName: r.name || "Unknown",
-                contact01: r.phone1 || "Not Available",
+                centerName: r.centerName || r.name || null,
+                contact01: r.contact01 || r.phone || r.phone1 || null,
                 address: {
                     street: r.street || "",
                     city: r.city || "",
                     district: r.district || "",
                     province: r.province || "",
                     country: r.country || "Sri Lanka",
-                    zipCode: r.zipcode || "",
+                    zipCode: r.zipCode || r.zipcode || "",
                 },
             });
         });
@@ -1548,6 +1553,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                             isPickup,
                             invoice.centerId,
                         );
+                        console.log("[getPickupInfoDao] result:", pickupInfo);
 
                         const processedFamilyPackItems = [];
                         if (Array.isArray(familyPackItems)) {
@@ -1598,6 +1604,14 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                             parseFloat(couponDiscount)
                         ).toFixed(2);
 
+                        // Use fullTotal directly from orders table if available, fallback to calculatedGrandTotal
+                        const orderFullTotal =
+                            invoice.fullTotal !== null &&
+                                invoice.fullTotal !== undefined &&
+                                !isNaN(parseFloat(invoice.fullTotal))
+                                ? parseFloat(invoice.fullTotal).toFixed(2)
+                                : calculatedGrandTotal;
+
                         let formattedDeliveryMethod = invoice.deliveryMethod || "N/A";
                         if (formattedDeliveryMethod.toUpperCase() === "PICKUP")
                             formattedDeliveryMethod = "Instore Pickup";
@@ -1645,7 +1659,8 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                             deliveryFee: `Rs. ${deliveryFee || "0.00"}`,
                             discount: `Rs. ${orderDiscount}`,
                             couponDiscount: `Rs. ${couponDiscount}`,
-                            grandTotal: `Rs. ${calculatedGrandTotal}`,
+                            fullTotal: `Rs. ${orderFullTotal}`,
+                            grandTotal: `Rs. ${orderFullTotal}`,
                             billingInfo: formatBillingInfo(billingInfo),
                             pickupInfo: pickupInfo,
                         };
