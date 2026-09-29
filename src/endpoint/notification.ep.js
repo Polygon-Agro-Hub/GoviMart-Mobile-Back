@@ -7,11 +7,12 @@ const notificationDao = require("../dao/notification.dao");
  */
 exports.getNotifications = asyncHandler(async (req, res) => {
   const userId = req.user.id;
+  const buyerType = req.user.buyerType || "Retail";
   const { limit = 50, offset = 0 } = req.query;
 
   const [notifications, unreadCount] = await Promise.all([
-    notificationDao.getUserNotificationsDao(userId, limit, offset),
-    notificationDao.getUnreadCountDao(userId),
+    notificationDao.getUserNotificationsDao(userId, limit, offset, buyerType),
+    notificationDao.getUnreadCountDao(userId, buyerType),
   ]);
 
   return res.status(200).json({
@@ -66,5 +67,29 @@ exports.seedDummyNotifications = asyncHandler(async (req, res) => {
     status: true,
     message: "14 dummy notification types seeded successfully for user " + userId,
     result,
+  });
+});
+
+/**
+ * POST /polygon/api/notification/save-push-token
+ * Save user device push token (FCM or Expo) matching Codi Net pattern.
+ */
+exports.savePushToken = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const { pushToken, deviceType = "android" } = req.body;
+
+  if (!pushToken) {
+    return res.status(400).json({
+      status: false,
+      message: "pushToken is required",
+    });
+  }
+
+  const pushNotificationService = require("../services/pushNotificationService");
+  await pushNotificationService.saveUserPushToken(userId, pushToken, deviceType);
+
+  return res.status(200).json({
+    status: true,
+    message: "Push token registered successfully",
   });
 });
