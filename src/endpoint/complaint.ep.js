@@ -42,14 +42,28 @@ exports.createComplain = asyncHandler(async (req, res) => {
   const userId = req.user.id;
 
   try {
-    // Generate next CMP-XXXXX ref id
-    const lastRefId = await complainDao.getLastComplainRefIdDao();
+    // Generate next ref id: [CUS_ID]000, [CUS_ID]001, [CUS_ID]002, etc.
+    let cusId = await complainDao.getUserCusIdDao(userId);
+    if (!cusId) {
+      cusId = `CUS-${userId}`;
+    }
+
+    const lastRefId = await complainDao.getLastComplainRefIdByUserDao(
+      userId,
+      cusId,
+    );
+
     let nextRefId;
     if (!lastRefId) {
-      nextRefId = "CMP-00001";
+      nextRefId = `${cusId}000`;
     } else {
-      const numericPart = parseInt(lastRefId.split("-")[1], 10);
-      nextRefId = `CMP-${(numericPart + 1).toString().padStart(5, "0")}`;
+      const suffix = lastRefId.substring(cusId.length);
+      const numericPart = parseInt(suffix, 10);
+      if (isNaN(numericPart)) {
+        nextRefId = `${cusId}000`;
+      } else {
+        nextRefId = `${cusId}${(numericPart + 1).toString().padStart(3, "0")}`;
+      }
     }
 
     // Insert complain record first
