@@ -28,7 +28,44 @@ exports.getComplainCategoriesDao = async () => {
   }
 };
 
-// Get Last Complain Ref ID
+// Get User cusId from marketplaceusers
+exports.getUserCusIdDao = async (userId) => {
+  try {
+    const sql = `
+      SELECT cusId 
+      FROM marketplaceusers 
+      WHERE id = ? 
+      LIMIT 1
+    `;
+    const [results] = await db.collectionofficer.promise().query(sql, [userId]);
+    return results[0] && results[0].cusId ? results[0].cusId : null;
+  } catch (err) {
+    console.error("Database error in getUserCusIdDao:", err);
+    throw err;
+  }
+};
+
+// Get Last Complain Ref ID for a specific user and cusId prefix
+exports.getLastComplainRefIdByUserDao = async (userId, cusId) => {
+  try {
+    const sql = `
+      SELECT refId
+      FROM marcketplacecomplain
+      WHERE userId = ? AND refId LIKE ?
+      ORDER BY id DESC
+      LIMIT 1
+    `;
+    const [results] = await db.collectionofficer
+      .promise()
+      .query(sql, [userId, `${cusId}%`]);
+    return results[0] ? results[0].refId : null;
+  } catch (err) {
+    console.error("Database error in getLastComplainRefIdByUserDao:", err);
+    throw err;
+  }
+};
+
+// Get Last Complain Ref ID (fallback legacy)
 exports.getLastComplainRefIdDao = async () => {
   try {
     const sql = `
@@ -134,6 +171,7 @@ exports.getComplainsByUserIdDao = async (userId) => {
     const complainSql = `
       SELECT 
         c.id,
+        c.userId,
         c.complaicategoryId,
         cc.categoryEnglish,
         cc.categorySinhala,
