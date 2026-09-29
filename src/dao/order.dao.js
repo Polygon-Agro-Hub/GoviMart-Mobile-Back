@@ -1598,6 +1598,14 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                             parseFloat(couponDiscount)
                         ).toFixed(2);
 
+                        // Use fullTotal directly from orders table if available, fallback to calculatedGrandTotal
+                        const orderFullTotal =
+                            invoice.fullTotal !== null &&
+                            invoice.fullTotal !== undefined &&
+                            !isNaN(parseFloat(invoice.fullTotal))
+                                ? parseFloat(invoice.fullTotal).toFixed(2)
+                                : calculatedGrandTotal;
+
                         let formattedDeliveryMethod = invoice.deliveryMethod || "N/A";
                         if (formattedDeliveryMethod.toUpperCase() === "PICKUP")
                             formattedDeliveryMethod = "Instore Pickup";
@@ -1645,7 +1653,8 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                             deliveryFee: `Rs. ${deliveryFee || "0.00"}`,
                             discount: `Rs. ${orderDiscount}`,
                             couponDiscount: `Rs. ${couponDiscount}`,
-                            grandTotal: `Rs. ${calculatedGrandTotal}`,
+                            fullTotal: `Rs. ${orderFullTotal}`,
+                            grandTotal: `Rs. ${orderFullTotal}`,
                             billingInfo: formatBillingInfo(billingInfo),
                             pickupInfo: pickupInfo,
                         };
