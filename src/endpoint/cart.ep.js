@@ -95,17 +95,14 @@ exports.getUserCart = asyncHandler(async (req, res) => {
         ? convertVal(rawMaxVal, currentUnit === "g")
         : undefined;
 
-    const normP = parseFloat(prod.normalPrice) || 0;
-    const discP = parseFloat(prod.discountedPrice) || 0;
-    const effP = (discP > 0 && discP < normP) ? discP : normP;
 
     return {
       id: prod.productId,
       name: prod.name,
       image: prod.image,
-      price: effP,
-      normalPrice: normP,
-      discountedPrice: discP,
+      price: parseFloat(prod.normalPrice) || 0,
+      normalPrice: parseFloat(prod.normalPrice) || 0,
+      discountedPrice: parseFloat(prod.discountedPrice) || 0,
       comPrice: parseFloat(prod.comPrice) || 0,
       weight: currentWeight,
       unit: currentUnit,
