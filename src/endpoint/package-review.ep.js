@@ -13,6 +13,9 @@ const ensureRetailUser = (req, res) => {
     return true;
 };
 
+// The auth middleware may expose the id as `userId` or `id`; accept both.
+const getUserId = (req) => req.user?.userId ?? req.user?.id;
+
 /**
  * GET /api/order/package/review/:orderId
  * Fetches the complete package review data for an order or process order.
@@ -21,7 +24,7 @@ exports.getOrderPackageReview = asyncHandler(async (req, res) => {
     if (!ensureRetailUser(req, res)) return;
 
     const { orderId } = req.params;
-    const { userId } = req.user;
+    const userId = getUserId(req);
 
     if (!orderId) {
         return res.status(400).json({
@@ -48,12 +51,12 @@ exports.getOrderPackageReview = asyncHandler(async (req, res) => {
 
 /**
  * POST /api/order/package/replace-item
- * Replaces an item in an order package and records in replacerequest
+ * Replaces an item in an order package.
  */
 exports.replacePackageItem = asyncHandler(async (req, res) => {
     if (!ensureRetailUser(req, res)) return;
 
-    const { userId } = req.user;
+    const userId = getUserId(req);
     const { orderPackageId, replceId, newProductId, productType, newQty, newPrice } = req.body;
 
     if (!orderPackageId || !newProductId) {
@@ -90,12 +93,12 @@ exports.replacePackageItem = asyncHandler(async (req, res) => {
 
 /**
  * POST /api/order/package/reset-item
- * Resets a replaced item back to its default baseline state
+ * Resets a replaced item back to its default baseline state.
  */
 exports.resetPackageItem = asyncHandler(async (req, res) => {
     if (!ensureRetailUser(req, res)) return;
 
-    const { userId } = req.user;
+    const userId = getUserId(req);
     const { orderPackageId, replceId, originalBaselineId } = req.body;
 
     if (!orderPackageId) {
@@ -128,12 +131,15 @@ exports.resetPackageItem = asyncHandler(async (req, res) => {
 
 /**
  * POST /api/order/package/confirm-review
- * Finalizes review, updates order lock status, and handles additional payment if any
+ * Finalizes review: syncs package items, applies replacements, deletes removed
+ * ala carte rows, UPDATES edited existing ala carte rows (qty/unit/normalPrice/
+ * price/discount), inserts/merges newly added ala carte items, locks packages
+ * and updates order totals / credit.
  */
 exports.confirmPackageReview = asyncHandler(async (req, res) => {
     if (!ensureRetailUser(req, res)) return;
 
-    const { userId } = req.user;
+    const userId = getUserId(req);
     const {
         orderId,
         processOrderId,
@@ -145,11 +151,17 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
         creditToAdd = 0,
         replacements = [],
         additionalItems = [],
+        updatedAdditionalItems = [], // NEW: edited EXISTING rows (by orderadditionalitems.id)
         deletedAdditionalItemIds = [],
         packages = [],
     } = req.body;
 
-    console.log("[confirmPackageReview Endpoint] Received request by userId:", userId, "body:", JSON.stringify(req.body, null, 2));
+    console.log(
+        "[confirmPackageReview Endpoint] Received request by userId:",
+        userId,
+        "body:",
+        JSON.stringify(req.body, null, 2),
+    );
 
     if (!orderId && !processOrderId) {
         return res.status(400).json({
@@ -171,6 +183,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
             creditToAdd,
             replacements,
             additionalItems,
+            updatedAdditionalItems,
             deletedAdditionalItemIds,
             packages,
         });
@@ -210,12 +223,12 @@ exports.getPackingTargetSlots = asyncHandler(async (req, res) => {
 
 /**
  * POST /api/order/package/cancel-order
- * Cancel order and refund paid amount as credit balance
+ * Cancel order and refund paid amount as credit balance.
  */
 exports.cancelPackageOrder = asyncHandler(async (req, res) => {
     if (!ensureRetailUser(req, res)) return;
 
-    const userId = req.user?.id;
+    const userId = getUserId(req);
     const { orderId, processOrderId } = req.body;
 
     if (!userId) {
@@ -252,5 +265,3 @@ exports.cancelPackageOrder = asyncHandler(async (req, res) => {
         });
     }
 });
-
-

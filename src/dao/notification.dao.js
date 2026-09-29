@@ -24,6 +24,7 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0, buyerType = "
         po.amount,
         po.sheduleDate,
         po.status AS orderStatus,
+        po.isFinalized,
         o.delivaryMethod,
         rr.rsnEnglish AS returnReason,
         dro.note AS returnNote
@@ -123,7 +124,7 @@ exports.markAsReadDao = (notificationId, userId) => {
       try {
         const unreadCount = await exports.getUnreadCountDao(userId);
         emitUnreadCountToUser(userId, unreadCount);
-      } catch (_) {}
+      } catch (_) { }
 
       resolve(result.affectedRows > 0);
     });
