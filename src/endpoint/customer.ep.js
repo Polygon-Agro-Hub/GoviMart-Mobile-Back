@@ -332,7 +332,7 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
     if (req.body.nic) {
       const isNicTaken = await customerDao.isNicTakenDao(userId, req.body.nic);
       if (isNicTaken) {
-        return res.status(400).json({ status: false, message: "NIC Number already exists" });
+        return res.status(400).json({ status: false, message: "NIC number already exists" });
       }
     }
 
@@ -434,6 +434,21 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
       });
     }
 
+    const lockoutKeys = userAuthEp.getSignupLockoutKeys(
+      req.user.email,
+      phoneCode,
+      normalizedPhone
+    );
+    const lockoutStatus = userAuthEp.checkSignupLockout(lockoutKeys);
+    if (lockoutStatus.locked) {
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: lockoutStatus.remainingSec,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+
     // Generate 5-digit OTP (Risk 4.B)
     const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
@@ -501,6 +516,33 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
       });
     }
 
+    let decoded;
+    try {
+      decoded = jwt.verify(signupToken, process.env.JWT_SECRET);
+    } catch (tokenErr) {
+      return res.status(400).json({
+        status: false,
+        message: "Verification session has expired or is invalid.",
+      });
+    }
+
+    const { userId, phoneCode, phoneNumber } = decoded;
+    const lockoutKeys = userAuthEp.getSignupLockoutKeys(
+      req.user?.email,
+      phoneCode,
+      phoneNumber
+    );
+
+    const lockoutStatus = userAuthEp.checkSignupLockout(lockoutKeys);
+    if (lockoutStatus.locked) {
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: lockoutStatus.remainingSec,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+
     const otpRecord = await authDao.getOtpDao(referenceId);
     if (!otpRecord) {
       return res.status(400).json({ status: false, message: "Invalid verification code." });
@@ -516,9 +558,12 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
       if (attempts >= 5) {
         phoneOtpAttempts.delete(referenceId);
         await authDao.deleteOtpDao(referenceId);
+        userAuthEp.setSignupLockout(lockoutKeys);
         return res.status(429).json({
           status: false,
-          message: "Too many incorrect verification attempts. Please request a new verification code.",
+          isRateLimited: true,
+          retryAfter: 900,
+          message: "Too many verification attempts. Please try again after 15 minutes.",
         });
       }
 
@@ -529,18 +574,7 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
     }
 
     phoneOtpAttempts.delete(referenceId);
-
-    let decoded;
-    try {
-      decoded = jwt.verify(signupToken, process.env.JWT_SECRET);
-    } catch (tokenErr) {
-      return res.status(400).json({
-        status: false,
-        message: "Verification session has expired or is invalid.",
-      });
-    }
-
-    const { userId, phoneCode, phoneNumber } = decoded;
+    userAuthEp.clearSignupLockout(lockoutKeys);
 
     const updateResult = await customerDao.updateUserPhoneDao(
       userId,
@@ -589,6 +623,21 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
     }
 
     const { userId, phoneCode, phoneNumber } = decoded;
+    const lockoutKeys = userAuthEp.getSignupLockoutKeys(
+      req.user?.email,
+      phoneCode,
+      phoneNumber
+    );
+
+    const lockoutStatus = userAuthEp.checkSignupLockout(lockoutKeys);
+    if (lockoutStatus.locked) {
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: lockoutStatus.remainingSec,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
 
     const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();

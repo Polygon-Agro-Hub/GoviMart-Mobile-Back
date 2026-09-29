@@ -45,6 +45,7 @@ exports.getCartProductsDao = (cartId) => {
         mi.startValue,
         mi.changeby,
         mi.unitType,
+        mi.maxQuantity,
         mi.isEnable,
         mi.category AS productBuyerType,
         cv.image,

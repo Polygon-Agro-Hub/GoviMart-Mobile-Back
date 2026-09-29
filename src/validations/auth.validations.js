@@ -15,21 +15,33 @@ const loginSchema = Joi.object({
 // Signup Schema
 const signupSchema = Joi.object({
   title: Joi.string().trim().required(),
-  firstName: Joi.string().trim().required(),
-  lastName: Joi.string().trim().required(),
-  phoneCode: Joi.string().trim().required(),
-  phoneNumber: Joi.string().trim().required(),
-  buyerType: Joi.string().valid("Retail", "Wholesale").required(),
-  email: Joi.string().email().trim().required(),
-  nic: Joi.string().trim().pattern(/^(?:\d{9}[vVxX]|\d{12})$/).required().messages({
-    "string.empty": "NIC Number is required",
-    "string.pattern.base": "Invalid NIC Number format",
-    "any.required": "NIC Number is required",
+  firstName: Joi.string().trim().pattern(/^\S+$/).required().messages({
+    "string.pattern.base": "First name cannot contain spaces",
   }),
-  password: Joi.string().required(),
+  lastName: Joi.string().trim().pattern(/^\S+$/).required().messages({
+    "string.pattern.base": "Last name cannot contain spaces",
+  }),
+  phoneCode: Joi.string().trim().required(),
+  phoneNumber: Joi.string().trim().pattern(/^\S+$/).required().messages({
+    "string.pattern.base": "Mobile number cannot contain spaces",
+  }),
+  buyerType: Joi.string().valid("Retail", "Wholesale").required(),
+  email: Joi.string().email().trim().pattern(/^\S+$/).required().messages({
+    "string.pattern.base": "Email cannot contain spaces",
+  }),
+  nic: Joi.string().trim().pattern(/^(?:\d{9}[vVxX]|\d{12})$/).required().messages({
+    "string.empty": "NIC number is required",
+    "string.pattern.base": "Invalid NIC number format",
+    "any.required": "NIC number is required",
+  }),
+  password: Joi.string().pattern(/^\S+$/).required().messages({
+    "string.pattern.base": "Password cannot contain spaces",
+  }),
   agreeToMarketing: Joi.boolean().optional(),
   agreeToTerms: Joi.boolean().required(),
-  confirmPassword: Joi.string().required().valid(Joi.ref("password")),
+  confirmPassword: Joi.string().pattern(/^\S+$/).required().valid(Joi.ref("password")).messages({
+    "string.pattern.base": "Confirm password cannot contain spaces",
+  }),
   city: Joi.string().allow("", null).optional(),
   cityId: Joi.number().allow(null).optional(),
   companyName: Joi.when("buyerType", {
