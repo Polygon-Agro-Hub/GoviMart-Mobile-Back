@@ -59,6 +59,7 @@ const signupSchema = Joi.object({
     then: Joi.string().trim().required(),
     otherwise: Joi.string().allow("", null).optional(),
   }),
+  allowRestore: Joi.boolean().optional(),
 });
 
 module.exports = {

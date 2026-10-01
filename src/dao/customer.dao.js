@@ -592,9 +592,130 @@ exports.updateUserDetailsDao = async (userId, userData) => {
 };
 
 exports.deleteUserAccountDao = async (userId) => {
-  const query = `DELETE FROM marketplaceusers WHERE id = ?`;
-  const [result] = await db.collectionofficer.promise().query(query, [userId]);
-  return result;
+  let connection;
+  try {
+    connection = await db.collectionofficer.promise().getConnection();
+    await connection.beginTransaction();
+
+    // 1. Re-validate credit balance & processing orders within transaction
+    const [userRows] = await connection.query(
+      `SELECT creditBalance FROM marketplaceusers WHERE id = ? FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRows || userRows.length === 0) {
+      await connection.rollback();
+      return { affectedRows: 0 };
+    }
+
+    const creditBalance = Number(userRows[0].creditBalance || 0);
+    if (creditBalance < 0) {
+      await connection.rollback();
+      const error = new Error(
+        "You have a negative credit balance on your account. Please clear the outstanding balance before deleting your account."
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const [orderRows] = await connection.query(
+      `SELECT COUNT(o.id) AS processingCount
+       FROM orders o
+       JOIN processorders po ON po.orderId = o.id
+       WHERE o.userId = ?
+         AND (po.status IS NULL OR po.status NOT IN ('Delivered', 'Picked up', 'Return', 'Return Received', 'Cancelled'))`,
+      [userId]
+    );
+
+    const processingCount = Number(orderRows[0]?.processingCount || 0);
+    if (processingCount > 0) {
+      await connection.rollback();
+      const error = new Error(
+        "You have processing orders. Once all of them are completed, you may delete your account."
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // 2. Delete house and apartment records
+    await connection.query(`DELETE FROM house WHERE customerId = ?`, [userId]);
+    await connection.query(`DELETE FROM apartment WHERE customerId = ?`, [userId]);
+
+    // 3. Delete dashuserhouse and dashuserapartment records if applicable
+    try {
+      await connection.query(`DELETE FROM dashuserhouse WHERE userId = ?`, [userId]);
+    } catch (e) {
+      try {
+        await connection.query(`DELETE FROM dashuserhouse WHERE customerId = ?`, [userId]);
+      } catch (err) {
+        // Safe fallback if table/column does not exist
+      }
+    }
+
+    try {
+      await connection.query(`DELETE FROM dashuserapartment WHERE userId = ?`, [userId]);
+    } catch (e) {
+      try {
+        await connection.query(`DELETE FROM dashuserapartment WHERE customerId = ?`, [userId]);
+      } catch (err) {
+        // Safe fallback if table/column does not exist
+      }
+    }
+
+    // 4. Delete preferlist and excludelist records
+    await connection.query(`DELETE FROM preferlist WHERE userId = ?`, [userId]);
+    await connection.query(`DELETE FROM excludelist WHERE userId = ?`, [userId]);
+
+    // 5. Update marketplaceusers record: clear personal data, keep nic, created_at, cusId, id
+    // and update deletedAt = NOW(), isActive = 0
+    const updateQuery = `
+      UPDATE marketplaceusers
+      SET 
+        title = NULL,
+        firstName = NULL,
+        lastName = NULL,
+        phoneCode = NULL,
+        phoneNumber = NULL,
+        phoneCode2 = NULL,
+        phoneNumber2 = NULL,
+        buyerType = NULL,
+        email = NULL,
+        password = NULL,
+        image = NULL,
+        companyName = NULL,
+        companyPhoneCode = NULL,
+        companyPhone = NULL,
+        nearesCity = NULL,
+        creditBalance = 0,
+        creditLimit = 0,
+        creditLimitBonusTier = NULL,
+        isMarketPlaceUser = 0,
+        isDashUser = 0,
+        firstTimeUser = 0,
+        isSubscribe = 0,
+        isPswUpdateed = 0,
+        isActive = 0,
+        deletedAt = NOW()
+      WHERE id = ?
+    `;
+    const [updateResult] = await connection.query(updateQuery, [userId]);
+
+    await connection.commit();
+    return updateResult;
+  } catch (err) {
+    if (connection) {
+      try {
+        await connection.rollback();
+      } catch (rollbackErr) {
+        console.error("Error during rollback in deleteUserAccountDao:", rollbackErr);
+      }
+    }
+    throw err;
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
 };
 
 // Check if a phone number already belongs to another user (across phoneNumber, phoneNumber2, companyPhone)
