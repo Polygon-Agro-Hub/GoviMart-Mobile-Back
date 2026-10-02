@@ -972,6 +972,7 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
                 op.orderId,
                 op.packageId,
                 op.qty AS packageQty,
+                op.packingStatus,
                 mp.displayName,
                 mp.image AS packageImage,
                 mp.productPrice AS rawProductPrice,
