@@ -108,7 +108,7 @@ exports.checkCouponAvalability = async (req, res) => {
         // Helper function to format numbers with thousand separators
         const formatPrice = (price) => {
             return parseFloat(price).toLocaleString('en-US', {
-                minimumFractionDigits: 0,
+                minimumFractionDigits: 2,
                 maximumFractionDigits: 2
             });
         };
@@ -224,7 +224,7 @@ exports.checkCouponAvalability = async (req, res) => {
         res.status(200).json({
             status: true,
             message: "Coupon is valid.",
-            discount: parseFloat(discount) || 0,
+            discount: parseFloat(Number(discount).toFixed(2)) || 0,
             discountFormatted: formatPrice(discount),
             type: couponData.type,
             code: couponData.code,
