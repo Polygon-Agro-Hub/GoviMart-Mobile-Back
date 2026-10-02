@@ -471,3 +471,26 @@ exports.resolveOrderCustomerDetailsDao = (orderId) => {
     });
   });
 };
+
+/**
+ * Get latest process order and invoice number for a given user.
+ */
+exports.getLatestProcessOrderForUserDao = (userId) => {
+  return new Promise((resolve) => {
+    const sql = `
+      SELECT po.id AS processOrderId, po.invNo, o.id AS orderId, o.userId
+      FROM processorders po
+      JOIN orders o ON po.orderId = o.id
+      WHERE o.userId = ?
+      ORDER BY po.id DESC
+      LIMIT 1
+    `;
+    db.collectionofficer.query(sql, [userId], (err, rows) => {
+      if (!err && rows && rows.length > 0) {
+        return resolve(rows[0]);
+      }
+      resolve(null);
+    });
+  });
+};
+

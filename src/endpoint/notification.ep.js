@@ -129,10 +129,25 @@ exports.triggerNotification = asyncHandler(async (req, res) => {
   if (orderId) {
     resolvedDetails = await notificationDao.resolveOrderCustomerDetailsDao(orderId);
     if (resolvedDetails) {
-      if (!targetUserId && resolvedDetails.userId) {
-        targetUserId = resolvedDetails.userId;
+      if (targetUserId && Number(resolvedDetails.userId) !== Number(targetUserId)) {
+        console.warn(`[Notification Trigger] Provided orderId ${orderId} belongs to user ${resolvedDetails.userId}, but target is user ${targetUserId}. Discarding mismatched orderId.`);
+        resolvedDetails = null;
+        effectiveProcessOrderId = null;
+      } else {
+        if (!targetUserId && resolvedDetails.userId) {
+          targetUserId = resolvedDetails.userId;
+        }
+        effectiveProcessOrderId = resolvedDetails.processOrderId;
       }
-      effectiveProcessOrderId = resolvedDetails.processOrderId;
+    }
+  }
+
+  // If no effective process order yet for targetUserId, auto-resolve targetUserId's latest process order
+  if (!effectiveProcessOrderId && targetUserId) {
+    const userOrder = await notificationDao.getLatestProcessOrderForUserDao(targetUserId);
+    if (userOrder) {
+      resolvedDetails = userOrder;
+      effectiveProcessOrderId = userOrder.processOrderId;
     }
   }
 
