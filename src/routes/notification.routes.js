@@ -8,5 +8,6 @@ router.patch("/:id/read", authMiddleware, notificationEp.markAsRead);
 router.put("/read-all", authMiddleware, notificationEp.markAllAsRead);
 router.post("/seed-dummy", authMiddleware, notificationEp.seedDummyNotifications);
 router.post("/save-push-token", authMiddleware, notificationEp.savePushToken);
+router.post("/trigger", notificationEp.triggerNotification);
 
 module.exports = router;

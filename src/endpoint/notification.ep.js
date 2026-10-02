@@ -1,19 +1,33 @@
 const asyncHandler = require("express-async-handler");
 const notificationDao = require("../dao/notification.dao");
+const notificationCache = require("../services/notification-cache");
 
 /**
  * GET /polygon/api/notification/
- * Fetch user notifications and unread count.
+ * Fetch user notifications and unread count with in-memory caching.
  */
 exports.getNotifications = asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const buyerType = req.user.buyerType || "Retail";
   const { limit = 50, offset = 0 } = req.query;
 
+  // Check in-memory node-cache first
+  let cachedCount = notificationCache.getUnreadCount(userId);
+
+  const notificationsPromise = notificationDao.getUserNotificationsDao(userId, limit, offset, buyerType);
+  const unreadPromise =
+    cachedCount !== null
+      ? Promise.resolve(cachedCount)
+      : notificationDao.getUnreadCountDao(userId, buyerType);
+
   const [notifications, unreadCount] = await Promise.all([
-    notificationDao.getUserNotificationsDao(userId, limit, offset, buyerType),
-    notificationDao.getUnreadCountDao(userId, buyerType),
+    notificationsPromise,
+    unreadPromise,
   ]);
+
+  if (cachedCount === null) {
+    notificationCache.setUnreadCount(userId, unreadCount);
+  }
 
   return res.status(200).json({
     status: true,
@@ -24,13 +38,16 @@ exports.getNotifications = asyncHandler(async (req, res) => {
 
 /**
  * PATCH /polygon/api/notification/:id/read
- * Mark a single notification as read.
+ * Mark a single notification as read and update cache.
  */
 exports.markAsRead = asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const { id } = req.params;
 
   const success = await notificationDao.markAsReadDao(id, userId);
+  if (success) {
+    notificationCache.decrementUnreadCount(userId);
+  }
 
   return res.status(200).json({
     status: true,
@@ -40,12 +57,13 @@ exports.markAsRead = asyncHandler(async (req, res) => {
 
 /**
  * PUT /polygon/api/notification/read-all
- * Mark all notifications as read for current user.
+ * Mark all notifications as read for current user and reset cache.
  */
 exports.markAllAsRead = asyncHandler(async (req, res) => {
   const userId = req.user.id;
 
   const affected = await notificationDao.markAllAsReadDao(userId);
+  notificationCache.setUnreadCount(userId, 0);
 
   return res.status(200).json({
     status: true,
@@ -91,5 +109,88 @@ exports.savePushToken = asyncHandler(async (req, res) => {
   return res.status(200).json({
     status: true,
     message: "Push token registered successfully",
+  });
+});
+
+/**
+ * POST /polygon/api/notification/trigger
+ * External Webhook to trigger real-time notifications to GoviMart Customers
+ * from Admin Panel, Govi Transport, PayHere, or internal background services.
+ * 
+ * Delivers via WebSocket (0 polling) and Firebase/Expo Push.
+ */
+exports.triggerNotification = asyncHandler(async (req, res) => {
+  const { orderId, title, message, eventType, data } = req.body || {};
+  let targetUserId = req.body.userId;
+
+  let resolvedDetails = null;
+  let effectiveProcessOrderId = null;
+
+  if (orderId) {
+    resolvedDetails = await notificationDao.resolveOrderCustomerDetailsDao(orderId);
+    if (resolvedDetails) {
+      if (!targetUserId && resolvedDetails.userId) {
+        targetUserId = resolvedDetails.userId;
+      }
+      effectiveProcessOrderId = resolvedDetails.processOrderId;
+    }
+  }
+
+  if (!targetUserId) {
+    return res.status(400).json({
+      status: false,
+      message: "Could not resolve userId. Please provide userId or a valid orderId.",
+    });
+  }
+
+  const effectiveTitle =
+    title || (eventType ? eventType.replace(/_/g, " ").toUpperCase() : "New Notification");
+  const effectiveBody =
+    message || (resolvedDetails?.invNo ? `Order #${resolvedDetails.invNo} update` : effectiveTitle);
+
+  let notifResult = null;
+  if (effectiveProcessOrderId) {
+    // Inserts into ordernotfication, computes unreadCount, emits new_notification + newNotification + notification_unread_count, and sends FCM push
+    notifResult = await notificationDao.createNotificationDao({
+      orderId: effectiveProcessOrderId,
+      title: effectiveTitle,
+      message: effectiveBody,
+    });
+  } else {
+    // General / direct notification not linked to a specific order
+    const unreadCount = await notificationDao.getUnreadCountDao(targetUserId);
+    const newCount = unreadCount + 1;
+    notificationCache.setUnreadCount(targetUserId, newCount);
+
+    const { emitNotificationToUser, emitUnreadCountToUser } = require("../socket/socket");
+    const payload = {
+      id: Date.now(),
+      title: effectiveTitle,
+      message: effectiveBody,
+      unreadCount: newCount,
+      createdAt: new Date().toISOString(),
+      data: data || {},
+    };
+    emitNotificationToUser(targetUserId, payload);
+    emitUnreadCountToUser(targetUserId, newCount);
+
+    const { sendPushToUser } = require("../services/pushNotificationService");
+    sendPushToUser(targetUserId, {
+      title: effectiveTitle,
+      body: effectiveBody,
+      data: payload,
+    }).catch(() => {});
+
+    notifResult = payload;
+  }
+
+  return res.status(200).json({
+    status: true,
+    message: `Notification dispatched to User ${targetUserId}`,
+    data: {
+      userId: targetUserId,
+      socketDelivered: true,
+      notification: notifResult,
+    },
   });
 });
