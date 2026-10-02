@@ -120,7 +120,19 @@ exports.savePushToken = asyncHandler(async (req, res) => {
  * Delivers via WebSocket (0 polling) and Firebase/Expo Push.
  */
 exports.triggerNotification = asyncHandler(async (req, res) => {
-  const { orderId, title, message, eventType, data } = req.body || {};
+  const serviceToken =
+    req.headers["x-service-token"] ||
+    req.headers["authorization"]?.replace(/^Bearer\s+/i, "") ||
+    req.body?.serviceToken;
+
+  if (process.env.POLYGON_TRIGGER_SECRET && serviceToken && serviceToken !== process.env.POLYGON_TRIGGER_SECRET) {
+    return res.status(401).json({
+      status: false,
+      message: "Unauthorized: Invalid service token for notification trigger",
+    });
+  }
+
+  const { orderId, title, message, eventType, data, skipDbInsert } = req.body || {};
   let targetUserId = req.body.userId;
 
   let resolvedDetails = null;
@@ -164,7 +176,35 @@ exports.triggerNotification = asyncHandler(async (req, res) => {
     message || (resolvedDetails?.invNo ? `Order #${resolvedDetails.invNo} update` : effectiveTitle);
 
   let notifResult = null;
-  if (effectiveProcessOrderId) {
+  if (skipDbInsert) {
+    // When the caller (e.g. Govi Transport) already inserted into ordernotfication,
+    // only emit Socket.IO events and FCM push to avoid duplicate DB rows.
+    const unreadCount = await notificationDao.getUnreadCountDao(targetUserId);
+    notificationCache.setUnreadCount(targetUserId, unreadCount);
+
+    const { emitNotificationToUser, emitUnreadCountToUser } = require("../socket/socket");
+    const payload = {
+      id: Date.now(),
+      orderId: effectiveProcessOrderId,
+      title: effectiveTitle,
+      message: effectiveBody,
+      unreadCount,
+      createdAt: new Date().toISOString(),
+      invNo: resolvedDetails?.invNo,
+      data: data || {},
+    };
+    emitNotificationToUser(targetUserId, payload);
+    emitUnreadCountToUser(targetUserId, unreadCount);
+
+    const { sendPushToUser } = require("../services/pushNotificationService");
+    sendPushToUser(targetUserId, {
+      title: effectiveTitle,
+      body: effectiveBody,
+      data: payload,
+    }).catch(() => {});
+
+    notifResult = payload;
+  } else if (effectiveProcessOrderId) {
     // Inserts into ordernotfication, computes unreadCount, emits new_notification + newNotification + notification_unread_count, and sends FCM push
     notifResult = await notificationDao.createNotificationDao({
       orderId: effectiveProcessOrderId,
