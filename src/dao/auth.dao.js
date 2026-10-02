@@ -180,9 +180,6 @@ exports.updateCityAvailabilityDao = async (cityId, isAvailable, companyCenterId 
     }
 
     const updatedCities = await exports.getAllCitiesDao();
-    const { emitCityAvailabilityUpdate } = require("../socket/socket");
-    emitCityAvailabilityUpdate(updatedCities);
-
     return updatedCities;
   } catch (err) {
     console.error("Database error in updateCityAvailabilityDao:", err);

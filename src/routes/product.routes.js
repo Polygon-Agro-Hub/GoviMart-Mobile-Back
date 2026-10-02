@@ -16,4 +16,7 @@ router.get("/slides", productEp.getAllSlides);
 // Check availability of cart items (products + packages) by their IDs
 router.post("/check-availability", productEp.checkAvailability);
 
+// Webhook endpoint to broadcast package updates to all connected mobile clients
+router.post("/notify-update", productEp.notifyPackageUpdate);
+
 module.exports = router;
