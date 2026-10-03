@@ -4,63 +4,27 @@ const os = require("os");
 const path = require("path");
 
 // ============================================================================
-// 1. DYNAMIC CONFIGURATION & SERVICE METADATA
+// 1. SERVICE METADATA & CONFIGURATION
 // ============================================================================
-// Auto-detect service metadata from package.json or environment variables
 let pkg = {};
 try {
   pkg = require(path.join(__dirname, "../../package.json"));
 } catch (_) {
-  try {
-    pkg = require(path.join(process.cwd(), "package.json"));
-  } catch (_) {
-    pkg = {};
-  }
+  pkg = {};
 }
 
-const SERVICE_NAME =
-  process.env.SERVICE_NAME ||
-  process.env.APP_NAME ||
-  pkg.description ||
-  pkg.name ||
-  "Polygon Mobile API";
-
-const SERVICE_VERSION =
-  process.env.SERVICE_VERSION ||
-  process.env.APP_VERSION ||
-  process.env.npm_package_version ||
-  pkg.version ||
-  "1.0.0";
+const SERVICE_NAME = "Polygon Mobile API";
+const SERVICE_VERSION = pkg.version || "1.0.0";
 
 // ============================================================================
-// 2. PLUG-AND-PLAY DATABASE AUTO-DISCOVERY
+// 2. DATABASE POOLS
 // ============================================================================
-// Safely import database pools from standard Polygon paths or allow manual injection
-let databasePools = {};
+const { plantcare, collectionofficer, admin } = require("../startup/database");
 
-try {
-  const dbModule = require("../startup/database");
-  if (dbModule) {
-    if (dbModule.plantcare) databasePools.plantcare = dbModule.plantcare;
-    if (dbModule.collectionofficer) databasePools.collectionofficer = dbModule.collectionofficer;
-    if (dbModule.admin) databasePools.admin = dbModule.admin;
-    if (dbModule.investments) databasePools.investments = dbModule.investments;
-  }
-} catch (_) {
-  try {
-    const dbModule = require("./database");
-    if (dbModule) databasePools = dbModule;
-  } catch (_) {
-    // Database pools can be set via router.setDatabases()
-  }
-}
-
-/**
- * Method to register or override database pools from any project
- * Example: healthRouter.setDatabases({ mysqlPool, redisClient })
- */
-router.setDatabases = (pools) => {
-  databasePools = { ...databasePools, ...pools };
+const databasePools = {
+  plantcare,
+  collectionofficer,
+  admin,
 };
 
 // ============================================================================
@@ -79,17 +43,14 @@ router.use((req, res, next) => {
 // ============================================================================
 // 4. DATABASE CONNECTIVITY TEST HELPER
 // ============================================================================
-/**
- * Test a database connection pool (supports mysql2 pools, clients, or generic pingers)
- * Times out after 3000ms to prevent hanging health checks
- */
 const testConnection = (pool, name) => {
   return new Promise((resolve) => {
     if (!pool) {
       return resolve({
         name,
-        status: "unconfigured",
+        status: "disconnected",
         latencyMs: 0,
+        error: "Database pool not found",
       });
     }
 
@@ -109,60 +70,35 @@ const testConnection = (pool, name) => {
       }
     }, 3000);
 
-    // mysql2 Pool handler
-    if (typeof pool.getConnection === "function") {
-      pool.getConnection((err, connection) => {
-        if (hasResolved) {
-          if (connection) connection.release();
-          return;
-        }
+    pool.getConnection((err, connection) => {
+      if (hasResolved) {
+        if (connection) connection.release();
+        return;
+      }
 
-        if (err) {
-          clearTimeout(timeout);
-          hasResolved = true;
-          return resolve({
-            name,
-            status: "disconnected",
-            latencyMs: Date.now() - startTime,
-            error: err.message,
-          });
-        }
-
-        connection.ping((pingErr) => {
-          clearTimeout(timeout);
-          connection.release();
-          if (hasResolved) return;
-          hasResolved = true;
-
-          if (pingErr) {
-            resolve({
-              name,
-              status: "disconnected",
-              latencyMs: Date.now() - startTime,
-              error: pingErr.message,
-            });
-          } else {
-            resolve({
-              name,
-              status: "connected",
-              latencyMs: Date.now() - startTime,
-            });
-          }
-        });
-      });
-    } else if (typeof pool.query === "function") {
-      // Direct query fallback (e.g. SELECT 1)
-      pool.query("SELECT 1 AS health", (err) => {
+      if (err) {
         clearTimeout(timeout);
+        hasResolved = true;
+        return resolve({
+          name,
+          status: "disconnected",
+          latencyMs: Date.now() - startTime,
+          error: err.message,
+        });
+      }
+
+      connection.ping((pingErr) => {
+        clearTimeout(timeout);
+        connection.release();
         if (hasResolved) return;
         hasResolved = true;
 
-        if (err) {
+        if (pingErr) {
           resolve({
             name,
             status: "disconnected",
             latencyMs: Date.now() - startTime,
-            error: err.message,
+            error: pingErr.message,
           });
         } else {
           resolve({
@@ -172,50 +108,19 @@ const testConnection = (pool, name) => {
           });
         }
       });
-    } else if (typeof pool.ping === "function") {
-      // Redis or generic ping
-      pool.ping((err) => {
-        clearTimeout(timeout);
-        if (hasResolved) return;
-        hasResolved = true;
-        resolve({
-          name,
-          status: err ? "disconnected" : "connected",
-          latencyMs: Date.now() - startTime,
-          error: err ? err.message : undefined,
-        });
-      });
-    } else {
-      clearTimeout(timeout);
-      resolve({
-        name,
-        status: "connected",
-        latencyMs: 0,
-      });
-    }
+    });
   });
 };
 
-/**
- * Check all configured databases in parallel
- */
 const checkAllDatabases = async () => {
   const dbEntries = Object.entries(databasePools);
-  if (dbEntries.length === 0) {
-    return {
-      status: "unconfigured",
-      allConnected: true,
-      connections: {},
-    };
-  }
-
   const results = await Promise.allSettled(
     dbEntries.map(([key, pool]) => testConnection(pool, key))
   );
 
   const connections = {};
   let connectedCount = 0;
-  let totalCount = dbEntries.length;
+  const totalCount = dbEntries.length;
 
   results.forEach((res, index) => {
     const key = dbEntries[index][0];
@@ -335,7 +240,6 @@ router.get(["/health/detailed", "/health/details"], async (req, res) => {
     uptimeSeconds: Math.floor(process.uptime()),
     environment: process.env.NODE_ENV || "development",
 
-    // Application information
     application: {
       name: SERVICE_NAME,
       version: SERVICE_VERSION,
@@ -345,7 +249,6 @@ router.get(["/health/detailed", "/health/details"], async (req, res) => {
       cpuUsage: process.cpuUsage(),
     },
 
-    // System information
     system: {
       platform: process.platform,
       architecture: process.arch,
@@ -359,12 +262,11 @@ router.get(["/health/detailed", "/health/details"], async (req, res) => {
       networkInterfaces: Object.keys(os.networkInterfaces()),
     },
 
-    // Real-time Database status (Live checked)
     database: dbHealth.connections,
     databaseSummary: {
       status: dbHealth.status,
-      connected: dbHealth.connectedCount || 0,
-      total: dbHealth.totalCount || 0,
+      connected: dbHealth.connectedCount,
+      total: dbHealth.totalCount,
     },
   };
 
@@ -373,7 +275,7 @@ router.get(["/health/detailed", "/health/details"], async (req, res) => {
 
 /**
  * @route   GET /health/live
- * @desc    Liveness probe for container orchestration (Kubernetes, Docker)
+ * @desc    Liveness probe for container orchestration
  */
 router.get("/health/live", (req, res) => {
   res.status(200).json({
@@ -387,7 +289,6 @@ router.get("/health/live", (req, res) => {
 /**
  * @route   GET /health/ready
  * @desc    Readiness probe for container orchestration
- *          Verifies service and database connectivity before accepting incoming traffic
  */
 router.get("/health/ready", async (req, res) => {
   try {
@@ -445,7 +346,7 @@ router.get("/health/db/:database", async (req, res) => {
   if (!pool) {
     return res.status(404).json({
       error: "Database not found",
-      message: `Database '${database}' is not configured in this service`,
+      message: `Database '${database}' is not recognized`,
       configuredDatabases: Object.keys(databasePools),
     });
   }
@@ -464,7 +365,7 @@ router.get("/health/db/:database", async (req, res) => {
 
 /**
  * @route   GET /metrics
- * @desc    Performance & resource metrics for monitoring agents
+ * @desc    Performance & resource metrics
  */
 router.get("/metrics", (req, res) => {
   const memoryUsage = process.memoryUsage();
@@ -498,14 +399,14 @@ router.get("/metrics", (req, res) => {
 router.get("/home", (req, res) => {
   const welcomeMessage = {
     message: `Welcome to ${SERVICE_NAME}`,
-    description: pkg.description || "Polygon Ecosystem Service API",
+    description: "Polygon Mobile API service",
     version: SERVICE_VERSION,
     environment: process.env.NODE_ENV || "development",
     timestamp: new Date().toISOString(),
     endpoints: {
       health: {
         basic: "GET /health (or /healthz) - Lightweight service status & uptime",
-        detailed: "GET /health/detailed - Comprehensive system metrics & live database ping",
+        detailed: "GET /health/detailed (or /health/details) - System metrics & live database ping",
         liveness: "GET /health/live - Container liveness probe",
         readiness: "GET /health/ready - Container readiness probe",
         databaseTest: "GET /health/db/:database - Diagnostic check for single database pool",
