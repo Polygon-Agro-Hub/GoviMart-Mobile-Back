@@ -180,9 +180,6 @@ exports.updateCityAvailabilityDao = async (cityId, isAvailable, companyCenterId 
     }
 
     const updatedCities = await exports.getAllCitiesDao();
-    const { emitCityAvailabilityUpdate } = require("../socket/socket");
-    emitCityAvailabilityUpdate(updatedCities);
-
     return updatedCities;
   } catch (err) {
     console.error("Database error in updateCityAvailabilityDao:", err);
@@ -290,16 +287,77 @@ exports.getUserByNicDao = async (nic) => {
   }
 };
 
-// Sign Up User
-exports.signupUserDao = async (user, hashedPassword, nextId) => {
+// Sign Up or Restore User
+exports.signupUserDao = async (user, hashedPassword, nextId = null, existingUserId = null) => {
   try {
-    const sql = `
+    if (existingUserId) {
+      // Restore existing deleted account
+      const updateSql = `
+        UPDATE marketplaceusers
+        SET 
+          title = ?,
+          firstName = ?,
+          lastName = ?,
+          phoneCode = ?,
+          phoneNumber = ?,
+          phoneCode2 = ?,
+          phoneNumber2 = ?,
+          buyerType = ?,
+          email = ?,
+          password = ?,
+          isMarketPlaceUser = 1,
+          isSubscribe = 0,
+          companyName = ?,
+          companyPhoneCode = ?,
+          companyPhone = ?,
+          nearesCity = ?,
+          creditBalance = 0,
+          creditLimit = 2000,
+          isActive = 1
+        WHERE id = ?
+      `;
+
+      const updateValues = [
+        user.title,
+        user.firstName,
+        user.lastName,
+        user.phoneCode,
+        user.phoneNumber,
+        user.phoneCode2 || null,
+        user.phoneNumber2 || null,
+        user.buyerType,
+        user.email,
+        hashedPassword,
+        user.companyName || null,
+        user.companyPhoneCode || null,
+        user.companyPhoneNumber || null,
+        user.city || null,
+        existingUserId,
+      ];
+
+      const [results] = await db.collectionofficer.promise().query(updateSql, updateValues);
+      if (results.affectedRows >= 1) {
+        return {
+          status: true,
+          message: "User account restored successfully.",
+          data: { userId: existingUserId },
+        };
+      } else {
+        return {
+          status: false,
+          message: "Failed to restore user account.",
+        };
+      }
+    }
+
+    // Insert brand new user
+    const insertSql = `
       INSERT INTO marketplaceusers 
       (title, firstName, lastName, phoneCode, phoneNumber, phoneCode2, phoneNumber2, buyerType, email, nic, password, isMarketPlaceUser, isSubscribe, companyName, companyPhoneCode, companyPhone, cusId, nearesCity) 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
-    const values = [
+    const insertValues = [
       user.title,
       user.firstName,
       user.lastName,
@@ -320,7 +378,7 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
       user.city || null,
     ];
 
-    const [results] = await db.collectionofficer.promise().query(sql, values);
+    const [results] = await db.collectionofficer.promise().query(insertSql, insertValues);
 
     if (results.affectedRows === 1) {
       return {
@@ -336,6 +394,40 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
     }
   } catch (err) {
     console.error("Database error in signupUserDao:", err);
+    throw err;
+  }
+};
+
+// Get Deleted Account Summary / Stats
+exports.getDeletedAccountStatsDao = async (userId, userRecord) => {
+  try {
+    const ordersSql = `
+      SELECT COUNT(DISTINCT o.id) AS pastOrdersCount
+      FROM orders o
+      WHERE o.userId = ?
+    `;
+    const [ordersResult] = await db.collectionofficer.promise().query(ordersSql, [userId]);
+    const pastOrdersCount = Number(ordersResult[0]?.pastOrdersCount || 0);
+
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    const formatMonthYear = (dateVal) => {
+      if (!dateVal) return "N/A";
+      const d = new Date(dateVal);
+      if (isNaN(d.getTime())) return "N/A";
+      return `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+    };
+
+    const memberSince = formatMonthYear(userRecord.created_at);
+    const deletedOn = formatMonthYear(userRecord.deletedAt);
+
+    return {
+      pastOrdersCount,
+      memberSince,
+      deletedOn,
+    };
+  } catch (err) {
+    console.error("Database error in getDeletedAccountStatsDao:", err);
     throw err;
   }
 };

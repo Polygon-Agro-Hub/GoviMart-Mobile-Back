@@ -361,7 +361,7 @@ const sendShoutoutSms = async (phoneNumber, code) => {
     "Content-Type": "application/json",
   };
   const body = {
-    source: "PolygonAgro",
+    source: "Polygon",
     transports: ["sms"],
     content: { sms: message },
     destinations: [phoneNumber],
@@ -443,8 +443,26 @@ exports.userSignup = asyncHandler(async (req, res) => {
     if (nic) {
       const existingNic = await userDao.getUserByNicDao(nic);
       if (existingNic) {
-        conflictErrors.nic = "NIC number already exists";
-        errorMessages.push("NIC number already exists");
+        if (existingNic.isActive === 0 && existingNic.deletedAt) {
+          if (!req.body.allowRestore) {
+            const stats = await userDao.getDeletedAccountStatsDao(existingNic.id, existingNic);
+            return res.status(200).json({
+              status: false,
+              isDeletedAccount: true,
+              message: "Account Found with Previous Order History",
+              data: {
+                nic: existingNic.nic || nic,
+                pastOrdersCount: stats.pastOrdersCount,
+                memberSince: stats.memberSince,
+                deletedOn: stats.deletedOn,
+                userId: existingNic.id,
+              },
+            });
+          }
+        } else {
+          conflictErrors.nic = "NIC number already exists";
+          errorMessages.push("NIC number already exists");
+        }
       }
     }
 
@@ -681,11 +699,16 @@ exports.verifySignup = asyncHandler(async (req, res) => {
     }
 
     // Check again if NIC was taken since signup started
+    let restoredUserId = null;
     if (signupData.nic) {
       const existingNic = await userDao.getUserByNicDao(signupData.nic);
       if (existingNic) {
-        conflictErrors.nic = "NIC number already exists";
-        errorMessages.push("NIC number already exists");
+        if ((existingNic.isActive === 0 || existingNic.deletedAt) && signupData.allowRestore) {
+          restoredUserId = existingNic.id;
+        } else {
+          conflictErrors.nic = "NIC number already exists";
+          errorMessages.push("NIC number already exists");
+        }
       }
     }
 
@@ -703,19 +726,24 @@ exports.verifySignup = asyncHandler(async (req, res) => {
     const SALT_ROUNDS = parseInt(process.env.SALT_ROUNDS || "10", 10);
     const hashedPassword = bcrypt.hashSync(signupData.password, SALT_ROUNDS);
 
-    // Generate next MAR-XXXXX customer ID
-    const lastId = await userDao.getMarketPlaceUserLastCusIdDao();
-    let nextId;
-    if (lastId === null || lastId === undefined) {
-      nextId = "MAR-00001";
+    let signupResult;
+    if (restoredUserId) {
+      signupResult = await userDao.signupUserDao(signupData, hashedPassword, null, restoredUserId);
     } else {
-      const numericPart = parseInt(lastId.split("-")[1], 10);
-      const nextNumber = numericPart + 1;
-      nextId = `MAR-${nextNumber.toString().padStart(5, "0")}`;
-    }
+      // Generate next MAR-XXXXX customer ID
+      const lastId = await userDao.getMarketPlaceUserLastCusIdDao();
+      let nextId;
+      if (lastId === null || lastId === undefined) {
+        nextId = "MAR-00001";
+      } else {
+        const numericPart = parseInt(lastId.split("-")[1], 10);
+        const nextNumber = numericPart + 1;
+        nextId = `MAR-${nextNumber.toString().padStart(5, "0")}`;
+      }
 
-    // Create user in DB
-    const signupResult = await userDao.signupUserDao(signupData, hashedPassword, nextId);
+      // Create user in DB
+      signupResult = await userDao.signupUserDao(signupData, hashedPassword, nextId);
+    }
 
     // Delete OTP record since it has been successfully used
     await userDao.deleteOtpDao(referenceId);

@@ -92,16 +92,6 @@ const initSocket = (httpServer) => {
       console.warn(`⚠️ [Socket Security] Blocked unauthenticated register_user attempt for user_${targetUserId} from socket ${socket.id}`);
     });
 
-    socket.on("get_cities_availability", async () => {
-      try {
-        const authDao = require("../dao/auth.dao");
-        const cities = await authDao.getAllCitiesDao();
-        socket.emit("city_availability_updated", cities);
-      } catch (err) {
-        console.error("[Socket] Error fetching cities for socket client:", err);
-      }
-    });
-
     socket.on("send_test_notification", (data) => {
       if (data && data.userId && data.notification) {
         emitNotificationToUser(data.userId, data.notification);
@@ -118,26 +108,6 @@ const initSocket = (httpServer) => {
 
     socket.on("package_update", (data) => {
       emitCatalogUpdate(data);
-    });
-
-    socket.on("banner_update", (data) => {
-      emitBannerUpdate(data);
-    });
-
-    socket.on("banners_update", (data) => {
-      emitBannerUpdate(data);
-    });
-
-    socket.on("banner_position_update", (data) => {
-      emitBannerUpdate(data);
-    });
-
-    socket.on("slide_update", (data) => {
-      emitBannerUpdate(data);
-    });
-
-    socket.on("slides_update", (data) => {
-      emitBannerUpdate(data);
     });
 
     socket.on("disconnect", (reason) => {
@@ -163,18 +133,8 @@ const emitNotificationToUser = (userId, notification) => {
 
   const room = `user_${userId}`;
   io.to(room).emit("new_notification", notification);
+  io.to(room).emit("newNotification", notification);
   console.log(`📢 [Socket] Emitted new_notification to ${room}:`, notification?.title || notification?.id);
-  return true;
-};
-
-const emitCityAvailabilityUpdate = (citiesData) => {
-  if (!io) {
-    console.warn("[Socket] IO not initialized, cannot emit city update");
-    return false;
-  }
-
-  io.emit("city_availability_updated", citiesData);
-  console.log(`🌍 [Socket] Broadcasted city_availability_updated to all clients (${Array.isArray(citiesData) ? citiesData.length : 1} items)`);
   return true;
 };
 
@@ -188,20 +148,6 @@ const emitCatalogUpdate = (data) => {
   io.emit("products_updated", data || {});
   io.emit("packages_updated", data || {});
   console.log("📦 [Socket] Broadcasted catalog_updated / products_updated / packages_updated to all clients");
-  return true;
-};
-
-const emitBannerUpdate = (data) => {
-  if (!io) {
-    console.warn("[Socket] IO not initialized, cannot emit banner update");
-    return false;
-  }
-
-  io.emit("banners_updated", data || {});
-  io.emit("banner_updated", data || {});
-  io.emit("slides_updated", data || {});
-  io.emit("banner_position_updated", data || {});
-  console.log("🎨 [Socket] Broadcasted banners_updated / slides_updated to all clients");
   return true;
 };
 
@@ -221,7 +167,6 @@ let dbWatcherInterval = null;
 let lastHashes = {
   itemHash: null,
   pkgHash: null,
-  bannerHash: null,
   pkgDetailHash: null,
 };
 
@@ -237,7 +182,6 @@ const startDbChangeWatcher = (pollIntervalMs = 45000) => {
     SELECT 
       (SELECT COALESCE(BIT_XOR(CRC32(CONCAT_WS(':', id, isEnable, displayName, category, normalPrice, discountedPrice))), 0) FROM marketplaceitems) as itemHash,
       (SELECT COALESCE(BIT_XOR(CRC32(CONCAT_WS(':', id, displayName, status, isValid, productPrice, packingFee, serviceFee))), 0) FROM marketplacepackages) as pkgHash,
-      (SELECT COALESCE(BIT_XOR(CRC32(CONCAT_WS(':', id, indexId, details, image, type))), 0) FROM banners) as bannerHash,
       (SELECT COALESCE(BIT_XOR(CRC32(CONCAT_WS(':', id, packageId, qty, productTypeId))), 0) FROM packagedetails) as pkgDetailHash
   `;
 
@@ -269,7 +213,6 @@ const startDbChangeWatcher = (pollIntervalMs = 45000) => {
         lastHashes = {
           itemHash: String(current.itemHash),
           pkgHash: String(current.pkgHash),
-          bannerHash: String(current.bannerHash),
           pkgDetailHash: String(current.pkgDetailHash),
         };
         return;
@@ -292,13 +235,6 @@ const startDbChangeWatcher = (pollIntervalMs = 45000) => {
         lastHashes.pkgDetailHash = String(current.pkgDetailHash);
         emitCatalogUpdate({ type: "package", source: "db_change" });
       }
-
-      // Check banner changes (position/indexId changed, added, edited, deleted)
-      if (String(current.bannerHash) !== lastHashes.bannerHash) {
-        console.log("⚡ [DB Watcher] Banner change detected in DB -> emitting banners_updated");
-        lastHashes.bannerHash = String(current.bannerHash);
-        emitBannerUpdate({ type: "banner", source: "db_change" });
-      }
     });
   }, pollIntervalMs);
 
@@ -312,10 +248,8 @@ module.exports = {
   getIO,
   emitNotificationToUser,
   emitUnreadCountToUser,
-  emitCityAvailabilityUpdate,
   emitCatalogUpdate,
   emitProductUpdate: emitCatalogUpdate,
   emitPackageUpdate: emitCatalogUpdate,
-  emitBannerUpdate,
   startDbChangeWatcher,
 };
