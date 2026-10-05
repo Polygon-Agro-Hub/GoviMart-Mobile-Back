@@ -1,5 +1,6 @@
 const ProductDao = require("../dao/product.dao");
 const ProductValidate = require("../validations/product.validations");
+const packageCache = require("../services/package-cache");
 
 exports.getAllProduct = async (req, res) => {
   const { search, buyerType = "Retail", userType } = req.query;
@@ -16,6 +17,16 @@ exports.getAllProduct = async (req, res) => {
   }
 
   try {
+    // Check in-memory package cache if no search filter
+    const cachedPackages = packageCache.getCachedPackages(search);
+    if (cachedPackages) {
+      return res.status(200).json({
+        status: true,
+        message: "Product found.",
+        product: cachedPackages,
+      });
+    }
+
     const productData = await ProductDao.getAllProductDao(search);
     if (productData.length === 0) {
       return res.json({
@@ -26,6 +37,12 @@ exports.getAllProduct = async (req, res) => {
         product: [],
       });
     }
+
+    // Cache default package list in memory
+    if (!search || search.trim() === "") {
+      packageCache.setCachedPackages(productData);
+    }
+
     res.status(200).json({
       status: true,
       message: "Product found.",
@@ -187,6 +204,48 @@ exports.getProductsByProductType = async (req, res) => {
     return res.status(500).json({
       status: false,
       error: "An error occurred while fetching products by product type.",
+    });
+  }
+};
+
+/**
+ * POST /polygon/api/product/notify-update
+ * Webhook called by Admin Panel when packages or products are created, updated, or status-changed.
+ * Broadcasts real-time 'packages_updated' and 'catalog_updated' WebSocket events to all connected Polygon/GoviMart mobile apps.
+ */
+exports.notifyPackageUpdate = async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const { action, packageId, extra } = payload;
+    console.log(`📦 [ProductService] Received package notify-update: action=${action}, packageId=${packageId}`);
+
+    // Refresh or clear in-memory package cache
+    try {
+      await packageCache.refreshPackageCache();
+    } catch (_) {
+      packageCache.clearPackageCache();
+    }
+
+    const { emitCatalogUpdate } = require("../socket/socket");
+    emitCatalogUpdate({
+      type: "package",
+      action: action || "update",
+      packageId: packageId || null,
+      timestamp: new Date().toISOString(),
+      ...(extra || {}),
+    });
+
+    return res.status(200).json({
+      status: true,
+      message: `Package update broadcasted successfully (action: ${action || "update"})`,
+      data: payload,
+    });
+  } catch (error) {
+    console.error("Error broadcasting package update:", error);
+    return res.status(500).json({
+      status: false,
+      message: "Failed to broadcast package update",
+      error: error.message,
     });
   }
 };

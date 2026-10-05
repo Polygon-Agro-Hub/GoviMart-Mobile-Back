@@ -361,7 +361,7 @@ const sendShoutoutSms = async (phoneNumber, code) => {
     "Content-Type": "application/json",
   };
   const body = {
-    source: "PolygonAgro",
+    source: "Polygon",
     transports: ["sms"],
     content: { sms: message },
     destinations: [phoneNumber],

@@ -254,6 +254,13 @@ exports.createNotificationDao = (arg1, arg2, arg3) => {
           try {
             const unreadCount = await exports.getUnreadCountDao(notifData.userId);
             notifData.unreadCount = unreadCount;
+
+            // Sync with in-memory node-cache
+            try {
+              const notificationCache = require("../services/notification-cache");
+              notificationCache.setUnreadCount(notifData.userId, unreadCount);
+            } catch (_) {}
+
             emitNotificationToUser(notifData.userId, notifData);
             emitUnreadCountToUser(notifData.userId, unreadCount);
           } catch (_) {
@@ -427,3 +434,63 @@ exports.seedDummyNotificationsForUserDao = (userId) => {
     }
   });
 };
+
+/**
+ * Resolve customer userId and processOrderId from orderId (handles both processorders.id and orders.id).
+ */
+exports.resolveOrderCustomerDetailsDao = (orderId) => {
+  return new Promise((resolve) => {
+    // 1. Check if orderId matches processorders.id
+    const sql1 = `
+      SELECT po.id AS processOrderId, po.invNo, o.id AS orderId, o.userId
+      FROM processorders po
+      JOIN orders o ON po.orderId = o.id
+      WHERE po.id = ?
+      LIMIT 1
+    `;
+    db.collectionofficer.query(sql1, [orderId], (err1, rows1) => {
+      if (!err1 && rows1 && rows1.length > 0) {
+        return resolve(rows1[0]);
+      }
+
+      // 2. Check if orderId matches orders.id
+      const sql2 = `
+        SELECT po.id AS processOrderId, po.invNo, o.id AS orderId, o.userId
+        FROM orders o
+        JOIN processorders po ON po.orderId = o.id
+        WHERE o.id = ?
+        ORDER BY po.id DESC
+        LIMIT 1
+      `;
+      db.collectionofficer.query(sql2, [orderId], (err2, rows2) => {
+        if (!err2 && rows2 && rows2.length > 0) {
+          return resolve(rows2[0]);
+        }
+        resolve(null);
+      });
+    });
+  });
+};
+
+/**
+ * Get latest process order and invoice number for a given user.
+ */
+exports.getLatestProcessOrderForUserDao = (userId) => {
+  return new Promise((resolve) => {
+    const sql = `
+      SELECT po.id AS processOrderId, po.invNo, o.id AS orderId, o.userId
+      FROM processorders po
+      JOIN orders o ON po.orderId = o.id
+      WHERE o.userId = ?
+      ORDER BY po.id DESC
+      LIMIT 1
+    `;
+    db.collectionofficer.query(sql, [userId], (err, rows) => {
+      if (!err && rows && rows.length > 0) {
+        return resolve(rows[0]);
+      }
+      resolve(null);
+    });
+  });
+};
+
