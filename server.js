@@ -67,6 +67,7 @@ const notificationroute = require("./src/routes/notification.routes");
 const appversionroute = require("./src/routes/app-version.routes");
 const errorHandler = require("./src/middlewares/error.middleware");
 
+// Register routes with a prefix
 const registerRoutes = (prefix) => {
   app.use(`${prefix}/api/auth`, userroute);
   app.use(`${prefix}/api/customer`, customerroute);
