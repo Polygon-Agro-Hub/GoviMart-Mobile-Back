@@ -1492,6 +1492,10 @@ exports.cancelOrderDao = ({ orderId, processOrderId, userId }) => {
                     await new Promise((res, rej) => connection.commit((e) => (e ? rej(e) : res())));
                     connection.release();
 
+                    // Trigger Sales Dash real-time notification to Sales Agent
+                    const salesdashNotificationService = require("../services/salesdash-notification-service");
+                    salesdashNotificationService.notifySalesDashOrderCancelled(pOrderId, invNoDisplay).catch(() => {});
+
                     resolve({
                         success: true,
                         orderId: order.actualOrderId,
