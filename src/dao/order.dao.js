@@ -89,10 +89,6 @@ exports.getCartItemsForOrderDao = (cartId) => {
     });
 };
 
-/**
- * Insert a new row into `orders` within an open transaction.
- * For pickup orders, resolves assignCoMCenId from distributedcompanycenter.
- */
 exports.createOrderWithTransactionDao = (connection, orderData) => {
     return new Promise((resolve, reject) => {
         const {
@@ -109,7 +105,7 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
             isCoupon,
             couponValue,
             couponType,
-            total,
+            total, // ignored: total is recalculated below as fullTotal + discount
             fullTotal,
             discount,
             sheduleType,
@@ -126,6 +122,11 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
             deliveryCharge,
             isFinalizeImdt,
         } = orderData;
+
+        // ── orders.total = fullTotal + discount ───────────────────────────────
+        const parsedFullTotal = parseFloat(fullTotal) || 0;
+        const parsedDiscount = parseFloat(discount) || 0;
+        const orderTotal = parseFloat((parsedFullTotal + parsedDiscount).toFixed(2));
 
         const formatMethod = (m) => {
             if (!m) return m;
@@ -189,9 +190,9 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
                 isCoupon ? 1 : 0,
                 isCoupon ? couponType || null : null,
                 parseFloat(couponValue) || 0,
-                total,
-                fullTotal,
-                discount,
+                orderTotal,        // total = fullTotal + discount
+                parsedFullTotal,   // fullTotal
+                parsedDiscount,    // discount
                 parseFloat(deliveryCharge) || 0,
                 normalizedScheduleType,
                 parsedValidityPeriod,

@@ -585,8 +585,12 @@ exports.resetPackageItemDao = ({ orderPackageId, userId, replceId, originalBasel
  *  3. Insert / merge newly added ala carte items
  *  4. Lock packages
  *  5. Schedule date
- *  6. Order totals (processorders / orders)
- *  7. Credit top-up
+ *  6. Order totals:
+ *       processorders.amount / moneyPaid (card)  = newTotal - coupon
+ *       orders.fullTotal = newTotal - coupon
+ *       orders.discount  = old discount + change in ala carte discount
+ *       orders.total     = fullTotal + discount
+ *  7. Credit balance (paid orders only): creditBalance += oldFullTotal - newFullTotal
  */
 exports.confirmPackageReviewDao = ({
     orderId,
@@ -690,6 +694,31 @@ exports.confirmPackageReviewDao = ({
                     console.log(
                         `[confirmPackageReviewDao] Resolved ids: orderId=${realOrderId}, processOrderId=${realProcessOrderId}, userId=${targetUserId}`,
                     );
+
+                    // -1b. Snapshot the orders row (locked) + current ala carte discount
+                    //      BEFORE the review changes anything.
+                    const orderRows = await q(
+                        `SELECT total, fullTotal, discount, couponValue, deliveryCharge
+                         FROM orders
+                         WHERE id = ?
+                         FOR UPDATE`,
+                        [realOrderId],
+                    );
+                    if (orderRows.length === 0) {
+                        throw new Error("Order not found. Please reload the review screen and try again.");
+                    }
+                    const orderSnap = orderRows[0];
+
+                    const alacartDiscountSql = `
+                        SELECT COALESCE(SUM(discount), 0) AS totalDiscount
+                        FROM orderadditionalitems
+                        WHERE proOrderId = ? OR (proOrderId IS NULL AND orderId = ?)
+                    `;
+                    const beforeDiscRows = await q(alacartDiscountSql, [
+                        realProcessOrderId,
+                        realOrderId,
+                    ]);
+                    const oldAlacartDiscount = parseFloat(beforeDiscRows[0]?.totalDiscount) || 0;
 
                     // 0. Resolve orderpackage rows from DB (source of truth)
                     const dbPackages = await q(
@@ -1141,16 +1170,25 @@ exports.confirmPackageReviewDao = ({
                         `[confirmPackageReviewDao] Payment method: "${dbPaymentMethod}" -> isCard: ${isCard}, isDbPaid: ${isDbPaid}, newTotal: ${parsedNewTotal}, additionalAmount: ${parsedAdditional}`,
                     );
 
+                    // Coupon saved at checkout (0 for free-delivery coupons, same as createOrder).
+                    // The app's newTotal = packages + ala carte + delivery with NO coupon,
+                    // so the coupon is subtracted here.
+                    const couponValue = parseFloat(orderSnap.couponValue) || 0;
+                    const netNewTotal =
+                        parsedNewTotal != null
+                            ? round2(Math.max(0, parsedNewTotal - couponValue))
+                            : null;
+
                     // 6a. processorders
-                    if (isCard && parsedNewTotal != null) {
+                    if (isCard && netNewTotal != null) {
                         const targetCreditPaid = parseFloat(matchedOrder.creditPaid) || 0;
-                        const newMoneyPaid = Math.max(0, parsedNewTotal - targetCreditPaid);
+                        const newMoneyPaid = Math.max(0, netNewTotal - targetCreditPaid);
                         const processRes = await q(
                             "UPDATE processorders SET amount = ?, moneyPaid = ?, isFinalized = 1 WHERE id = ?",
-                            [parsedNewTotal, newMoneyPaid, realProcessOrderId],
+                            [netNewTotal, newMoneyPaid, realProcessOrderId],
                         );
                         console.log(
-                            `[confirmPackageReviewDao] processorders updated (card amount=${parsedNewTotal}, moneyPaid=${newMoneyPaid}, isFinalized=1):`,
+                            `[confirmPackageReviewDao] processorders updated (card amount=${netNewTotal}, moneyPaid=${newMoneyPaid}, isFinalized=1):`,
                             processRes.affectedRows,
                             "row(s)",
                         );
@@ -1166,58 +1204,76 @@ exports.confirmPackageReviewDao = ({
                         );
                     }
 
-                    // 6b. orders (total, fullTotal, discount)
-                    if (parsedNewTotal != null) {
-                        const orderRes = await q(
-                            `UPDATE orders
-                             SET total = ?, fullTotal = ?, discount = GREATEST(0, fullTotal - ?)
-                             WHERE id = ?`,
-                            [parsedNewTotal, parsedNewTotal, parsedNewTotal, realOrderId],
-                        );
-                        console.log(
-                            `[confirmPackageReviewDao] orders total/fullTotal updated:`,
-                            orderRes.affectedRows,
-                            "row(s)",
-                        );
+                    // 6b. orders: fullTotal, discount, total
+                    const afterDiscRows = await q(alacartDiscountSql, [
+                        realProcessOrderId,
+                        realOrderId,
+                    ]);
+                    const newAlacartDiscount = parseFloat(afterDiscRows[0]?.totalDiscount) || 0;
+
+                    // Keep whatever the order already had (package discount etc.) and only
+                    // move it by the change in ala carte discount caused by this review.
+                    const oldOrderDiscount = parseFloat(orderSnap.discount) || 0;
+                    const newOrderDiscount = round2(
+                        Math.max(0, oldOrderDiscount + (newAlacartDiscount - oldAlacartDiscount)),
+                    );
+
+                    let newOrderFullTotal = null;
+                    if (netNewTotal != null) {
+                        newOrderFullTotal = netNewTotal;
                     } else if (parsedAdditional > 0) {
-                        const fallRes = await q(
-                            `UPDATE orders
-                             SET total = total + ?, fullTotal = fullTotal + ?,
-                                 discount = GREATEST(0, fullTotal + ? - (total + ?))
-                             WHERE id = ?`,
-                            [parsedAdditional, parsedAdditional, parsedAdditional, parsedAdditional, realOrderId],
+                        newOrderFullTotal = round2(
+                            (parseFloat(orderSnap.fullTotal) || 0) + parsedAdditional,
+                        );
+                    }
+
+                    if (newOrderFullTotal != null) {
+                        // total = fullTotal + discount
+                        const newOrderTotal = round2(newOrderFullTotal + newOrderDiscount);
+                        const orderRes = await q(
+                            "UPDATE orders SET total = ?, fullTotal = ?, discount = ? WHERE id = ?",
+                            [newOrderTotal, newOrderFullTotal, newOrderDiscount, realOrderId],
                         );
                         console.log(
-                            `[confirmPackageReviewDao] orders fallback update:`,
-                            fallRes.affectedRows,
+                            `[confirmPackageReviewDao] orders updated: total=${newOrderTotal}, fullTotal=${newOrderFullTotal}, discount=${newOrderDiscount}, coupon=${couponValue}:`,
+                            orderRes.affectedRows,
                             "row(s)",
                         );
                     }
 
-                    // 7. Credit balance top-up for savings (negative diff)
-                    const parsedCreditToAdd = parseFloat(creditToAdd) || 0;
-                    if (parsedCreditToAdd > 0 && targetUserId) {
-                        const muRows = await q(
-                            "SELECT id, creditBalance FROM marketplaceusers WHERE id = ? LIMIT 1",
+                    // 7. Credit balance adjustment for PAID (card / credit) orders.
+                    //    creditBalance += (oldFullTotal - newFullTotal)
+                    //      total went DOWN -> difference is added to credit balance   (+)
+                    //      total went UP   -> difference is taken from credit balance (-)
+                    //                         (may go negative = customer owes it)
+                    //    Cash orders are not touched: nothing was paid yet.
+                    //    The app's creditToAdd value is no longer used; the DAO works it out
+                    //    from the real orders.fullTotal difference.
+                    const oldOrderFullTotal = parseFloat(orderSnap.fullTotal) || 0;
+                    const fullTotalDiff =
+                        isCard && newOrderFullTotal != null
+                            ? round2(newOrderFullTotal - oldOrderFullTotal)
+                            : 0;
+                    const creditChange = round2(-fullTotalDiff);
+
+                    if (creditChange !== 0 && targetUserId) {
+                        const creditRes = await q(
+                            "UPDATE marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?",
+                            [creditChange, targetUserId],
+                        );
+                        const balRows = await q(
+                            "SELECT creditBalance FROM marketplaceusers WHERE id = ? LIMIT 1",
                             [targetUserId],
                         );
-
-                        if (muRows.length > 0) {
-                            const oldBalance = parseFloat(muRows[0].creditBalance) || 0;
-                            const newBalance = Number((oldBalance + parsedCreditToAdd).toFixed(2));
-                            await q("UPDATE marketplaceusers SET creditBalance = ? WHERE id = ?", [
-                                newBalance,
-                                targetUserId,
-                            ]);
-                            console.log(
-                                `[confirmPackageReviewDao] creditBalance: old=${oldBalance}, added=${parsedCreditToAdd}, new=${newBalance}`,
-                            );
-                        } else {
-                            await q(
-                                "INSERT INTO marketplaceusers (id, creditBalance) VALUES (?, ?) ON DUPLICATE KEY UPDATE creditBalance = creditBalance + ?",
-                                [targetUserId, parsedCreditToAdd, parsedCreditToAdd],
-                            );
-                        }
+                        console.log(
+                            `[confirmPackageReviewDao] creditBalance changed by ${creditChange} (oldFullTotal=${oldOrderFullTotal}, newFullTotal=${newOrderFullTotal}), new balance=${balRows[0]?.creditBalance}:`,
+                            creditRes.affectedRows,
+                            "row(s)",
+                        );
+                    } else {
+                        console.log(
+                            `[confirmPackageReviewDao] creditBalance unchanged (isCard=${isCard}, fullTotalDiff=${fullTotalDiff})`,
+                        );
                     }
 
                     connection.commit((commitErr) => {
