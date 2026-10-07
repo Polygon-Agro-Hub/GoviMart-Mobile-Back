@@ -1352,164 +1352,194 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
     });
 };
 
-/**
- * Cancel an order / process order and convert paid balance to credit balance in marketplaceusers.
- */
-exports.cancelOrderDao = ({ orderId, processOrderId, userId }) => {
-    return new Promise((resolve, reject) => {
-        if ((!orderId && !processOrderId) || !userId) {
-            return reject(new Error("orderId or processOrderId and userId are required"));
+
+exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
+    if ((!orderId && !processOrderId) || !userId) {
+        throw new Error("orderId or processOrderId and userId are required");
+    }
+
+    const pool = db.collectionofficer;
+
+    // Promise helpers
+    const poolQuery = (sql, params) =>
+        new Promise((res, rej) =>
+            pool.query(sql, params, (e, r) => (e ? rej(e) : res(r))),
+        );
+    const getConnection = () =>
+        new Promise((res, rej) =>
+            pool.getConnection((e, c) => (e ? rej(e) : res(c))),
+        );
+    const run = (conn, sql, params) =>
+        new Promise((res, rej) =>
+            conn.query(sql, params, (e, r) => (e ? rej(e) : res(r))),
+        );
+    const begin = (conn) =>
+        new Promise((res, rej) => conn.beginTransaction((e) => (e ? rej(e) : res())));
+    const commit = (conn) =>
+        new Promise((res, rej) => conn.commit((e) => (e ? rej(e) : res())));
+    const rollback = (conn) =>
+        new Promise((res) => conn.rollback(() => res()));
+
+    /* ------------------------------------------------------------
+       0. Find the process order + verify ownership (read-only)
+    ------------------------------------------------------------ */
+    const findSql = `
+        SELECT
+            po.id AS processOrderId,
+            po.orderId AS actualOrderId,
+            po.invNo
+        FROM processorders po
+        INNER JOIN orders o ON po.orderId = o.id
+        WHERE (po.id = ? OR o.id = ?) AND o.userId = ?
+        ORDER BY po.id DESC
+        LIMIT 1
+    `;
+    const searchId = processOrderId || orderId;
+    const found = await poolQuery(findSql, [searchId, searchId, userId]);
+
+    if (!found || found.length === 0) {
+        throw new Error(
+            "Order not found or you do not have permission to cancel this order",
+        );
+    }
+
+    const pOrderId = found[0].processOrderId;
+    const actualOrderId = found[0].actualOrderId;
+    const invNo = found[0].invNo;
+
+    /* ------------------------------------------------------------
+       Transaction
+    ------------------------------------------------------------ */
+    const connection = await getConnection();
+
+    try {
+        await begin(connection);
+
+        // 1. Lock the row and read the CURRENT values inside the transaction
+        const lockedRows = await run(
+            connection,
+            `SELECT amount, creditPaid, moneyPaid, paymentMethod, isPaid, status
+             FROM processorders
+             WHERE id = ?
+             FOR UPDATE`,
+            [pOrderId],
+        );
+
+        if (!lockedRows || lockedRows.length === 0) {
+            throw new Error("Order not found");
         }
 
-        const findSql = `
-            SELECT 
-                po.id AS processOrderId,
-                po.orderId AS actualOrderId,
-                po.invNo,
-                po.amount,
-                po.creditPaid,
-                po.moneyPaid,
-                po.paymentMethod,
-                po.isPaid,
-                po.status,
-                o.userId
-            FROM processorders po
-            INNER JOIN orders o ON po.orderId = o.id
-            WHERE (po.id = ? OR o.id = ?) AND o.userId = ?
-            ORDER BY po.id DESC
-            LIMIT 1
-        `;
+        const order = lockedRows[0];
 
-        const searchId = processOrderId || orderId;
+        const currentStatus = order.status ? order.status.trim().toLowerCase() : "";
+        if (currentStatus === "cancelled") {
+            throw new Error("Order is already cancelled");
+        }
+        if (currentStatus === "delivered" || currentStatus === "picked up") {
+            throw new Error("Completed order cannot be cancelled");
+        }
 
-        db.collectionofficer.query(findSql, [searchId, searchId, userId], async (err, rows) => {
-            if (err) return reject(err);
-            if (!rows || rows.length === 0) {
-                return reject(
-                    new Error("Order not found or you do not have permission to cancel this order"),
-                );
+        // 2. Work out the refundable credit from the locked (original) values
+        const pMethod = (order.paymentMethod || "").trim().toLowerCase();
+        const rawAmount = parseFloat(order.amount) || 0;
+        const rawCreditPaid = parseFloat(order.creditPaid) || 0;
+        const rawMoneyPaid = parseFloat(order.moneyPaid) || 0;
+        const isPaid = parseInt(order.isPaid, 10) === 1;
+
+        let refundCreditAmount = 0;
+        if (pMethod === "card" || pMethod === "payhere" || (isPaid && pMethod !== "cash")) {
+            // Card / online: full amount refunded as credit
+            refundCreditAmount = rawAmount > 0 ? rawAmount : rawMoneyPaid + rawCreditPaid;
+        } else if (pMethod === "credit") {
+            // 100% paid by credit balance
+            refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : rawAmount;
+        } else {
+            // Cash: refund only the credit used at checkout
+            refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : 0;
+        }
+
+        // 3. Mark as Cancelled AND reset the payment columns
+        const cancelResult = await run(
+            connection,
+            `UPDATE processorders
+             SET status = 'Cancelled',
+                 isPaid = 0,
+                 amount = 0,
+                 creditPaid = 0,
+                 moneyPaid = 0
+             WHERE id = ?
+               AND LOWER(TRIM(status)) <> 'cancelled'`,
+            [pOrderId],
+        );
+
+        if (cancelResult.affectedRows === 0) {
+            throw new Error("Order is already cancelled");
+        }
+
+        // 4. Refund to marketplaceusers.creditBalance
+        let newCreditBalance = null;
+        if (refundCreditAmount > 0) {
+            await run(
+                connection,
+                "UPDATE marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?",
+                [refundCreditAmount, userId],
+            );
+
+            const creditRows = await run(
+                connection,
+                "SELECT creditBalance FROM marketplaceusers WHERE id = ?",
+                [userId],
+            );
+            if (creditRows && creditRows.length > 0) {
+                newCreditBalance = parseFloat(creditRows[0].creditBalance || 0);
             }
+        }
 
-            const order = rows[0];
-            const currentStatus = order.status ? order.status.trim().toLowerCase() : "";
-            if (currentStatus === "cancelled") {
-                return reject(new Error("Order is already cancelled"));
-            }
-            if (currentStatus === "delivered" || currentStatus === "picked up") {
-                return reject(new Error("Completed order cannot be cancelled"));
-            }
+        // 5. Notifications (failures are logged but don't block the cancel)
+        const invNoDisplay = invNo || `ORD-${actualOrderId}`;
+        const notifMsg = `Your order #${invNoDisplay} has been cancelled successfully.`;
 
-            const pOrderId = order.processOrderId;
-            const pMethod = (order.paymentMethod || "").trim().toLowerCase();
-            const rawAmount = parseFloat(order.amount) || 0;
-            const rawCreditPaid = parseFloat(order.creditPaid) || 0;
-            const rawMoneyPaid = parseFloat(order.moneyPaid) || 0;
-            const isPaid = parseInt(order.isPaid, 10) === 1;
+        try {
+            await run(
+                connection,
+                `INSERT INTO ordernotfication (orderId, Title, message, isRead, createdAt)
+                 VALUES (?, 'Order Cancelled', ?, 0, NOW())`,
+                [pOrderId, notifMsg],
+            );
+        } catch (notifErr) {
+            console.error("Error inserting ordernotfication on cancel:", notifErr);
+        }
 
-            // Refundable credit amount
-            let refundCreditAmount = 0;
-            if (pMethod === "card" || pMethod === "payhere" || (isPaid && pMethod !== "cash")) {
-                // Card / online: full amount refunded as credit
-                refundCreditAmount = rawAmount > 0 ? rawAmount : rawMoneyPaid + rawCreditPaid;
-            } else if (pMethod === "credit") {
-                // 100% paid by credit balance
-                refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : rawAmount;
-            } else {
-                // Cash: refund only credit used at checkout
-                refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : 0;
-            }
+        try {
+            await run(
+                connection,
+                `INSERT INTO dashnotification (orderId, title, readStatus, createdAt)
+                 VALUES (?, 'Order is Cancelled', 0, NOW())`,
+                [pOrderId],
+            );
+        } catch (dashErr) {
+            console.error("Error inserting dashnotification on cancel:", dashErr);
+        }
 
-            db.collectionofficer.getConnection(async (connErr, connection) => {
-                if (connErr) return reject(connErr);
+        await commit(connection);
 
-                try {
-                    await new Promise((res, rej) =>
-                        connection.beginTransaction((e) => (e ? rej(e) : res())),
-                    );
-
-                    // 1. Mark processorders as Cancelled
-                    await new Promise((res, rej) => {
-                        connection.query(
-                            "UPDATE processorders SET status = 'Cancelled' WHERE id = ?",
-                            [pOrderId],
-                            (e, r) => (e ? rej(e) : res(r)),
-                        );
-                    });
-
-                    // 2. Refund to marketplaceusers.creditBalance
-                    let newCreditBalance = null;
-                    if (refundCreditAmount > 0) {
-                        await new Promise((res, rej) => {
-                            connection.query(
-                                "UPDATE marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?",
-                                [refundCreditAmount, userId],
-                                (e, r) => (e ? rej(e) : res(r)),
-                            );
-                        });
-
-                        const creditRows = await new Promise((res, rej) => {
-                            connection.query(
-                                "SELECT creditBalance FROM marketplaceusers WHERE id = ?",
-                                [userId],
-                                (e, r) => (e ? rej(e) : res(r)),
-                            );
-                        });
-                        if (creditRows && creditRows.length > 0) {
-                            newCreditBalance = parseFloat(creditRows[0].creditBalance || 0);
-                        }
-                    }
-
-                    // 3. Notifications (ordernotfication + dashnotification)
-                    const invNoDisplay = order.invNo || `ORD-${order.actualOrderId}`;
-                    const notifMsg = `Your order #${invNoDisplay} has been cancelled successfully.`;
-
-                    await new Promise((res) => {
-                        connection.query(
-                            `INSERT INTO ordernotfication (orderId, Title, message, isRead, createdAt)
-                             VALUES (?, 'Order Cancelled', ?, 0, NOW())`,
-                            [pOrderId, notifMsg],
-                            (notifErr) => {
-                                if (notifErr)
-                                    console.error("Error inserting ordernotfication on cancel:", notifErr);
-                                res();
-                            },
-                        );
-                    });
-
-                    await new Promise((res) => {
-                        connection.query(
-                            `INSERT INTO dashnotification (orderId, title, readStatus, createdAt)
-                             VALUES (?, 'Order is Cancelled', 0, NOW())`,
-                            [pOrderId],
-                            (dashErr) => {
-                                if (dashErr)
-                                    console.error("Error inserting dashnotification on cancel:", dashErr);
-                                res();
-                            },
-                        );
-                    });
-
-                    await new Promise((res, rej) => connection.commit((e) => (e ? rej(e) : res())));
-                    connection.release();
-
-                    resolve({
-                        success: true,
-                        orderId: order.actualOrderId,
-                        processOrderId: pOrderId,
-                        invoiceNo: order.invNo,
-                        status: "Cancelled",
-                        refundCreditAmount,
-                        newCreditBalance,
-                        message:
-                            refundCreditAmount > 0
-                                ? `Order cancelled. Rs. ${refundCreditAmount.toFixed(2)} added to your credit balance.`
-                                : "Order cancelled successfully.",
-                    });
-                } catch (txErr) {
-                    connection.rollback(() => connection.release());
-                    reject(txErr);
-                }
-            });
-        });
-    });
+        return {
+            success: true,
+            orderId: actualOrderId,
+            processOrderId: pOrderId,
+            invoiceNo: invNo,
+            status: "Cancelled",
+            refundCreditAmount,
+            newCreditBalance,
+            message:
+                refundCreditAmount > 0
+                    ? `Order cancelled. Rs. ${refundCreditAmount.toFixed(2)} added to your credit balance.`
+                    : "Order cancelled successfully.",
+        };
+    } catch (err) {
+        await rollback(connection);
+        throw err;
+    } finally {
+        connection.release();
+    }
 };
