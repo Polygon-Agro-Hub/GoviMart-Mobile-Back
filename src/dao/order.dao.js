@@ -1694,8 +1694,9 @@ exports.recalculateAndPersistCreditLimitDao = async (userId) => {
         const currentTierValue = parseFloat(userRows[0].creditLimitBonusTier || 0);
         const currentTierCount = Math.floor(currentTierValue / TIER_THRESHOLD);
 
+        // CHANGED: use processorders.amount (not orders.fullTotal)
         const [rows] = await connection.query(
-            `SELECT COALESCE(SUM(o.fullTotal), 0) AS deliveredTotal
+            `SELECT COALESCE(SUM(p.amount), 0) AS deliveredTotal
              FROM processorders p
              INNER JOIN orders o ON o.id = p.orderId
              WHERE o.userId = ?
