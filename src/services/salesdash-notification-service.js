@@ -1,4 +1,3 @@
-const axios = require("axios");
 const { SALESDASH_TRIGGER_SECRET } = require("../constants/notification-secrets");
 
 /**
@@ -92,9 +91,11 @@ const triggerSalesDashNotification = async ({
       skipDbInsert,
     };
 
-    const response = await axios.post(url, payload, {
-      timeout: 5000,
+    const response = await fetch(url, {
+      method: "POST",
       headers: getServiceHeaders(),
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(5000),
     });
 
     console.log(
@@ -104,14 +105,14 @@ const triggerSalesDashNotification = async ({
   } catch (err) {
     console.warn(
       `⚠️ [SalesDash Socket] Could not dispatch notification to Sales Dash API (${url}) for order ${orderId}:`,
-      err.response?.data?.message || err.message
+      err.message
     );
     return false;
   }
 };
 
 /**
- * Order cancelled from Polygon customer app
+ * Order cancelled from Polygon customer app -> Notify Sales Agent on Sales Dash
  */
 const notifySalesDashOrderCancelled = async (processOrderId, invNo) => {
   return triggerSalesDashNotification({
@@ -124,8 +125,29 @@ const notifySalesDashOrderCancelled = async (processOrderId, invNo) => {
   });
 };
 
+/**
+ * Order cancelled -> Notify Customer on Polygon Mobile App (Background Push + Socket.IO)
+ */
+const notifyPolygonOrderCancelled = async (processOrderId, invNo, userId = null) => {
+  const polygonService = require("./polygon-notification-service");
+  return polygonService.notifyPolygonOrderCancelled(processOrderId, invNo, userId);
+};
+
+const triggerPolygonNotification = async (params) => {
+  const polygonService = require("./polygon-notification-service");
+  return polygonService.triggerPolygonNotification(params);
+};
+
+const resolveCustomerUserId = async (orderId) => {
+  const polygonService = require("./polygon-notification-service");
+  return polygonService.resolveCustomerUserId(orderId);
+};
+
 module.exports = {
   triggerSalesDashNotification,
   notifySalesDashOrderCancelled,
   resolveSalesAgentId,
+  triggerPolygonNotification,
+  notifyPolygonOrderCancelled,
+  resolveCustomerUserId,
 };

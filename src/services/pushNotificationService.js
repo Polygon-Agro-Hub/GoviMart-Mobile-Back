@@ -142,8 +142,22 @@ async function sendPushToUser(userId, { title, body, data = {} }) {
               }),
             });
             const expoResult = await expoResponse.json();
-            console.log(`📱 [PushService] Expo Push response for token ${pushToken.slice(0, 15)}...:`, expoResult);
-            results.push({ token: pushToken, success: true, type: "expo" });
+            if (expoResult?.data?.status === "error") {
+              console.warn(
+                `⚠️ [PushService] Expo Push warning for token ${pushToken.slice(0, 15)}...:`,
+                expoResult?.data?.message || expoResult?.data?.details?.error
+              );
+              if (
+                expoResult?.data?.details?.error === "DeviceNotRegistered" ||
+                expoResult?.data?.details?.error === "InvalidCredentials"
+              ) {
+                removeToken(pushToken);
+              }
+              results.push({ token: pushToken, success: false, error: expoResult?.data?.message });
+            } else {
+              console.log(`📱 [PushService] Expo Push response for token ${pushToken.slice(0, 15)}...:`, expoResult);
+              results.push({ token: pushToken, success: true, type: "expo" });
+            }
           } catch (expoErr) {
             console.error("❌ [PushService] Expo push error:", expoErr.message);
             results.push({ token: pushToken, success: false, error: expoErr.message });
@@ -182,7 +196,9 @@ async function sendPushToUser(userId, { title, body, data = {} }) {
             console.error("❌ [PushService] FCM send error:", fcmErr.message);
             if (
               fcmErr.code === "messaging/registration-token-not-registered" ||
-              fcmErr.code === "messaging/invalid-registration-token"
+              fcmErr.code === "messaging/invalid-registration-token" ||
+              fcmErr.code === "messaging/mismatched-credential" ||
+              fcmErr.message?.includes("SenderId mismatch")
             ) {
               removeToken(pushToken);
             }

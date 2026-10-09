@@ -1567,21 +1567,51 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
         }
 
         try {
-            await run(
+            const updateDashResult = await run(
                 connection,
-                `INSERT INTO dashnotification (orderId, title, readStatus, createdAt)
-                 VALUES (?, 'Order is Cancelled', 0, NOW())`,
+                `UPDATE dashnotification
+                 SET title = 'Order is Cancelled', readStatus = 0, createdAt = NOW()
+                 WHERE orderId = ?`,
                 [pOrderId],
             );
+
+            if (!updateDashResult || updateDashResult.affectedRows === 0) {
+                await run(
+                    connection,
+                    `INSERT INTO dashnotification (orderId, title, readStatus, createdAt)
+                     VALUES (?, 'Order is Cancelled', 0, NOW())`,
+                    [pOrderId],
+                );
+            }
         } catch (dashErr) {
-            console.error("Error inserting dashnotification on cancel:", dashErr);
+            console.error("Error updating dashnotification on cancel:", dashErr);
         }
 
         await commit(connection);
 
         // Trigger Sales Dash real-time notification to Sales Agent
-        const salesdashNotificationService = require("../services/salesdash-notification-service");
-        salesdashNotificationService.notifySalesDashOrderCancelled(pOrderId, invNoDisplay).catch(() => {});
+        try {
+            const salesdashNotificationService = require("../services/salesdash-notification-service");
+            if (typeof salesdashNotificationService?.notifySalesDashOrderCancelled === "function") {
+                salesdashNotificationService.notifySalesDashOrderCancelled(pOrderId, invNoDisplay).catch((err) => {
+                    console.warn("⚠️ [CancelOrder] SalesDash notification error:", err?.message);
+                });
+            }
+        } catch (sdErr) {
+            console.warn("⚠️ [CancelOrder] SalesDash notification setup error:", sdErr?.message);
+        }
+
+        // Trigger Polygon Customer App background Push Notification (Expo/FCM) & Socket.IO
+        try {
+            const polygonNotificationService = require("../services/polygon-notification-service");
+            if (typeof polygonNotificationService?.notifyPolygonOrderCancelled === "function") {
+                polygonNotificationService.notifyPolygonOrderCancelled(pOrderId, invNoDisplay, userId).catch((err) => {
+                    console.warn("⚠️ [CancelOrder] Polygon customer background notification error:", err?.message);
+                });
+            }
+        } catch (polyErr) {
+            console.warn("⚠️ [CancelOrder] Polygon customer notification setup error:", polyErr?.message);
+        }
 
         return {
             success: true,
