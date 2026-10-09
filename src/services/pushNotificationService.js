@@ -66,6 +66,16 @@ async function saveUserPushToken(userId, pushToken, arg3 = "android", arg4) {
         return reject(err);
       }
       console.log(`✅ [PushService] Push token saved for marketplaceUserId: ${userId} (${deviceType})`);
+
+      // Clean up older stale tokens for this user on this deviceType to prevent duplicate notifications
+      const cleanupSql = `
+        DELETE FROM notificationpushtoken 
+        WHERE marketplaceUserId = ? AND deviceType = ? AND pushToken != ?
+      `;
+      collectionofficer.query(cleanupSql, [userId, deviceType, pushToken], (cleanErr) => {
+        if (cleanErr) console.warn("⚠️ [PushService] Warning cleaning older tokens:", cleanErr.message);
+      });
+
       resolve(result);
     });
   });
@@ -89,9 +99,10 @@ async function sendPushToUser(userId, { title, body, data = {} }) {
   if (!userId) return;
 
   const getTokensSql = `
-    SELECT pushToken, deviceType 
+    SELECT pushToken, deviceType, updatedAt 
     FROM notificationpushtoken 
     WHERE marketplaceUserId = ?
+    ORDER BY updatedAt DESC, id DESC
   `;
 
   return new Promise((resolve) => {
@@ -106,17 +117,45 @@ async function sendPushToUser(userId, { title, body, data = {} }) {
         return resolve({ success: true, count: 0 });
       }
 
-      console.log(`📢 [PushService] Found ${rows.length} token(s) for userId: ${userId}. Sending push...`);
-
       const fbMessaging = initFirebase();
       const stringifiedData = {};
       for (const [key, value] of Object.entries(data)) {
         stringifiedData[key] = typeof value === "string" ? value : JSON.stringify(value);
       }
 
-      const results = [];
+      // De-duplicate tokens:
+      // 1. If native FCM token exists and Firebase messaging is initialized, skip Expo tokens to prevent duplicate alerts to the same phone.
+      // 2. Per deviceType, send only to the single latest active token.
+      const hasNativeFcm = rows.some(
+        (r) => !r.pushToken.startsWith("ExponentPushToken") && !r.pushToken.startsWith("ExpoPushToken")
+      );
+
+      const targetTokens = [];
+      const seenPlatforms = new Set();
 
       for (const row of rows) {
+        const { pushToken, deviceType } = row;
+        const isExpo = pushToken.startsWith("ExponentPushToken") || pushToken.startsWith("ExpoPushToken");
+
+        if (isExpo && hasNativeFcm && fbMessaging) {
+          console.log(`ℹ️ [PushService] Skipping duplicate Expo token for user ${userId} since native FCM token is active`);
+          continue;
+        }
+
+        const platformKey = `${deviceType}_${isExpo ? "expo" : "native"}`;
+        if (seenPlatforms.has(platformKey)) {
+          console.log(`ℹ️ [PushService] Skipping older token on platform ${platformKey} for user ${userId}`);
+          continue;
+        }
+        seenPlatforms.add(platformKey);
+        targetTokens.push(row);
+      }
+
+      console.log(`📢 [PushService] Filtered down to ${targetTokens.length} active unique token(s) for userId: ${userId}. Sending push...`);
+
+      const results = [];
+
+      for (const row of targetTokens) {
         const { pushToken, deviceType } = row;
         const isExpo = pushToken.startsWith("ExponentPushToken") || pushToken.startsWith("ExpoPushToken");
 
