@@ -24,4 +24,11 @@ router.post(
   paymentEp.handlePayHereNotify
 );
 
+// 5. Saved Cards & 1-Click Payments (Local File Storage - Real Data)
+router.get("/cards", authMiddleware, paymentEp.getSavedCards);
+router.post("/cards", authMiddleware, paymentEp.saveCardLocally);
+router.post("/sync-checkout", authMiddleware, paymentEp.syncCheckout);
+router.delete("/cards/:cardId", authMiddleware, paymentEp.deleteSavedCard);
+router.post("/charge-saved-card", authMiddleware, paymentEp.chargeSavedCard);
+
 module.exports = router;

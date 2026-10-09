@@ -44,6 +44,15 @@ class PaymentStrategy {
   parseWebhookEvent(payload) {
     throw new Error("Method 'parseWebhookEvent()' must be implemented.");
   }
+
+  /**
+   * Deletes a card token from the gateway vault.
+   * @param {string} cardId
+   * @returns {Promise<boolean>}
+   */
+  async deleteSavedCard(cardId) {
+    return true;
+  }
 }
 
 module.exports = PaymentStrategy;

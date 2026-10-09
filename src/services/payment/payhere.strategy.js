@@ -78,7 +78,7 @@ class PayHereStrategy extends PaymentStrategy {
       first_name: customer.firstName || "Customer",
       last_name: customer.lastName || "User",
       email: customer.email || "customer@govimart.lk",
-      phone: customer.phone || "0771234567",
+      phone: customer.phone || "",
       address: customer.address || "Colombo",
       city: customer.city || "Colombo",
       country: "Sri Lanka",
