@@ -75,7 +75,8 @@ const forgotPasswordLockouts = new Map(); // key -> lockoutUntil timestamp (ms)
 const forgotPasswordAttempts = new Map(); // primaryKey -> { count, firstAttemptAt }
 const forgotPasswordRequestAttempts = new Map(); // key -> array of request timestamps
 
-const FORGOT_PWD_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+const FORGOT_PWD_REQUEST_WINDOW_MS = 60 * 60 * 1000; // 60 minutes window to track 5 requests
+const FORGOT_PWD_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes lockout duration
 const MAX_FORGOT_PWD_ATTEMPTS = 5;
 
 const getForgotPwdLockoutKeys = (type, email, phoneCode, phoneNumber, userId) => {
@@ -108,7 +109,9 @@ const checkForgotPwdLockout = (keys) => {
         const remainingSec = Math.ceil((lockoutUntil - now) / 1000);
         return { locked: true, remainingSec, lockoutUntil };
       } else {
-        forgotPasswordLockouts.delete(key);
+        // Lockout expired - clear lockout and reset attempts so user gets a fresh chance
+        clearForgotPwdLockout(keys);
+        return { locked: false, remainingSec: 0 };
       }
     }
   }
@@ -1138,14 +1141,14 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
       });
     }
 
-    // Rate limit request frequency (Max 5 OTP requests / 15 min)
+    // Rate limit request frequency (Max 5 OTP requests / 60 min)
     const primaryKey = keys[0] || `${type}:${email || phoneNumber}`;
     const now = Date.now();
     const requestTimestamps = (forgotPasswordRequestAttempts.get(primaryKey) || [])
-      .filter((ts) => now - ts < FORGOT_PWD_LOCKOUT_MS);
+      .filter((ts) => now - ts < FORGOT_PWD_REQUEST_WINDOW_MS);
 
     if (requestTimestamps.length >= MAX_FORGOT_PWD_ATTEMPTS) {
-      setForgotPwdLockout(keys);
+      setForgotPwdLockout(keys, FORGOT_PWD_LOCKOUT_MS);
       return res.status(429).json({
         status: false,
         isRateLimited: true,
@@ -1260,10 +1263,10 @@ exports.forgotPasswordResendOtp = asyncHandler(async (req, res) => {
     const primaryKey = keys[0] || `${type}:${email || phoneNumber}`;
     const now = Date.now();
     const requestTimestamps = (forgotPasswordRequestAttempts.get(primaryKey) || [])
-      .filter((ts) => now - ts < FORGOT_PWD_LOCKOUT_MS);
+      .filter((ts) => now - ts < FORGOT_PWD_REQUEST_WINDOW_MS);
 
     if (requestTimestamps.length >= MAX_FORGOT_PWD_ATTEMPTS) {
-      setForgotPwdLockout(keys);
+      setForgotPwdLockout(keys, FORGOT_PWD_LOCKOUT_MS);
       return res.status(429).json({
         status: false,
         isRateLimited: true,
@@ -1390,7 +1393,7 @@ exports.forgotPasswordVerifyOtp = asyncHandler(async (req, res) => {
       const now = Date.now();
       let attemptData = forgotPasswordAttempts.get(primaryKey);
       if (attemptData && typeof attemptData === "object") {
-        if (now - attemptData.firstAttemptAt > FORGOT_PWD_LOCKOUT_MS) {
+        if (now - attemptData.firstAttemptAt > FORGOT_PWD_REQUEST_WINDOW_MS) {
           attemptData = null;
         }
       } else if (typeof attemptData === "number") {
@@ -1406,7 +1409,7 @@ exports.forgotPasswordVerifyOtp = asyncHandler(async (req, res) => {
       if (currentAttempts >= MAX_FORGOT_PWD_ATTEMPTS) {
         forgotPasswordAttempts.delete(primaryKey);
         await userDao.deleteOtpDao(referenceId);
-        setForgotPwdLockout(keys);
+        setForgotPwdLockout(keys, FORGOT_PWD_LOCKOUT_MS);
 
         return res.status(429).json({
           status: false,
