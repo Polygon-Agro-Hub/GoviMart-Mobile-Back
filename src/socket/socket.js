@@ -163,45 +163,18 @@ const emitUnreadCountToUser = (userId, unreadCount) => {
   return true;
 };
 
-/**
- * Broadcasts real-time packing target slots and accepted orders count to all connected clients.
- * Called whenever an order is created, cancelled, or modified (from GoviMart, Sales Dash, or DB watcher).
- */
-const emitPackingSlotsUpdate = async (scheduleDate = null) => {
-  if (!io) {
-    console.warn("[Socket] IO not initialized, cannot emit packing slots update");
-    return false;
-  }
-
-  try {
-    const packageReviewDao = require("../dao/package-review.dao");
-    const slotData = await packageReviewDao.getPackingSlotAvailabilityDao(scheduleDate);
-
-    io.emit("packing_slots_updated", slotData);
-    io.emit("order_count_updated", slotData);
-    console.log(
-      `📦 [Socket] Broadcasted packing_slots_updated: Date=${slotData.scheduleDate}, Accepted=${slotData.acceptedOrdersCount}, Available=${slotData.availableSlots}, Limit=${slotData.targetLimit}`
-    );
-    return true;
-  } catch (err) {
-    console.error("[Socket] Failed to emit packing slots update:", err);
-    return false;
-  }
-};
-
 let dbWatcherInterval = null;
 let lastHashes = {
   itemHash: null,
   pkgHash: null,
   pkgDetailHash: null,
-  processOrderHash: null,
 };
 
 /**
  * Periodically polls a fast (<5ms) checksum query to detect DB changes
- * made by external tools/admin panels/Sales Dash and immediately notifies mobile apps via Socket.IO.
+ * made by external tools/admin panels and immediately notifies mobile apps via Socket.IO.
  */
-const startDbChangeWatcher = (pollIntervalMs = 10000) => {
+const startDbChangeWatcher = (pollIntervalMs = 45000) => {
   if (dbWatcherInterval) return;
 
   const db = require("../startup/database");
@@ -209,8 +182,7 @@ const startDbChangeWatcher = (pollIntervalMs = 10000) => {
     SELECT 
       (SELECT COALESCE(BIT_XOR(CRC32(CONCAT_WS(':', id, isEnable, displayName, category, normalPrice, discountedPrice))), 0) FROM marketplaceitems) as itemHash,
       (SELECT COALESCE(BIT_XOR(CRC32(CONCAT_WS(':', id, displayName, status, isValid, productPrice, packingFee, serviceFee))), 0) FROM marketplacepackages) as pkgHash,
-      (SELECT COALESCE(BIT_XOR(CRC32(CONCAT_WS(':', id, packageId, qty, productTypeId))), 0) FROM packagedetails) as pkgDetailHash,
-      (SELECT COALESCE(BIT_XOR(CRC32(CONCAT_WS(':', id, status, DATE(sheduleDate)))), 0) FROM processorders WHERE (status IS NULL OR status NOT IN ('Cancelled', 'Return', 'Return Received'))) as processOrderHash
+      (SELECT COALESCE(BIT_XOR(CRC32(CONCAT_WS(':', id, packageId, qty, productTypeId))), 0) FROM packagedetails) as pkgDetailHash
   `;
 
   let isChecking = false;
@@ -242,7 +214,6 @@ const startDbChangeWatcher = (pollIntervalMs = 10000) => {
           itemHash: String(current.itemHash),
           pkgHash: String(current.pkgHash),
           pkgDetailHash: String(current.pkgDetailHash),
-          processOrderHash: String(current.processOrderHash),
         };
         return;
       }
@@ -264,13 +235,6 @@ const startDbChangeWatcher = (pollIntervalMs = 10000) => {
         lastHashes.pkgDetailHash = String(current.pkgDetailHash);
         emitCatalogUpdate({ type: "package", source: "db_change" });
       }
-
-      // Check process orders changes (new order placed, status changed, date changed, cancelled)
-      if (String(current.processOrderHash) !== lastHashes.processOrderHash) {
-        console.log("⚡ [DB Watcher] Process order change detected in DB -> emitting packing_slots_updated");
-        lastHashes.processOrderHash = String(current.processOrderHash);
-        emitPackingSlotsUpdate();
-      }
     });
   }, pollIntervalMs);
 
@@ -287,6 +251,5 @@ module.exports = {
   emitCatalogUpdate,
   emitProductUpdate: emitCatalogUpdate,
   emitPackageUpdate: emitCatalogUpdate,
-  emitPackingSlotsUpdate,
   startDbChangeWatcher,
 };

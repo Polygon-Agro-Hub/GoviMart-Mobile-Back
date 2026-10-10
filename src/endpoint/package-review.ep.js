@@ -252,12 +252,6 @@ exports.cancelPackageOrder = asyncHandler(async (req, res) => {
             userId,
         });
 
-        // Broadcast real-time slot update since slot is now freed
-        try {
-            const { emitPackingSlotsUpdate } = require("../socket/socket");
-            emitPackingSlotsUpdate().catch(() => {});
-        } catch (_) {}
-
         return res.status(200).json({
             status: true,
             message: result.message,
@@ -270,35 +264,4 @@ exports.cancelPackageOrder = asyncHandler(async (req, res) => {
             message: error.message || "Failed to cancel order",
         });
     }
-});
-
-/**
- * POST /api/order/package/sync-slots
- * Webhook / Internal endpoint called by Sales Dash API or external microservices
- * when an order is created or cancelled, to trigger real-time packing slot broadcast via Socket.IO.
- */
-exports.syncPackingSlots = asyncHandler(async (req, res) => {
-    const { POLYGON_TRIGGER_SECRET } = require("../constants/notification-secrets");
-    const serviceToken =
-        req.headers["x-service-token"] ||
-        req.headers["authorization"]?.replace(/^Bearer\s+/i, "") ||
-        req.body?.serviceToken;
-
-    if (POLYGON_TRIGGER_SECRET && serviceToken && serviceToken !== POLYGON_TRIGGER_SECRET) {
-        return res.status(401).json({
-            status: false,
-            message: "Unauthorized: Invalid service token",
-        });
-    }
-
-    const { scheduleDate } = req.body || {};
-    const { emitPackingSlotsUpdate } = require("../socket/socket");
-
-    await emitPackingSlotsUpdate(scheduleDate);
-
-    return res.status(200).json({
-        status: true,
-        message: "Packing slots synced and broadcasted successfully",
-        data: { scheduleDate },
-    });
 });

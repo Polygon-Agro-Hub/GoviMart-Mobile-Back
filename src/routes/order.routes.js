@@ -11,7 +11,6 @@ router.post("/package/replace-item", authMiddleware, packageReviewEp.replacePack
 router.post("/package/reset-item", authMiddleware, packageReviewEp.resetPackageItem);
 router.post("/package/confirm-review", authMiddleware, packageReviewEp.confirmPackageReview);
 router.post("/package/cancel-order", authMiddleware, packageReviewEp.cancelPackageOrder);
-router.post("/package/sync-slots", packageReviewEp.syncPackingSlots);
 
 router.get("/order-history", authMiddleware, orderEp.getRetailOrderHistory);
 router.get("/pickup-centers", authMiddleware, orderEp.getPickupCenters);

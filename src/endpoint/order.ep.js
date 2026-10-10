@@ -679,18 +679,6 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         console.error("[createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
                     });
 
-                    // ── Broadcast packing slots update via Socket.IO ──────
-                    try {
-                        const { emitPackingSlotsUpdate } = require("../socket/socket");
-                        createdProcessOrders.forEach((proc) => {
-                            if (proc.sheduleDate) {
-                                emitPackingSlotsUpdate(proc.sheduleDate).catch(() => {});
-                            }
-                        });
-                    } catch (slotBroadcastErr) {
-                        console.warn("[createOrder] Packing slot broadcast error:", slotBroadcastErr.message);
-                    }
-
                     return safeRespond(201, {
                         status: true,
                         message: "Order created successfully",
