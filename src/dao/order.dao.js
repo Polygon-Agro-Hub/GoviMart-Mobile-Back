@@ -371,20 +371,29 @@ exports.createProcessOrderWithTransactionDao = (
                             let finalMoneyPaid = 0; // only set for full card-only payment
                             let finalCreditPaid = rawCreditPaid;
 
-                            if (
-                                normalized === "card" ||
-                                normalized === "payhere" ||
-                                normalized === "credit" ||
-                                (rawCreditPaid > 0 &&
-                                    rawAmount > 0 &&
-                                    rawCreditPaid >= rawAmount)
-                            ) {
-                                // Card payment (with or without credit balance, or 100% credit balance)
+                            const is100PercentCredit = rawCreditPaid > 0 && rawAmount > 0 && rawCreditPaid >= rawAmount;
+                            const isCardMethod = normalized === "card" || normalized === "payhere" || normalized === "credit";
+
+                            if (is100PercentCredit) {
                                 finalMethod = "Card";
                                 finalIsPaid = 1;
-                                finalAmount = rawAmount; // grandTotal
-                                finalCreditPaid = rawCreditPaid; // credit used (may be 0)
-                                finalMoneyPaid = Math.max(0, rawAmount - rawCreditPaid); // grandTotal - creditUsed (0 if 100% credit)
+                                finalAmount = rawAmount;
+                                finalCreditPaid = rawCreditPaid;
+                                finalMoneyPaid = 0;
+                            } else if (isCardMethod) {
+                                finalMethod = "Card";
+                                if (Number(isPaid) === 1 && rawMoneyPaid > 0) {
+                                    finalIsPaid = 1;
+                                    finalAmount = rawAmount;
+                                    finalCreditPaid = rawCreditPaid;
+                                    finalMoneyPaid = rawMoneyPaid;
+                                } else {
+                                    // Not earliest date / payment postponed to delivery date
+                                    finalIsPaid = 0;
+                                    finalAmount = 0.0;
+                                    finalCreditPaid = rawCreditPaid;
+                                    finalMoneyPaid = 0.0;
+                                }
                             } else {
                                 // Cash (with or without partial credit)
                                 finalMethod = "Cash";

@@ -7,12 +7,7 @@ const DEFAULT_PACKAGES_CACHE_KEY = "govimart_active_packages";
  * Retrieve cached packages if available for default list.
  */
 function getCachedPackages(search) {
-  if (!search || search.trim() === "") {
-    const data = cache.get(DEFAULT_PACKAGES_CACHE_KEY);
-    if (Array.isArray(data) && data.length > 0) {
-      return data;
-    }
-  }
+  // Always return null to fetch fresh from DB
   return null;
 }
 

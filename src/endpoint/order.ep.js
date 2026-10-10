@@ -616,20 +616,22 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     }
 
                     // Create an individual processorders row for each scheduled date (e.g. 8 rows for 4 weeks twice a week)
+                    const clientIsPaid = Number(req.body.isPaid) === 1 ? 1 : 0;
+
                     for (let i = 0; i < targetDates.length; i++) {
                         const sDate = targetDates[i];
                         const isFirstOrder = i === 0;
 
                         // Only the 1st order collects the payment today if paying up front; subsequent orders are pending
                         const rowCreditPaid = isFirstOrder ? requestedCredit : 0;
-                        const rowMoneyPaid = isFirstOrder ? Math.max(0, calculatedGrandTotal - requestedCredit) : 0;
-                        const rowAmount = isFirstOrder ? calculatedGrandTotal : normalGrandTotal;
+                        const rowMoneyPaid = (isFirstOrder && clientIsPaid === 1) ? Math.max(0, calculatedGrandTotal - requestedCredit) : 0;
+                        const rowAmount = (isFirstOrder && clientIsPaid === 1) ? calculatedGrandTotal : 0;
                         const rowFinancials = isFirstOrder ? firstOrderFinancials : normalOrderFinancials;
 
                         const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
                             orderId,
                             paymentMethod: isFirstOrder ? paymentMethod : "Cash",
-                            isPaid: 0,
+                            isPaid: isFirstOrder ? clientIsPaid : 0,
                             amount: rowAmount,
                             creditPaid: rowCreditPaid,
                             moneyPaid: rowMoneyPaid,
@@ -657,13 +659,17 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         targetDate = parseScheduleDate(calculatedOrders[0]?.date || calculatedOrders[0]?.dateStr);
                     }
 
+                    const clientIsPaid = Number(req.body.isPaid) === 1 ? 1 : 0;
+                    const oneTimeMoneyPaid = clientIsPaid === 1 ? Math.max(0, calculatedGrandTotal - requestedCredit) : 0;
+                    const oneTimeAmount = clientIsPaid === 1 ? calculatedGrandTotal : 0;
+
                     const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
                         orderId,
                         paymentMethod,
-                        isPaid: 0,
-                        amount: calculatedGrandTotal,
+                        isPaid: clientIsPaid,
+                        amount: oneTimeAmount,
                         creditPaid: requestedCredit,
-                        moneyPaid: Math.max(0, calculatedGrandTotal - requestedCredit),
+                        moneyPaid: oneTimeMoneyPaid,
                         status: "Ordered",
                         sheduleDate: targetDate,
                         ...firstOrderFinancials,

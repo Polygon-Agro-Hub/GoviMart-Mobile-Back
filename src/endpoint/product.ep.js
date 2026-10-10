@@ -17,16 +17,6 @@ exports.getAllProduct = async (req, res) => {
   }
 
   try {
-    // Check in-memory package cache if no search filter
-    const cachedPackages = packageCache.getCachedPackages(search);
-    if (cachedPackages) {
-      return res.status(200).json({
-        status: true,
-        message: "Product found.",
-        product: cachedPackages,
-      });
-    }
-
     const productData = await ProductDao.getAllProductDao(search);
     if (productData.length === 0) {
       return res.json({
@@ -36,11 +26,6 @@ exports.getAllProduct = async (req, res) => {
           : "No product found",
         product: [],
       });
-    }
-
-    // Cache default package list in memory
-    if (!search || search.trim() === "") {
-      packageCache.setCachedPackages(productData);
     }
 
     res.status(200).json({
