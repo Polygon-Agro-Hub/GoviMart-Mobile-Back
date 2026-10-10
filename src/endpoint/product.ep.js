@@ -113,20 +113,26 @@ exports.getPackageDetails = async (req, res) => {
     // const packageIdNum = parseInt(packageId, 10);
     // console.log(packageIdNum);
 
-    const packageItemData = await ProductDao.getAllPackageItemsDao(packageId);
-    if (packageItemData.length === 0) {
+    const [packageItemData, packageInfo] = await Promise.all([
+      ProductDao.getAllPackageItemsDao(packageId),
+      ProductDao.getPackageDetailsByIdDao(packageId),
+    ]);
+
+    if ((!packageItemData || packageItemData.length === 0) && !packageInfo) {
       return res.json({
         status: false,
         message: "No package data found",
         product: [],
       });
     }
-    // console.log(packageItemData);
 
     res.status(200).json({
       status: true,
       message: "Product found.",
-      packageItems: packageItemData,
+      packageItems: packageItemData || [],
+      packageInfo: packageInfo || null,
+      packageType: packageInfo?.packageType || null,
+      endDate: packageInfo?.endDate || null,
     });
   } catch (err) {
     console.error("Error during get product:", err);

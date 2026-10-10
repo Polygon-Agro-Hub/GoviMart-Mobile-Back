@@ -126,7 +126,8 @@ exports.getProductsByCategoryDaoWholesale = (category, search) => {
 exports.getAllProductDao = (search) => {
   return new Promise((resolve, reject) => {
     let sql = `
-        SELECT mp.id, mp.displayName, mp.image, (mp.productPrice + mp.packingFee + mp.serviceFee) AS subTotal
+        SELECT mp.id, mp.displayName, mp.image, (mp.productPrice + mp.packingFee + mp.serviceFee) AS subTotal,
+               mp.packageType, DATE_FORMAT(mp.endDate, '%Y-%m-%d') AS endDate
         FROM marketplacepackages mp
         LEFT JOIN definepackage dp ON mp.id = dp.packageId
         WHERE mp.status = 'Enabled' 
@@ -141,7 +142,7 @@ exports.getAllProductDao = (search) => {
     }
 
     sql += ` 
-    GROUP BY mp.id, mp.displayName, mp.image
+    GROUP BY mp.id, mp.displayName, mp.image, mp.packageType, mp.endDate
     ORDER BY mp.displayName ASC`;
 
     db.collectionofficer.query(sql, params, (err, results) => {
@@ -223,6 +224,31 @@ exports.getAllPackageItemsDao = (packageId) => {
         reject(err);
       } else {
         resolve(results);
+      }
+    });
+  });
+};
+
+exports.getPackageDetailsByIdDao = (packageId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT
+        id,
+        displayName,
+        image,
+        description,
+        packageType,
+        DATE_FORMAT(startDate, '%Y-%m-%d') AS startDate,
+        DATE_FORMAT(endDate, '%Y-%m-%d') AS endDate,
+        (productPrice + packingFee + serviceFee) AS subTotal
+      FROM marketplacepackages
+      WHERE id = ?
+    `;
+    db.collectionofficer.query(sql, [packageId], (err, results) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(results[0] || null);
       }
     });
   });

@@ -170,10 +170,9 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
                 INSERT INTO orders (
                     userId, orderApp, delivaryMethod, centerId, buildingType,
                     title, fullName, phonecode1, phone1, phonecode2, phone2,
-                    isCoupon, couponType, couponValue, total, fullTotal, discount,
-                    deliveryCharge, sheduleType, validityPeriod, selectedDays, sheduleTime,
+                    sheduleType, validityPeriod, selectedDays, sheduleTime,
                     isPackage, isFinalizeImdt, latitude, longitude, assignCoMCenId
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             const values = [
                 userId,
@@ -187,13 +186,6 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
                 phone1,
                 phonecode2 || null,
                 phone2 || null,
-                isCoupon ? 1 : 0,
-                isCoupon ? couponType || null : null,
-                parseFloat(couponValue) || 0,
-                orderTotal,        // total = fullTotal + discount
-                parsedFullTotal,   // fullTotal
-                parsedDiscount,    // discount
-                parseFloat(deliveryCharge) || 0,
                 normalizedScheduleType,
                 parsedValidityPeriod,
                 parsedSelectedDays,
@@ -312,6 +304,13 @@ exports.createProcessOrderWithTransactionDao = (
             moneyPaid,
             status,
             sheduleDate,
+            isCoupon = 0,
+            couponType = null,
+            couponValue = 0.0,
+            total = null,
+            fullTotal = null,
+            discount = null,
+            deliveryCharge = null,
         } = processOrderData;
 
         const formatMethod = (m) => {
@@ -397,8 +396,9 @@ exports.createProcessOrderWithTransactionDao = (
                             const sql = `
                             INSERT INTO processorders (
                                 orderId, invNo, transactionId, paymentMethod,
-                                isPaid, amount, creditPaid, moneyPaid, status, reportStatus, qrCode, sheduleDate
-                            ) VALUES (?, @new_inv_no, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                isPaid, amount, creditPaid, moneyPaid, status, reportStatus, qrCode, sheduleDate,
+                                isCoupon, couponType, couponValue, total, fullTotal, discount, deliveryCharge
+                            ) VALUES (?, @new_inv_no, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         `;
                             const values = [
                                 orderId,
@@ -412,6 +412,13 @@ exports.createProcessOrderWithTransactionDao = (
                                 null,
                                 qrCodeUrl,
                                 sheduleDate ? new Date(sheduleDate) : null,
+                                isCoupon ? 1 : 0,
+                                isCoupon ? couponType || null : null,
+                                parseFloat(couponValue) || 0,
+                                total !== null ? parseFloat(total) : null,
+                                fullTotal !== null ? parseFloat(fullTotal) : null,
+                                discount !== null ? parseFloat(discount) : null,
+                                deliveryCharge !== null ? parseFloat(deliveryCharge) : null,
                             ];
 
                             connection.query(sql, values, (err3, insertResult) => {
@@ -664,8 +671,8 @@ exports.getRetailOrderHistoryDao = async (userId) => {
         o.createdAt AS createdAt,
         o.sheduleTime AS scheduleTime,
         o.delivaryMethod AS delivaryMethod,
-        o.discount AS orderDiscount,
-        o.fulltotal AS fullTotal,
+        COALESCE(po.discount, o.discount) AS orderDiscount,
+        COALESCE(po.fullTotal, o.fulltotal) AS fullTotal,
         po.invNo AS invoiceNo,
         po.status AS processStatus
       FROM orders o
@@ -1420,15 +1427,15 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                 o.id AS actualOrderId,
                 o.centerId,
                 o.delivaryMethod AS deliveryMethod,
-                o.discount AS orderDiscount,
+                COALESCE(po.discount, o.discount) AS orderDiscount,
                 o.createdAt AS invoiceDate,
                 po.sheduleDate AS scheduledDate,
                 o.buildingType,
-                o.fullTotal AS fullTotal,
-                o.isCoupon,
-                o.couponValue,
-                o.couponType,
-                o.deliveryCharge,
+                COALESCE(po.fullTotal, o.fullTotal) AS fullTotal,
+                COALESCE(po.isCoupon, o.isCoupon) AS isCoupon,
+                COALESCE(po.couponValue, o.couponValue) AS couponValue,
+                COALESCE(po.couponType, o.couponType) AS couponType,
+                COALESCE(po.deliveryCharge, o.deliveryCharge) AS deliveryCharge,
                 po.id AS processOrderId,
                 po.invNo AS invoiceNumber,
                 po.paymentMethod AS paymentMethod,
@@ -1485,7 +1492,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                 FROM orderadditionalitems oai
                 JOIN marketplaceitems mi ON oai.productId = mi.id
                 LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-                WHERE oai.orderId = ?
+                WHERE (oai.orderId = ? OR oai.proOrderId = ?)
             `;
 
                 const billingQuery = `
@@ -1522,7 +1529,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                     new Promise((res, rej) => {
                         db.collectionofficer.query(
                             additionalItemsQuery,
-                            [actualOrderId],
+                            [actualOrderId, processOrderId],
                             (e, r) => (e ? rej(e) : res(r || [])),
                         );
                     }),
