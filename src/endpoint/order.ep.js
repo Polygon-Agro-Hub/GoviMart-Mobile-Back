@@ -547,8 +547,8 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 let primaryInvNo = null;
                 const createdProcessOrders = [];
 
-                // Common financial fields to save in processorders
-                const processOrderFinancials = {
+                // Financial fields for 1st processorder (coupon applied if any)
+                const firstOrderFinancials = {
                     isCoupon: isCoupon ? 1 : 0,
                     couponType: isCoupon ? couponType || null : null,
                     couponValue: finalCouponValue,
@@ -556,6 +556,19 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     fullTotal: calculatedGrandTotal,
                     discount: effectiveProductDiscount,
                     deliveryCharge: finalDeliveryCharge,
+                };
+
+                // Normal financial fields for subsequent recurring processorders (orders 2..N: NO coupon applied)
+                const normalDeliveryCharge = isHomeDelivery ? (parseFloat(deliveryCharge) || 0) : 0;
+                const normalGrandTotal = Math.max(0, parseFloat((calculatedDiscountedItemsTotal + normalDeliveryCharge).toFixed(2)));
+                const normalOrderFinancials = {
+                    isCoupon: 0,
+                    couponType: null,
+                    couponValue: 0.0,
+                    total: parseFloat((normalGrandTotal + effectiveProductDiscount).toFixed(2)),
+                    fullTotal: normalGrandTotal,
+                    discount: effectiveProductDiscount,
+                    deliveryCharge: normalDeliveryCharge,
                 };
 
                 const isRecurring = normScheduleType === "Once a Week" || normScheduleType === "Twice a Week";
@@ -608,17 +621,19 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         // Only the 1st order collects the payment today if paying up front; subsequent orders are pending
                         const rowCreditPaid = isFirstOrder ? requestedCredit : 0;
                         const rowMoneyPaid = isFirstOrder ? Math.max(0, calculatedGrandTotal - requestedCredit) : 0;
+                        const rowAmount = isFirstOrder ? calculatedGrandTotal : normalGrandTotal;
+                        const rowFinancials = isFirstOrder ? firstOrderFinancials : normalOrderFinancials;
 
                         const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
                             orderId,
-                            paymentMethod,
+                            paymentMethod: isFirstOrder ? paymentMethod : "Cash",
                             isPaid: 0,
-                            amount: calculatedGrandTotal,
+                            amount: rowAmount,
                             creditPaid: rowCreditPaid,
                             moneyPaid: rowMoneyPaid,
                             status: "Ordered",
                             sheduleDate: sDate,
-                            ...processOrderFinancials,
+                            ...rowFinancials,
                         });
 
                         createdProcessOrders.push(proc);
@@ -649,7 +664,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         moneyPaid: Math.max(0, calculatedGrandTotal - requestedCredit),
                         status: "Ordered",
                         sheduleDate: targetDate,
-                        ...processOrderFinancials,
+                        ...firstOrderFinancials,
                     });
                     createdProcessOrders.push(proc);
                     primaryProcessOrderId = proc.insertId;
