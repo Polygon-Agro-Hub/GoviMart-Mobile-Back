@@ -682,7 +682,8 @@ exports.getRetailOrderHistoryDao = async (userId) => {
         COALESCE(po.discount, o.discount) AS orderDiscount,
         COALESCE(po.fullTotal, o.fulltotal) AS fullTotal,
         po.invNo AS invoiceNo,
-        po.status AS processStatus
+        po.status AS processStatus,
+        po.isFinalized
       FROM orders o
       LEFT JOIN (
         SELECT *
