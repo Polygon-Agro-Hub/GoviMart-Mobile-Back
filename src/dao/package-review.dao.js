@@ -1120,6 +1120,37 @@ exports.confirmPackageReviewDao = ({
                         }
                     }
 
+                    // 3c. Recalculate and update ALL existing orderadditionalitems rows for this order
+                    //     using today's marketplaceitems live prices (normalPrice and discountedPrice).
+                    const allAlaCarteRows = await q(
+                        `SELECT oai.id, oai.qty, oai.unit, mi.normalPrice AS perKgNormal, mi.discountedPrice AS perKgDiscounted
+                         FROM orderadditionalitems oai
+                         JOIN marketplaceitems mi ON oai.productId = mi.id
+                         WHERE oai.proOrderId = ? OR oai.proOrderId = ? OR oai.orderId = ? OR oai.orderId = ?`,
+                        [realProcessOrderId, realOrderId, realProcessOrderId, realOrderId],
+                    );
+                    for (const row of allAlaCarteRows) {
+                        const qty = parseFloat(row.qty) || 0;
+                        const unit = String(row.unit || "kg").toLowerCase() === "g" ? "g" : "kg";
+                        const perKgNormal = parseFloat(row.perKgNormal) || 0;
+                        const perKgDiscounted = parseFloat(row.perKgDiscounted) || 0;
+                        const perKgEffective = perKgDiscounted > 0 ? perKgDiscounted : perKgNormal;
+                        const kg = unit === "g" ? qty / 1000 : qty;
+
+                        if (perKgNormal > 0) {
+                            const normalPrice = round2(perKgNormal * kg);
+                            const price = round2(perKgEffective * kg);
+                            const discount = round2(Math.max(0, normalPrice - price));
+
+                            await q(
+                                `UPDATE orderadditionalitems
+                                 SET normalPrice = ?, price = ?, discount = ?
+                                 WHERE id = ?`,
+                                [normalPrice, price, discount, row.id],
+                            );
+                        }
+                    }
+
                     // 4. Lock all packages of this order
                     const dispatchRes = await q(
                         "UPDATE orderpackage SET packingStatus = 'Dispatch', isLock = 1 WHERE orderId = ? OR orderId = ?",
@@ -1602,4 +1633,209 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
     } finally {
         connection.release();
     }
+};
+
+/**
+ * Separate route function: confirm order with live marketplace prices.
+ * Recalculates and updates:
+ *   - orderadditionalitems (normalPrice, price, discount) using today's marketplaceitems prices
+ *   - processorders (fullTotal, total, discount, amount, moneyPaid if card)
+ *   - orders (fullTotal, total, discount)
+ *   - orderpackage (packingStatus = 'Dispatch', isLock = 1)
+ */
+exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newTotal = null }) => {
+    return new Promise((resolve, reject) => {
+        db.collectionofficer.getConnection((connErr, connection) => {
+            if (connErr) return reject(connErr);
+
+            const q = (sql, params = []) =>
+                new Promise((res, rej) =>
+                    connection.query(sql, params, (e, r) => (e ? rej(e) : res(r || []))),
+                );
+
+            const round2 = (n) => Number((Number(n) || 0).toFixed(2));
+
+            connection.beginTransaction(async (txErr) => {
+                if (txErr) {
+                    connection.release();
+                    return reject(txErr);
+                }
+
+                try {
+                    // 1. Resolve order and processorder
+                    const idSql = `
+                        SELECT
+                            po.id AS processOrderId,
+                            po.orderId AS actualOrderId,
+                            po.paymentMethod,
+                            po.isPaid,
+                            po.amount,
+                            po.moneyPaid,
+                            po.creditPaid,
+                            po.couponValue,
+                            po.isCoupon,
+                            o.userId,
+                            o.deliveryCharge,
+                            o.discount AS oldOrderDiscount,
+                            o.fullTotal AS oldOrderFullTotal
+                        FROM processorders po
+                        INNER JOIN orders o ON po.orderId = o.id
+                        WHERE (po.id = ? OR o.id = ?) AND o.userId = ?
+                        ORDER BY po.id DESC
+                        LIMIT 1
+                    `;
+                    const idRows = await q(idSql, [processOrderId || orderId, processOrderId || orderId, userId]);
+                    if (idRows.length === 0) {
+                        throw new Error("Order not found.");
+                    }
+                    const matchedOrder = idRows[0];
+                    const realProcessOrderId = matchedOrder.processOrderId;
+                    const realOrderId = matchedOrder.actualOrderId;
+                    const targetUserId = matchedOrder.userId || userId;
+
+                    // 2. Recalculate and update ALL existing orderadditionalitems rows for this order
+                    //    using today's marketplaceitems live prices (normalPrice and discountedPrice).
+                    const allAlaCarteRows = await q(
+                        `SELECT oai.id, oai.qty, oai.unit, mi.normalPrice AS perKgNormal, mi.discountedPrice AS perKgDiscounted
+                         FROM orderadditionalitems oai
+                         JOIN marketplaceitems mi ON oai.productId = mi.id
+                         WHERE oai.proOrderId = ? OR oai.proOrderId = ? OR oai.orderId = ? OR oai.orderId = ?`,
+                        [realProcessOrderId, realOrderId, realProcessOrderId, realOrderId],
+                    );
+
+                    let updatedAlaCartePriceTotal = 0;
+                    let updatedAlaCarteDiscountTotal = 0;
+
+                    for (const row of allAlaCarteRows) {
+                        const qty = parseFloat(row.qty) || 0;
+                        const unit = String(row.unit || "kg").toLowerCase() === "g" ? "g" : "kg";
+                        const perKgNormal = parseFloat(row.perKgNormal) || 0;
+                        const perKgDiscounted = parseFloat(row.perKgDiscounted) || 0;
+                        const perKgEffective = perKgDiscounted > 0 ? perKgDiscounted : perKgNormal;
+                        const kg = unit === "g" ? qty / 1000 : qty;
+
+                        if (perKgNormal > 0) {
+                            const normalPrice = round2(perKgNormal * kg);
+                            const price = round2(perKgEffective * kg);
+                            const discount = round2(Math.max(0, normalPrice - price));
+
+                            updatedAlaCartePriceTotal += price;
+                            updatedAlaCarteDiscountTotal += discount;
+
+                            await q(
+                                `UPDATE orderadditionalitems
+                                 SET normalPrice = ?, price = ?, discount = ?
+                                 WHERE id = ?`,
+                                [normalPrice, price, discount, row.id],
+                            );
+                        }
+                    }
+
+                    // 3. Lock all packages of this order
+                    await q(
+                        "UPDATE orderpackage SET packingStatus = 'Dispatch', isLock = 1 WHERE orderId = ? OR orderId = ?",
+                        [realProcessOrderId, realOrderId],
+                    );
+
+                    // 4. Calculate packages total
+                    const pkgRows = await q(
+                        `SELECT COALESCE(SUM((mp.productPrice + mp.packingFee + mp.serviceFee) * op.qty), 0) AS packageTotal
+                         FROM orderpackage op
+                         JOIN marketplacepackages mp ON op.packageId = mp.id
+                         WHERE op.orderId = ? OR op.orderId = ?`,
+                        [realProcessOrderId, realOrderId],
+                    );
+                    const packagesTotal = parseFloat(pkgRows[0]?.packageTotal) || 0;
+
+                    // 5. Calculate new fullTotal, discount, and total
+                    const couponValue = parseFloat(matchedOrder.couponValue) || 0;
+                    const deliveryCharge = parseFloat(matchedOrder.deliveryCharge) || 0;
+
+                    let finalFullTotal;
+                    if (newTotal != null && !isNaN(parseFloat(newTotal))) {
+                        finalFullTotal = round2(Math.max(0, parseFloat(newTotal) - couponValue));
+                    } else {
+                        finalFullTotal = round2(
+                            Math.max(0, packagesTotal + updatedAlaCartePriceTotal - couponValue + deliveryCharge),
+                        );
+                    }
+
+                    const finalDiscount = round2(updatedAlaCarteDiscountTotal);
+                    const finalTotal = round2(finalFullTotal + finalDiscount);
+
+                    // 6. Payment info updates
+                    const dbPaymentMethod = (matchedOrder.paymentMethod || "").trim().toLowerCase();
+                    const isDbPaid =
+                        matchedOrder.isPaid === 1 ||
+                        matchedOrder.isPaid === true ||
+                        String(matchedOrder.isPaid) === "1";
+                    const isCard =
+                        dbPaymentMethod.includes("card") ||
+                        dbPaymentMethod.includes("payhere") ||
+                        dbPaymentMethod.includes("online") ||
+                        (isDbPaid &&
+                            !dbPaymentMethod.includes("cash") &&
+                            !dbPaymentMethod.includes("cod"));
+
+                    if (isCard) {
+                        const targetCreditPaid = parseFloat(matchedOrder.creditPaid) || 0;
+                        const newMoneyPaid = Math.max(0, finalFullTotal - targetCreditPaid);
+                        await q(
+                            `UPDATE processorders
+                             SET amount = ?, moneyPaid = ?, fullTotal = ?, total = ?, discount = ?, isFinalized = 1
+                             WHERE id = ?`,
+                            [finalFullTotal, newMoneyPaid, finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
+                        );
+                    } else {
+                        await q(
+                            `UPDATE processorders
+                             SET fullTotal = ?, total = ?, discount = ?, isFinalized = 1
+                             WHERE id = ?`,
+                            [finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
+                        );
+                    }
+
+                    // 7. Update orders table
+                    await q(
+                        "UPDATE orders SET total = ?, fullTotal = ?, discount = ? WHERE id = ?",
+                        [finalTotal, finalFullTotal, finalDiscount, realOrderId],
+                    );
+
+                    // 8. Credit balance adjustment for paid orders if total changed
+                    const oldOrderFullTotal = parseFloat(matchedOrder.oldOrderFullTotal) || 0;
+                    const fullTotalDiff = isCard ? round2(finalFullTotal - oldOrderFullTotal) : 0;
+                    const creditChange = round2(-fullTotalDiff);
+
+                    if (creditChange !== 0 && targetUserId) {
+                        await q(
+                            "UPDATE marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?",
+                            [creditChange, targetUserId],
+                        );
+                    }
+
+                    connection.commit((commitErr) => {
+                        if (commitErr) {
+                            return connection.rollback(() => {
+                                connection.release();
+                                reject(commitErr);
+                            });
+                        }
+                        connection.release();
+                        resolve({
+                            status: true,
+                            message: "Order confirmed and marketplace prices updated successfully",
+                            fullTotal: finalFullTotal,
+                            total: finalTotal,
+                            discount: finalDiscount,
+                        });
+                    });
+                } catch (err) {
+                    connection.rollback(() => {
+                        connection.release();
+                        reject(err);
+                    });
+                }
+            });
+        });
+    });
 };

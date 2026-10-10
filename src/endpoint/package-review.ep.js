@@ -281,3 +281,43 @@ exports.cancelPackageOrder = asyncHandler(async (req, res) => {
         });
     }
 });
+
+/**
+ * POST /api/order/confirm-order
+ * Separate route: confirms order with live marketplace prices, updating orderadditionalitems,
+ * processorders (fullTotal, total, discount, amount, moneyPaid), and orders (fullTotal, total, discount).
+ */
+exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
+    const userId = getUserId(req);
+    const { orderId, processOrderId, newTotal } = req.body;
+
+    if (!orderId && !processOrderId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderId or processOrderId is required",
+        });
+    }
+
+    try {
+        const result = await packageReviewDao.confirmOrderWithLivePricesDao({
+            orderId,
+            processOrderId,
+            userId,
+            newTotal,
+        });
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+            data: result,
+        });
+    } catch (error) {
+        console.error("[confirmOrderWithLivePrices] Error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to confirm order with live prices",
+        });
+    }
+});

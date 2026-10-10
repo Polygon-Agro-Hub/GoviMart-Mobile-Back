@@ -1179,7 +1179,9 @@ exports.getOrderAdditionalItemsDao = async (orderId) => {
                 oai.productId,
                 mi.varietyId,
                 cv.id as cropVarietyId,
-                cv.cropGroupId
+                cv.cropGroupId,
+                mi.normalPrice AS marketNormalPrice,
+                mi.discountedPrice AS marketDiscountedPrice
               FROM orderadditionalitems oai
               JOIN marketplaceitems mi ON oai.productId = mi.id
               LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
