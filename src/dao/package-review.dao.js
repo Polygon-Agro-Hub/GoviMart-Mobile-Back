@@ -222,7 +222,6 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                     const additionalSql = `
                         SELECT 
                             oai.id,
-                            oai.orderId,
                             oai.proOrderId,
                             oai.productId,
                             oai.qty,
@@ -241,7 +240,6 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                         LEFT JOIN marketplaceitems mi ON oai.productId = mi.id
                         LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
                         WHERE oai.proOrderId = ?
-                          OR (oai.proOrderId IS NULL AND oai.orderId = ?)
                     `;
 
                     // 6. User's excludelist for warning badges
@@ -713,11 +711,10 @@ exports.confirmPackageReviewDao = ({
                     const alacartDiscountSql = `
                         SELECT COALESCE(SUM(discount), 0) AS totalDiscount
                         FROM orderadditionalitems
-                        WHERE proOrderId = ? OR (proOrderId IS NULL AND orderId = ?)
+                        WHERE proOrderId = ?
                     `;
                     const beforeDiscRows = await q(alacartDiscountSql, [
                         realProcessOrderId,
-                        realOrderId,
                     ]);
                     const oldAlacartDiscount = parseFloat(beforeDiscRows[0]?.totalDiscount) || 0;
 
@@ -916,8 +913,8 @@ exports.confirmPackageReviewDao = ({
                         if (validDeleteIds.length > 0) {
                             const deleteRes = await q(
                                 `DELETE FROM orderadditionalitems
-                                 WHERE id IN (?) AND (proOrderId = ? OR (proOrderId IS NULL AND orderId = ?))`,
-                                [validDeleteIds, realProcessOrderId, realOrderId],
+                                 WHERE id IN (?) AND proOrderId = ?`,
+                                [validDeleteIds, realProcessOrderId],
                             );
                             console.log(
                                 `[confirmPackageReviewDao] -> Deleted orderadditionalitems:`,
@@ -953,10 +950,10 @@ exports.confirmPackageReviewDao = ({
                                 `SELECT id, productId
                                  FROM orderadditionalitems
                                  WHERE id = ?
-                                   AND (proOrderId = ? OR (proOrderId IS NULL AND orderId = ?))
+                                   AND proOrderId = ?
                                  LIMIT 1
                                  FOR UPDATE`,
-                                [rowId, realProcessOrderId, realOrderId],
+                                [rowId, realProcessOrderId],
                             );
                             if (rows.length === 0) {
                                 console.warn(
@@ -1065,11 +1062,11 @@ exports.confirmPackageReviewDao = ({
                                 `SELECT id, qty, unit, price
                                  FROM orderadditionalitems
                                  WHERE productId = ?
-                                   AND (proOrderId = ? OR (proOrderId IS NULL AND orderId = ?))
+                                   AND proOrderId = ?
                                  ORDER BY id ASC
                                  LIMIT 1
                                  FOR UPDATE`,
-                                [m.productId, realProcessOrderId, realOrderId],
+                                [m.productId, realProcessOrderId],
                             );
 
                             if (existingRows.length > 0) {
@@ -1104,10 +1101,9 @@ exports.confirmPackageReviewDao = ({
                                 }
 
                                 const addRes = await q(
-                                    `INSERT INTO orderadditionalitems (orderId, proOrderId, productId, qty, unit, normalPrice, price, discount)
-                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                                    `INSERT INTO orderadditionalitems (proOrderId, productId, qty, unit, normalPrice, price, discount)
+                                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
                                     [
-                                        realOrderId,
                                         realProcessOrderId,
                                         m.productId,
                                         fromGrams(m.grams, m.unit),

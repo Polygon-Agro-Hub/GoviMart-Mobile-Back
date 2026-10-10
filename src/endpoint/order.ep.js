@@ -559,7 +559,9 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 };
 
                 // Normal financial fields for subsequent recurring processorders (orders 2..N: NO coupon applied)
-                const normalDeliveryCharge = isHomeDelivery ? (parseFloat(deliveryCharge) || 0) : 0;
+                const normalDeliveryCharge = isHomeDelivery
+                    ? (parseFloat(checkoutDetails?.normalDeliveryCharge || deliveryCharge) || 0)
+                    : 0;
                 const normalGrandTotal = Math.max(0, parseFloat((calculatedDiscountedItemsTotal + normalDeliveryCharge).toFixed(2)));
                 const normalOrderFinancials = {
                     isCoupon: 0,

@@ -532,13 +532,12 @@ exports.saveOrderAdditionalItemWithTransactionDao = (
             calcPrice = calcNormal - calcDiscount;
 
             const sql = `
-                INSERT INTO orderadditionalitems (orderId, proOrderId, productId, qty, unit, normalPrice, price, discount)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO orderadditionalitems (proOrderId, productId, qty, unit, normalPrice, price, discount)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             `;
             connection.query(
                 sql,
                 [
-                    orderId,
                     proOrderId || null,
                     productId,
                     qty,
@@ -706,7 +705,7 @@ exports.getRetailOrderHistoryDao = async (userId) => {
         oai.discount AS itemDiscount
       FROM orderadditionalitems oai
       JOIN marketplaceitems mi ON oai.productId = mi.id
-      WHERE oai.orderId = ?
+      WHERE oai.proOrderId = ?
     `;
 
         db.collectionofficer.query(orderQuery, [userId], async (err, orders) => {
@@ -786,6 +785,13 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
         p.packTime,
         p.outDlvrDate,
         p.deliveredTime,
+        p.isCoupon AS isCoupon,
+        p.couponType AS couponType,
+        p.couponValue AS couponValue,
+        p.total AS total,
+        p.fullTotal AS fullTotal,
+        p.discount AS discount,
+        p.deliveryCharge AS deliveryCharge,
         ohf.fee AS returnHandlingFee,
         dro.note AS returnNote,
         rr.rsnEnglish AS returnReason,
@@ -1177,13 +1183,13 @@ exports.getOrderAdditionalItemsDao = async (orderId) => {
               FROM orderadditionalitems oai
               JOIN marketplaceitems mi ON oai.productId = mi.id
               LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-              WHERE oai.orderId = ? OR oai.proOrderId = ?
+              WHERE oai.proOrderId = ?
               ORDER BY oai.id
             `;
 
                 db.collectionofficer.query(
                     sql,
-                    [actualOrderId, processOrderId],
+                    [processOrderId || actualOrderId],
                     (err2, results) => {
                         if (err2) {
                             return reject(new Error("Database error: " + err2.message));
@@ -1427,15 +1433,15 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                 o.id AS actualOrderId,
                 o.centerId,
                 o.delivaryMethod AS deliveryMethod,
-                COALESCE(po.discount, o.discount) AS orderDiscount,
+                COALESCE(po.discount, 0) AS orderDiscount,
                 o.createdAt AS invoiceDate,
                 po.sheduleDate AS scheduledDate,
                 o.buildingType,
-                COALESCE(po.fullTotal, o.fullTotal) AS fullTotal,
-                COALESCE(po.isCoupon, o.isCoupon) AS isCoupon,
-                COALESCE(po.couponValue, o.couponValue) AS couponValue,
-                COALESCE(po.couponType, o.couponType) AS couponType,
-                COALESCE(po.deliveryCharge, o.deliveryCharge) AS deliveryCharge,
+                po.fullTotal AS fullTotal,
+                po.isCoupon AS isCoupon,
+                po.couponValue AS couponValue,
+                po.couponType AS couponType,
+                po.deliveryCharge AS deliveryCharge,
                 po.id AS processOrderId,
                 po.invNo AS invoiceNumber,
                 po.paymentMethod AS paymentMethod,
@@ -1447,7 +1453,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
             FROM processorders po
             INNER JOIN orders o ON po.orderId = o.id
             WHERE (po.id = ? OR o.id = ?) AND o.userId = ?
-            ORDER BY po.id DESC
+            ORDER BY po.id ASC
             LIMIT 1
         `;
 
@@ -1492,7 +1498,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                 FROM orderadditionalitems oai
                 JOIN marketplaceitems mi ON oai.productId = mi.id
                 LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-                WHERE (oai.orderId = ? OR oai.proOrderId = ?)
+                WHERE oai.proOrderId = ?
             `;
 
                 const billingQuery = `
@@ -1529,7 +1535,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                     new Promise((res, rej) => {
                         db.collectionofficer.query(
                             additionalItemsQuery,
-                            [actualOrderId, processOrderId],
+                            [processOrderId],
                             (e, r) => (e ? rej(e) : res(r || [])),
                         );
                     }),
