@@ -1,4 +1,5 @@
 const db = require("../startup/database");
+const { getRemainingPackingTarget } = require("./packing-target.dao");
 
 /**
  * Fetch full package review data for an order or process order.
@@ -1312,60 +1313,23 @@ exports.confirmPackageReviewDao = ({
 exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
     return new Promise(async (resolve) => {
         try {
-            // 1. Latest target limit
-            const limitSql = `SELECT tarValue FROM packingtargetlimit ORDER BY id DESC LIMIT 1`;
-            const limitRows = await new Promise((res) => {
-                db.collectionofficer.query(limitSql, [], (err, rows) => {
-                    if (err) {
-                        console.warn(
-                            "[getPackingSlotAvailabilityDao] Error querying packingtargetlimit:",
-                            err.message,
-                        );
-                        return res([]);
-                    }
-                    res(rows || []);
+            let dateToUse = targetDate;
+            if (!dateToUse && processOrderId) {
+                const poRows = await new Promise((res) => {
+                    db.collectionofficer.query(
+                        "SELECT sheduleDate FROM processorders WHERE id = ? LIMIT 1",
+                        [processOrderId],
+                        (err, rows) => res(rows || [])
+                    );
                 });
-            });
-
-            const targetLimit =
-                limitRows.length > 0 && limitRows[0].tarValue != null
-                    ? parseInt(limitRows[0].tarValue, 10) || 50
-                    : 50;
-
-            // 2. Accepted orders for the schedule date
-            let countSql = `
-                SELECT COUNT(*) AS acceptedCount 
-                FROM processorders 
-                WHERE (status IS NULL OR status NOT IN ('Cancelled', 'Return', 'Return Received'))
-            `;
-            const countParams = [];
-            if (targetDate) {
-                countSql += ` AND DATE(sheduleDate) = DATE(?)`;
-                countParams.push(targetDate);
-            } else {
-                countSql += ` AND (DATE(sheduleDate) = CURDATE() OR sheduleDate IS NULL)`;
+                if (poRows.length > 0 && poRows[0].sheduleDate) {
+                    dateToUse = poRows[0].sheduleDate;
+                }
             }
 
-            const countRows = await new Promise((res) => {
-                db.collectionofficer.query(countSql, countParams, (err, rows) => {
-                    if (err) {
-                        console.warn(
-                            "[getPackingSlotAvailabilityDao] Error querying accepted orders:",
-                            err.message,
-                        );
-                        return res([]);
-                    }
-                    res(rows || []);
-                });
-            });
+            const targetInfo = await getRemainingPackingTarget(dateToUse);
 
-            const acceptedOrdersCount =
-                countRows.length > 0 && countRows[0].acceptedCount != null
-                    ? parseInt(countRows[0].acceptedCount, 10) || 0
-                    : 0;
-            const availableSlots = Math.max(0, targetLimit - acceptedOrdersCount);
-
-            // 3. Unread reminder notification count
+            // Unread reminder notification count
             let unreadReminderDays = 1;
             if (processOrderId) {
                 const notifSql = `
@@ -1384,15 +1348,22 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 }
             }
 
-            const isLimitReached = availableSlots <= 0 || unreadReminderDays >= 3;
+            const remaining = targetInfo.remaining;
+            const availableSlots = remaining;
+            const isLimitReached = remaining <= 0 || unreadReminderDays >= 3;
 
             resolve({
-                targetLimit,
-                acceptedOrdersCount,
+                targetLimit: targetInfo.packingTargetLimit,
+                acceptedOrdersCount: targetInfo.confirmOrders,
                 availableSlots,
+                remaining,
                 isLimitReached,
                 unreadReminderDays,
-                scheduleDate: targetDate || new Date().toISOString().split("T")[0],
+                scheduleDate: targetInfo.sheduleDate,
+                additionalItems: targetInfo.additionalItems,
+                packageFinalizeImdt: targetInfo.packageFinalizeImdt,
+                packageReview: targetInfo.packageReview,
+                confirmOrders: targetInfo.confirmOrders,
             });
         } catch (err) {
             console.error("[getPackingSlotAvailabilityDao] Error:", err);
@@ -1400,6 +1371,7 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 targetLimit: 50,
                 acceptedOrdersCount: 0,
                 availableSlots: 50,
+                remaining: 50,
                 isLimitReached: false,
                 unreadReminderDays: 1,
                 scheduleDate: targetDate || new Date().toISOString().split("T")[0],
@@ -1407,6 +1379,8 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
         }
     });
 };
+
+exports.getRemainingPackingTarget = getRemainingPackingTarget;
 
 
 exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {

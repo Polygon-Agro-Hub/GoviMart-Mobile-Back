@@ -171,6 +171,22 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
     }
 
     try {
+        // Validate remaining packing slots count: if 0, return error
+        try {
+            const slotInfo = await packageReviewDao.getPackingSlotAvailabilityDao(
+                newScheduleDate || null,
+                processOrderId || orderId,
+            );
+            if (slotInfo && slotInfo.remaining <= 0) {
+                return res.status(400).json({
+                    status: false,
+                    message: "Sorry, no packing slots are available for this schedule date. We cannot accept any more orders.",
+                });
+            }
+        } catch (valErr) {
+            console.warn("[confirmPackageReview Endpoint] Slot validation check error:", valErr.message);
+        }
+
         const result = await packageReviewDao.confirmPackageReviewDao({
             orderId,
             processOrderId,
