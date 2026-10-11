@@ -170,7 +170,10 @@ exports.getActiveGateway = asyncHandler(async (req, res) => {
 // =========================================================================
 exports.handlePaymentsLkWebhook = asyncHandler(async (req, res) => {
   try {
-    const signatureHeader = req.headers["payments-signature"];
+    const signatureHeader =
+      req.headers["payments-signature"] ||
+      req.headers["x-payments-signature"] ||
+      req.headers["payable-signature"];
     const rawBody = req.rawBody || req.body;
 
     const strategy = paymentGatewayFactory.getGateway("payments_lk");

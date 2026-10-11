@@ -630,7 +630,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                         const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
                             orderId,
-                            paymentMethod: isFirstOrder ? paymentMethod : "Cash",
+                            paymentMethod: paymentMethod || (isFirstOrder ? "Card" : "Cash"),
                             isPaid: isFirstOrder ? clientIsPaid : 0,
                             amount: rowAmount,
                             creditPaid: rowCreditPaid,
