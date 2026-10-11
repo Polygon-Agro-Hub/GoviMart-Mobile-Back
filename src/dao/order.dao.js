@@ -1800,3 +1800,121 @@ exports.markOrderPaidDao = async (identifier, transactionId) => {
         if (connection) connection.release();
     }
 };
+
+/**
+ * Fetch orders for a specific schedule date according to 2-day gap & order window rules.
+ *
+ * Rules:
+ *  - DATE(po.sheduleDate) = sheduleDate
+ *  - po.status = 'Ordered'
+ *  - both types: ala carte (o.isPackage = 0) OR package + imdt (o.isPackage = 1 AND o.isFinalizeImdt = 1)
+ *  - placed 2 days before the schedule date, 8AM to 9PM
+ */
+async function getOrdersForSheduleDate(sheduleDate, userId = null) {
+    const promiseDb = db.collectionofficer.promise();
+    let userCondition = "";
+    const params = [sheduleDate, sheduleDate];
+    if (userId) {
+        userCondition = "AND o.userId = ? AND COALESCE(po.isFinalized, 0) = 0";
+        params.push(userId);
+    }
+
+    const [rows] = await promiseDb.query(
+        `
+        SELECT
+            o.id AS orderId,
+            o.userId,
+            o.fullName,
+            o.isPackage,
+            o.isFinalizeImdt,
+            o.total,
+            o.createdAt,
+            po.id AS processOrderId,
+            po.invNo,
+            DATE_FORMAT(po.sheduleDate, '%Y-%m-%d') AS sheduleDate,
+            po.status,
+            po.isFinalized,
+            po.isConfirmed,
+            CASE
+                WHEN o.isPackage = 0 THEN 'ala carte'
+                ELSE 'package + imdt'
+            END AS orderType
+        FROM collection_officer.processorders po
+        JOIN collection_officer.orders o ON o.id = po.orderId
+        WHERE (DATE_FORMAT(po.sheduleDate, '%Y-%m-%d') = ? OR DATE(po.sheduleDate) = ?)
+            AND po.status = 'Ordered'
+            -- both types: ala carte OR package + imdt
+            AND (
+                o.isPackage = 0
+                OR (o.isPackage = 1 AND o.isFinalizeImdt = 1)
+            )
+            -- Exclude orders created today
+            AND (DATE(o.createdAt) < CURDATE() OR DATE_FORMAT(o.createdAt, '%Y-%m-%d') < CURDATE())
+            -- Check isConfirmed = 0 (only unconfirmed orders)
+            AND COALESCE(po.isConfirmed, 0) = 0
+            ${userCondition}
+        ORDER BY po.id ASC
+        `,
+        params,
+    );
+
+    const resolvedOrderDate = rows.length > 0 && rows[0].createdAt
+        ? new Date(rows[0].createdAt).toISOString().slice(0, 10)
+        : new Date(new Date(sheduleDate).getTime() - 3 * 86400000).toISOString().slice(0, 10);
+
+    return {
+        sheduleDate,
+        orderDate: resolvedOrderDate,
+        count: rows.length,
+        orders: rows,
+    };
+}
+
+/**
+ * Fetch earliest upcoming unfinalized and unconfirmed scheduled date for a user's ordered process order.
+ */
+async function getLatestScheduleDateForUser(userId) {
+    const promiseDb = db.collectionofficer.promise();
+    // 1. Earliest upcoming unfinalized & unconfirmed order created BEFORE today (needs review)
+    let [orderRows] = await promiseDb.query(
+        `SELECT DATE_FORMAT(po.sheduleDate, '%Y-%m-%d') AS sheduleDate
+         FROM collection_officer.processorders po
+         JOIN collection_officer.orders o ON o.id = po.orderId
+         WHERE o.userId = ? 
+           AND po.status = 'Ordered'
+           AND (o.isPackage = 0 OR (o.isPackage = 1 AND o.isFinalizeImdt = 1))
+           AND COALESCE(po.isConfirmed, 0) = 0
+           AND COALESCE(po.isFinalized, 0) = 0
+           AND (DATE(po.sheduleDate) >= CURDATE() OR DATE_FORMAT(po.sheduleDate, '%Y-%m-%d') >= CURDATE())
+           AND (DATE(o.createdAt) < CURDATE() OR DATE_FORMAT(o.createdAt, '%Y-%m-%d') < CURDATE())
+         ORDER BY DATE_FORMAT(po.sheduleDate, '%Y-%m-%d') ASC, po.id ASC
+         LIMIT 1`,
+        [userId],
+    );
+
+    // 2. Fallback: any upcoming unconfirmed order created before today
+    if (!orderRows || orderRows.length === 0) {
+        [orderRows] = await promiseDb.query(
+            `SELECT DATE_FORMAT(po.sheduleDate, '%Y-%m-%d') AS sheduleDate
+             FROM collection_officer.processorders po
+             JOIN collection_officer.orders o ON o.id = po.orderId
+             WHERE o.userId = ? 
+               AND po.status = 'Ordered'
+               AND (o.isPackage = 0 OR (o.isPackage = 1 AND o.isFinalizeImdt = 1))
+               AND COALESCE(po.isConfirmed, 0) = 0
+               AND (DATE(o.createdAt) < CURDATE() OR DATE_FORMAT(o.createdAt, '%Y-%m-%d') < CURDATE())
+             ORDER BY DATE_FORMAT(po.sheduleDate, '%Y-%m-%d') ASC, po.id ASC
+             LIMIT 1`,
+            [userId],
+        );
+    }
+
+    if (orderRows && orderRows.length > 0 && orderRows[0].sheduleDate) {
+        return orderRows[0].sheduleDate;
+    }
+    return null;
+}
+
+exports.getOrdersForSheduleDate = getOrdersForSheduleDate;
+exports.getLatestScheduleDateForUser = getLatestScheduleDateForUser;
+

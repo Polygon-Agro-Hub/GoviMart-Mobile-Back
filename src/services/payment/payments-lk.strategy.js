@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const PaymentStrategy = require("./payment.strategy");
 
 /**
@@ -11,6 +12,8 @@ class PaymentsLkStrategy extends PaymentStrategy {
       process.env.PAYMENTS_LK_API_URL || "https://api.payments.lk/v1";
     this.secretKey =
       process.env.PAYMENTS_LK_SECRET_KEY || "sk_test_n5ceveR70UwP3W23ow2M7kchXF0zHoIP";
+    this.webhookSecret =
+      process.env.PAYMENTS_LK_WEBHOOK_SECRET || "whsec_sLQp6urGfRtGFx1XZvZrCzSE4rn0Zw1mNa_AhHOC1_I";
     this.appScheme =
       process.env.APP_DEEP_LINK_SCHEME || "polygon";
     this.domain =
@@ -296,10 +299,80 @@ class PaymentsLkStrategy extends PaymentStrategy {
   }
 
   /**
-   * Webhook verification (webhookSecret removed from system)
+   * Verifies Payments.lk signed webhook payload using HMAC-SHA256
+   * Header format: Payments-Signature: "t=1726400000,v1=<hex>"
    */
-  verifyWebhook(signatureHeader, rawBody) {
-    return true;
+  verifyWebhook(signatureHeader, rawBody, toleranceSeconds = 300) {
+    const secret = this.webhookSecret;
+    if (!secret) {
+      console.warn(
+        "[Payments.lk Webhook] PAYMENTS_LK_WEBHOOK_SECRET is not configured. Skipping signature check."
+      );
+      return true;
+    }
+
+    if (!signatureHeader || !rawBody) {
+      console.warn("[Payments.lk Webhook] Missing signature header or raw body.");
+      return false;
+    }
+
+    let t;
+    const signatures = [];
+    const headerParts = String(signatureHeader).split(",");
+
+    for (const part of headerParts) {
+      const [key, value] = part.trim().split("=", 2);
+      if (key === "t" && /^[0-9]{1,12}$/.test(value || "")) {
+        t = Number(value);
+      }
+      if (key === "v1" && /^[0-9a-f]{64}$/i.test(value || "")) {
+        signatures.push(value);
+      }
+    }
+
+    if (t === undefined) {
+      console.warn("[Payments.lk Webhook] Timestamp 't' missing from signature header.");
+      return false;
+    }
+
+    // Check timestamp tolerance to prevent replay attacks
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+    if (Math.abs(currentTimestamp - t) > toleranceSeconds) {
+      console.warn(
+        `[Payments.lk Webhook] Webhook timestamp outside tolerance (${t} vs ${currentTimestamp})`
+      );
+      return false;
+    }
+
+    const payloadString =
+      typeof rawBody === "string"
+        ? rawBody
+        : Buffer.isBuffer(rawBody)
+        ? rawBody.toString("utf8")
+        : JSON.stringify(rawBody);
+
+    const expectedSignature = crypto
+      .createHmac("sha256", secret)
+      .update(`${t}.${payloadString}`)
+      .digest();
+
+    const isValid = signatures.some((sig) => {
+      try {
+        const sigBuffer = Buffer.from(sig, "hex");
+        return (
+          expectedSignature.length === sigBuffer.length &&
+          crypto.timingSafeEqual(expectedSignature, sigBuffer)
+        );
+      } catch (err) {
+        return false;
+      }
+    });
+
+    if (!isValid) {
+      console.error("[Payments.lk Webhook] HMAC SHA-256 signature verification mismatch.");
+    }
+
+    return isValid;
   }
 
   /**

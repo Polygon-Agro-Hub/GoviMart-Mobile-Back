@@ -630,7 +630,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                         const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
                             orderId,
-                            paymentMethod: isFirstOrder ? paymentMethod : "Cash",
+                            paymentMethod: paymentMethod || (isFirstOrder ? "Card" : "Cash"),
                             isPaid: isFirstOrder ? clientIsPaid : 0,
                             amount: rowAmount,
                             creditPaid: rowCreditPaid,
@@ -824,3 +824,36 @@ exports.getDeliveredOrdersTotal = async (req, res) => {
         });
     }
 };
+
+/**
+ * GET /api/order/schedule-orders/:sheduleDate?
+ * Fetch orders scheduled for a specific date (or the user's latest scheduled order date).
+ */
+exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
+    const userId = req.user?.id || req.user?.userId;
+    let sheduleDate = req.query.sheduleDate || req.params.sheduleDate;
+
+    if (!sheduleDate) {
+        if (userId) {
+            sheduleDate = await RetailOrderDao.getLatestScheduleDateForUser(userId);
+        }
+
+        if (!sheduleDate) {
+            const d = new Date();
+            d.setDate(d.getDate() + 3);
+            sheduleDate = d.toISOString().slice(0, 10);
+        }
+    }
+
+    const result = await RetailOrderDao.getOrdersForSheduleDate(sheduleDate, userId);
+
+    return res.status(200).json({
+        status: true,
+        sheduleDate: result.sheduleDate,
+        orderDate: result.orderDate,
+        count: result.count,
+        order: result.orders.length > 0 ? result.orders[0] : null,
+        orders: result.orders,
+    });
+});
+

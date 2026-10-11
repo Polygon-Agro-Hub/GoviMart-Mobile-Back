@@ -1207,32 +1207,7 @@ exports.confirmPackageReviewDao = ({
                             ? round2(Math.max(0, parsedNewTotal - couponValue))
                             : null;
 
-                    // 6a. processorders
-                    if (isCard && netNewTotal != null) {
-                        const targetCreditPaid = parseFloat(matchedOrder.creditPaid) || 0;
-                        const newMoneyPaid = Math.max(0, netNewTotal - targetCreditPaid);
-                        const processRes = await q(
-                            "UPDATE processorders SET amount = ?, moneyPaid = ?, isFinalized = 1 WHERE id = ?",
-                            [netNewTotal, newMoneyPaid, realProcessOrderId],
-                        );
-                        console.log(
-                            `[confirmPackageReviewDao] processorders updated (card amount=${netNewTotal}, moneyPaid=${newMoneyPaid}, isFinalized=1):`,
-                            processRes.affectedRows,
-                            "row(s)",
-                        );
-                    } else {
-                        const finalizeRes = await q(
-                            "UPDATE processorders SET isFinalized = 1 WHERE id = ?",
-                            [realProcessOrderId],
-                        );
-                        console.log(
-                            `[confirmPackageReviewDao] processorders isFinalized set to 1:`,
-                            finalizeRes.affectedRows,
-                            "row(s)",
-                        );
-                    }
-
-                    // 6b. orders: fullTotal, discount, total
+                    // 6a. orders & processorders: calculate discount and totals
                     const afterDiscRows = await q(alacartDiscountSql, [
                         realProcessOrderId,
                         realOrderId,
@@ -1255,9 +1230,59 @@ exports.confirmPackageReviewDao = ({
                         );
                     }
 
+                    const newOrderTotal =
+                        newOrderFullTotal != null
+                            ? round2(newOrderFullTotal + newOrderDiscount)
+                            : null;
+
+                    const finalPoFullTotal =
+                        newOrderFullTotal != null
+                            ? newOrderFullTotal
+                            : (parseFloat(orderSnap.fullTotal) || 0);
+                    const finalPoTotal =
+                        newOrderTotal != null
+                            ? newOrderTotal
+                            : (parseFloat(orderSnap.total) || 0);
+                    const finalPoDiscount = newOrderDiscount;
+
+                    // 6b. processorders: fullTotal (discount price), total (normal price), discount
+                    if (isCard && netNewTotal != null) {
+                        const targetCreditPaid = parseFloat(matchedOrder.creditPaid) || 0;
+                        const newMoneyPaid = Math.max(0, netNewTotal - targetCreditPaid);
+                        const processRes = await q(
+                            `UPDATE processorders
+                             SET amount = ?, moneyPaid = ?, fullTotal = ?, total = ?, discount = ?, isFinalized = 1, isConfirmed = 1
+                             WHERE id = ?`,
+                            [
+                                netNewTotal,
+                                newMoneyPaid,
+                                finalPoFullTotal,
+                                finalPoTotal,
+                                finalPoDiscount,
+                                realProcessOrderId,
+                            ],
+                        );
+                        console.log(
+                            `[confirmPackageReviewDao] processorders updated (card amount=${netNewTotal}, moneyPaid=${newMoneyPaid}, fullTotal=${finalPoFullTotal}, total=${finalPoTotal}, discount=${finalPoDiscount}, isFinalized=1, isConfirmed=1):`,
+                            processRes.affectedRows,
+                            "row(s)",
+                        );
+                    } else {
+                        const finalizeRes = await q(
+                            `UPDATE processorders
+                             SET fullTotal = ?, total = ?, discount = ?, isFinalized = 1, isConfirmed = 1
+                             WHERE id = ?`,
+                            [finalPoFullTotal, finalPoTotal, finalPoDiscount, realProcessOrderId],
+                        );
+                        console.log(
+                            `[confirmPackageReviewDao] processorders updated (fullTotal=${finalPoFullTotal}, total=${finalPoTotal}, discount=${finalPoDiscount}, isFinalized=1, isConfirmed=1):`,
+                            finalizeRes.affectedRows,
+                            "row(s)",
+                        );
+                    }
+
+                    // 6c. orders: fullTotal, discount, total
                     if (newOrderFullTotal != null) {
-                        // total = fullTotal + discount
-                        const newOrderTotal = round2(newOrderFullTotal + newOrderDiscount);
                         const orderRes = await q(
                             "UPDATE orders SET total = ?, fullTotal = ?, discount = ? WHERE id = ?",
                             [newOrderTotal, newOrderFullTotal, newOrderDiscount, realOrderId],
@@ -1782,14 +1807,14 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                         const newMoneyPaid = Math.max(0, finalFullTotal - targetCreditPaid);
                         await q(
                             `UPDATE processorders
-                             SET amount = ?, moneyPaid = ?, fullTotal = ?, total = ?, discount = ?, isFinalized = 1
+                             SET amount = ?, moneyPaid = ?, fullTotal = ?, total = ?, discount = ?, isFinalized = 1, isConfirmed = 1
                              WHERE id = ?`,
                             [finalFullTotal, newMoneyPaid, finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
                         );
                     } else {
                         await q(
                             `UPDATE processorders
-                             SET fullTotal = ?, total = ?, discount = ?, isFinalized = 1
+                             SET fullTotal = ?, total = ?, discount = ?, isFinalized = 1, isConfirmed = 1
                              WHERE id = ?`,
                             [finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
                         );
