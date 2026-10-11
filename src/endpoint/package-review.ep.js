@@ -1,5 +1,6 @@
 const asyncHandler = require("express-async-handler");
 const packageReviewDao = require("../dao/package-review.dao");
+const orderSmsService = require("../services/sms/order-sms.service");
 
 const ensureRetailUser = (req, res) => {
     const buyerType = req.user?.buyerType;
@@ -206,6 +207,24 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
 
         console.log("[confirmPackageReview Endpoint] Success response:", result);
 
+        // Dispatch confirmed SMS after customer accepts review (best-effort)
+        (async () => {
+            try {
+                const { invNo, userId: resolvedUserId } = await orderSmsService.resolveOrderDetails(
+                    processOrderId || orderId,
+                    userId
+                );
+                if (invNo) {
+                    await orderSmsService.sendOrderConfirmedSms({
+                        userId: resolvedUserId,
+                        invNo,
+                    });
+                }
+            } catch (smsErr) {
+                console.warn("[confirmPackageReview] Confirmation SMS error:", smsErr.message);
+            }
+        })();
+
         return res.status(200).json({
             status: true,
             message: result.message,
@@ -307,6 +326,24 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
             userId,
             newTotal,
         });
+
+        // Dispatch confirmed SMS after customer confirms order with live prices (best-effort)
+        (async () => {
+            try {
+                const { invNo, userId: resolvedUserId } = await orderSmsService.resolveOrderDetails(
+                    processOrderId || orderId,
+                    userId
+                );
+                if (invNo) {
+                    await orderSmsService.sendOrderConfirmedSms({
+                        userId: resolvedUserId,
+                        invNo,
+                    });
+                }
+            } catch (smsErr) {
+                console.warn("[confirmOrderWithLivePrices] Confirmation SMS error:", smsErr.message);
+            }
+        })();
 
         return res.status(200).json({
             status: true,

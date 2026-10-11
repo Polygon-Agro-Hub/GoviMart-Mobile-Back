@@ -2,6 +2,7 @@ const asyncHandler = require("express-async-handler");
 const RetailOrderDao = require("../dao/order.dao");
 const cartDao = require("../dao/cart.dao");
 const customerDao = require("../dao/customer.dao");
+const orderSmsService = require("../services/sms/order-sms.service");
 
 const {
     couponValidationSchema,
@@ -545,6 +546,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 // ── 5c. Create process order(s) ───────────────────────────────
                 let primaryProcessOrderId = null;
                 let primaryInvNo = null;
+                let primaryScheduledDate = null;
                 const createdProcessOrders = [];
 
                 // Financial fields for 1st processorder (coupon applied if any)
@@ -645,6 +647,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         if (isFirstOrder) {
                             primaryProcessOrderId = proc.insertId;
                             primaryInvNo = proc.invNo;
+                            primaryScheduledDate = sDate;
                         }
 
                         // ── 5d. Save order items for each process order ────────
@@ -677,6 +680,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     createdProcessOrders.push(proc);
                     primaryProcessOrderId = proc.insertId;
                     primaryInvNo = proc.invNo;
+                    primaryScheduledDate = targetDate;
 
                     // ── 5d. Save all order items ──────────────────────────────
                     await RetailOrderDao.saveOrderItemsWithTransactionDao(
@@ -714,6 +718,63 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     RetailOrderDao.recalculateAndPersistCreditLimitDao(userId).catch((limitErr) => {
                         console.error("[createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
                     });
+
+                    // ── ShoutOUT SMS Dispatch (best-effort, after commit) ──
+                    (async () => {
+                        try {
+                            // 1. Determine Earliest Possible Schedule Date (EPSD)
+                            let earliestDeliveryDateObj = null;
+                            if (checkoutDetails?.earliestDeliveryDate) {
+                                earliestDeliveryDateObj = parseScheduleDate(checkoutDetails.earliestDeliveryDate);
+                            }
+                            if (!earliestDeliveryDateObj) {
+                                earliestDeliveryDateObj = new Date();
+                                earliestDeliveryDateObj.setDate(earliestDeliveryDateObj.getDate() + 3);
+                            }
+
+                            const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
+                            const toDateStr = (d) => {
+                                if (!d) return null;
+                                const dt = (d instanceof Date) ? d : new Date(d);
+                                return isNaN(dt.getTime()) ? null : `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+                            };
+
+                            const scheduledDateStr = toDateStr(primaryScheduledDate);
+                            const earliestDateStr = toDateStr(earliestDeliveryDateObj);
+
+                            const isType1 = Boolean(scheduledDateStr && earliestDateStr && scheduledDateStr <= earliestDateStr);
+
+                            console.log(`[createOrder SMS] scheduledDate: ${scheduledDateStr}, earliestDate: ${earliestDateStr}, isType1: ${isType1}, paymentMethod: ${paymentMethod}`);
+
+                            if (isType1) {
+                                // Type 1: Deliver Date = E.P.S.D.
+                                // 1. Payment Cash or Cash + Credit
+                                // 2. Payment Direct User to the Pay Now Screen - After Payment Success
+                                // 3. Payment Full Credit
+                                // SMS: “Dear Customer, your order : [INV NO] is confirmed. Thank you for ordering with Polygon!”
+                                await orderSmsService.sendOrderConfirmedSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    invNo: primaryInvNo,
+                                });
+                            } else {
+                                // Type 2: Delivery Date After E.P.S.D.
+                                // 1. Cash or Cash+Credit:
+                                //    SMS When the Order is placed: “Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on [Processing Date]. Please confirm your order by 6:00 PM or it will be cancelled.”
+                                // 2. Card:
+                                //    SMS When the Order is placed: “Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on [Processing Date]. Please pay by 6:00 PM to confirm your order, or it will be cancelled.”
+                                const isCard = String(paymentMethod).toLowerCase() === "card";
+                                await orderSmsService.sendOrderPlacedAfterEpsdSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    deliveryDate: primaryScheduledDate || scheduledDateStr,
+                                    isCardPayment: isCard,
+                                });
+                            }
+                        } catch (smsErr) {
+                            console.error("[createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
+                        }
+                    })();
 
                     return safeRespond(201, {
                         status: true,

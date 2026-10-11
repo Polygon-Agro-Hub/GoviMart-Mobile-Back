@@ -3,6 +3,7 @@ const customerDao = require("../dao/customer.dao");
 const orderDao = require("../dao/order.dao");
 const paymentGatewayFactory = require("../services/payment/payment.factory");
 const savedCardService = require("../services/payment/saved-card.service");
+const orderSmsService = require("../services/sms/order-sms.service");
 const {
   generatePayHereHash,
   verifyPayHereNotify,
@@ -263,6 +264,24 @@ exports.handlePaymentsLkWebhook = asyncHandler(async (req, res) => {
         );
         try {
           await orderDao.markOrderPaidDao(event.orderId, event.paymentId);
+
+          // Dispatch confirmed SMS for paid order (best-effort)
+          (async () => {
+            try {
+              const { invNo, userId } = await orderSmsService.resolveOrderDetails(
+                event.orderId,
+                event.userId
+              );
+              if (invNo) {
+                await orderSmsService.sendOrderConfirmedSms({
+                  userId,
+                  invNo,
+                });
+              }
+            } catch (smsErr) {
+              console.warn("[Payments.lk Webhook] Order confirmed SMS error:", smsErr.message);
+            }
+          })();
         } catch (settleErr) {
           console.error(
             `[Payments.lk Webhook] Failed to mark order paid:`,
@@ -384,6 +403,24 @@ exports.handlePayHereNotify = asyncHandler(async (req, res) => {
         );
         try {
           await orderDao.markOrderPaidDao(order_id, payment_id);
+
+          // Dispatch confirmed SMS for paid order (best-effort)
+          (async () => {
+            try {
+              const { invNo, userId: resolvedUserId } = await orderSmsService.resolveOrderDetails(
+                order_id,
+                userId
+              );
+              if (invNo) {
+                await orderSmsService.sendOrderConfirmedSms({
+                  userId: resolvedUserId,
+                  invNo,
+                });
+              }
+            } catch (smsErr) {
+              console.warn("[PayHere Webhook] Order confirmed SMS error:", smsErr.message);
+            }
+          })();
         } catch (settleErr) {
           console.error(`[PayHere Webhook] Failed to mark order paid:`, settleErr);
         }
