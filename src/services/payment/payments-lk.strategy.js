@@ -10,7 +10,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
     this.apiUrl =
       process.env.PAYMENTS_LK_API_URL || "https://api.payments.lk/v1";
     this.secretKey =
-      process.env.PAYMENTS_LK_SECRET_KEY || "sk_test_demo";
+      process.env.PAYMENTS_LK_SECRET_KEY || "sk_test_n5ceveR70UwP3W23ow2M7kchXF0zHoIP";
     this.appScheme =
       process.env.APP_DEEP_LINK_SCHEME || "polygon";
     this.domain =
