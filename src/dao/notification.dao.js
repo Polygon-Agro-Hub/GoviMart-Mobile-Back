@@ -25,6 +25,7 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0, buyerType = "
         po.sheduleDate,
         po.status AS orderStatus,
         po.isFinalized,
+        po.isConfirmed,
         o.delivaryMethod,
         rr.rsnEnglish AS returnReason,
         dro.note AS returnNote
@@ -206,6 +207,8 @@ exports.createNotificationDao = (arg1, arg2, arg3) => {
           po.amount,
           po.sheduleDate,
           po.status AS orderStatus,
+          po.isFinalized,
+          po.isConfirmed,
           o.userId,
           o.delivaryMethod,
           rr.rsnEnglish AS returnReason,

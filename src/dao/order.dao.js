@@ -802,6 +802,8 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
         p.fullTotal AS fullTotal,
         p.discount AS discount,
         p.deliveryCharge AS deliveryCharge,
+        p.isFinalized,
+        p.isConfirmed,
         ohf.fee AS returnHandlingFee,
         dro.note AS returnNote,
         rr.rsnEnglish AS returnReason,

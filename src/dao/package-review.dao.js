@@ -29,6 +29,8 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                 po.paymentMethod,
                 po.isPaid,
                 po.status,
+                po.isFinalized,
+                po.isConfirmed,
                 po.packagePackStatus,
                 po.sheduleDate AS processScheduleDate,
                 po.sheduleDate AS sheduleDate
@@ -1721,7 +1723,7 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                     // 2. Recalculate and update ALL existing orderadditionalitems rows for this order
                     //    using today's marketplaceitems live prices (normalPrice and discountedPrice).
                     const allAlaCarteRows = await q(
-                        `SELECT oai.id, oai.qty, oai.unit, mi.normalPrice AS perKgNormal, mi.discountedPrice AS perKgDiscounted
+                        `SELECT oai.id, oai.qty, oai.unit, oai.normalPrice AS originalNormalPrice, oai.price AS originalPrice, oai.discount AS originalDiscount, mi.normalPrice AS perKgNormal, mi.discountedPrice AS perKgDiscounted
                          FROM orderadditionalitems oai
                          JOIN marketplaceitems mi ON oai.productId = mi.id
                          WHERE oai.proOrderId = ? OR oai.proOrderId = ? OR oai.orderId = ? OR oai.orderId = ?`,
@@ -1739,9 +1741,16 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                         const perKgEffective = perKgDiscounted > 0 ? perKgDiscounted : perKgNormal;
                         const kg = unit === "g" ? qty / 1000 : qty;
 
-                        if (perKgNormal > 0) {
-                            const normalPrice = round2(perKgNormal * kg);
-                            const price = round2(perKgEffective * kg);
+                        const originalNormal = parseFloat(row.originalNormalPrice) || 0;
+                        const originalPrice = parseFloat(row.originalPrice) || 0;
+
+                        if (perKgNormal > 0 || perKgEffective > 0) {
+                            const effectivePrice = round2(perKgEffective * kg);
+                            // If item's price is reduced, normalPrice baseline preserves the higher original normal/price so discount is correctly captured
+                            const normalPrice = round2(
+                                Math.max(originalNormal, originalPrice, round2(perKgNormal * kg), effectivePrice)
+                            );
+                            const price = effectivePrice;
                             const discount = round2(Math.max(0, normalPrice - price));
 
                             updatedAlaCartePriceTotal += price;
@@ -1778,14 +1787,22 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
 
                     let finalFullTotal;
                     if (newTotal != null && !isNaN(parseFloat(newTotal))) {
-                        finalFullTotal = round2(Math.max(0, parseFloat(newTotal) - couponValue));
+                        // newTotal received from frontend already has coupon and discounts applied
+                        finalFullTotal = round2(Math.max(0, parseFloat(newTotal)));
                     } else {
                         finalFullTotal = round2(
                             Math.max(0, packagesTotal + updatedAlaCartePriceTotal - couponValue + deliveryCharge),
                         );
                     }
 
-                    const finalDiscount = round2(updatedAlaCarteDiscountTotal);
+                    // Preserve existing package discount from original order
+                    const oldOrderDiscount = parseFloat(matchedOrder.oldOrderDiscount) || 0;
+                    const oldAlaCarteDiscount = allAlaCarteRows.reduce(
+                        (sum, r) => sum + (parseFloat(r.originalDiscount) || 0),
+                        0,
+                    );
+                    const oldPackageDiscount = Math.max(0, oldOrderDiscount - oldAlaCarteDiscount);
+                    const finalDiscount = round2(oldPackageDiscount + updatedAlaCarteDiscountTotal);
                     const finalTotal = round2(finalFullTotal + finalDiscount);
 
                     // 6. Payment info updates
