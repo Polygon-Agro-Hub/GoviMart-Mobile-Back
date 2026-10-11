@@ -1212,21 +1212,21 @@ exports.confirmPackageReviewDao = ({
                         const targetCreditPaid = parseFloat(matchedOrder.creditPaid) || 0;
                         const newMoneyPaid = Math.max(0, netNewTotal - targetCreditPaid);
                         const processRes = await q(
-                            "UPDATE processorders SET amount = ?, moneyPaid = ?, isFinalized = 1 WHERE id = ?",
+                            "UPDATE processorders SET amount = ?, moneyPaid = ?, isFinalized = 1, isConfirmed = 1 WHERE id = ?",
                             [netNewTotal, newMoneyPaid, realProcessOrderId],
                         );
                         console.log(
-                            `[confirmPackageReviewDao] processorders updated (card amount=${netNewTotal}, moneyPaid=${newMoneyPaid}, isFinalized=1):`,
+                            `[confirmPackageReviewDao] processorders updated (card amount=${netNewTotal}, moneyPaid=${newMoneyPaid}, isFinalized=1, isConfirmed=1):`,
                             processRes.affectedRows,
                             "row(s)",
                         );
                     } else {
                         const finalizeRes = await q(
-                            "UPDATE processorders SET isFinalized = 1 WHERE id = ?",
+                            "UPDATE processorders SET isFinalized = 1, isConfirmed = 1 WHERE id = ?",
                             [realProcessOrderId],
                         );
                         console.log(
-                            `[confirmPackageReviewDao] processorders isFinalized set to 1:`,
+                            `[confirmPackageReviewDao] processorders isFinalized/isConfirmed set to 1:`,
                             finalizeRes.affectedRows,
                             "row(s)",
                         );
@@ -1782,14 +1782,14 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                         const newMoneyPaid = Math.max(0, finalFullTotal - targetCreditPaid);
                         await q(
                             `UPDATE processorders
-                             SET amount = ?, moneyPaid = ?, fullTotal = ?, total = ?, discount = ?, isFinalized = 1
+                             SET amount = ?, moneyPaid = ?, fullTotal = ?, total = ?, discount = ?, isFinalized = 1, isConfirmed = 1
                              WHERE id = ?`,
                             [finalFullTotal, newMoneyPaid, finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
                         );
                     } else {
                         await q(
                             `UPDATE processorders
-                             SET fullTotal = ?, total = ?, discount = ?, isFinalized = 1
+                             SET fullTotal = ?, total = ?, discount = ?, isFinalized = 1, isConfirmed = 1
                              WHERE id = ?`,
                             [finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
                         );
