@@ -116,7 +116,7 @@ exports.savePushToken = asyncHandler(async (req, res) => {
  * POST /polygon/api/notification/trigger
  * External Webhook to trigger real-time notifications to GoviMart Customers
  * from Admin Panel, Govi Transport, PayHere, or internal background services.
- * 
+ *
  * Delivers via WebSocket (0 polling) and Firebase/Expo Push.
  */
 exports.triggerNotification = asyncHandler(async (req, res) => {
@@ -178,6 +178,17 @@ exports.triggerNotification = asyncHandler(async (req, res) => {
   const effectiveBody =
     message || (resolvedDetails?.invNo ? `Order #${resolvedDetails.invNo} update` : effectiveTitle);
 
+  // Order state flags so the mobile app can show
+  // "Already Finalized" / "Already Confirmed" correctly.
+  const orderStateFields = {
+    processOrderId: effectiveProcessOrderId,
+    orderId: resolvedDetails?.orderId,
+    invNo: resolvedDetails?.invNo,
+    orderStatus: resolvedDetails?.orderStatus,
+    isFinalized: Number(resolvedDetails?.isFinalized) === 1 ? 1 : 0,
+    isConfirmed: Number(resolvedDetails?.isConfirmed) === 1 ? 1 : 0,
+  };
+
   let notifResult = null;
   if (skipDbInsert) {
     // When the caller (e.g. Govi Transport) already inserted into ordernotfication,
@@ -188,12 +199,12 @@ exports.triggerNotification = asyncHandler(async (req, res) => {
     const { emitNotificationToUser, emitUnreadCountToUser } = require("../socket/socket");
     const payload = {
       id: Date.now(),
-      orderId: effectiveProcessOrderId,
+      ...orderStateFields,
       title: effectiveTitle,
       message: effectiveBody,
+      isRead: 0,
       unreadCount,
       createdAt: new Date().toISOString(),
-      invNo: resolvedDetails?.invNo,
       data: data || {},
     };
     emitNotificationToUser(targetUserId, payload);
@@ -204,7 +215,7 @@ exports.triggerNotification = asyncHandler(async (req, res) => {
       title: effectiveTitle,
       body: effectiveBody,
       data: payload,
-    }).catch(() => {});
+    }).catch(() => { });
 
     notifResult = payload;
   } else if (effectiveProcessOrderId) {
@@ -225,6 +236,9 @@ exports.triggerNotification = asyncHandler(async (req, res) => {
       id: Date.now(),
       title: effectiveTitle,
       message: effectiveBody,
+      isRead: 0,
+      isFinalized: 0,
+      isConfirmed: 0,
       unreadCount: newCount,
       createdAt: new Date().toISOString(),
       data: data || {},
@@ -237,7 +251,7 @@ exports.triggerNotification = asyncHandler(async (req, res) => {
       title: effectiveTitle,
       body: effectiveBody,
       data: payload,
-    }).catch(() => {});
+    }).catch(() => { });
 
     notifResult = payload;
   }
