@@ -1,4 +1,5 @@
 const db = require("../startup/database");
+const { getRemainingPackingTarget } = require("./packing-target.dao");
 
 /**
  * Fetch full package review data for an order or process order.
@@ -221,7 +222,6 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                     const additionalSql = `
                         SELECT 
                             oai.id,
-                            oai.orderId,
                             oai.proOrderId,
                             oai.productId,
                             oai.qty,
@@ -240,7 +240,6 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                         LEFT JOIN marketplaceitems mi ON oai.productId = mi.id
                         LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
                         WHERE oai.proOrderId = ?
-                          OR (oai.proOrderId IS NULL AND oai.orderId = ?)
                     `;
 
                     // 6. User's excludelist for warning badges
@@ -585,8 +584,12 @@ exports.resetPackageItemDao = ({ orderPackageId, userId, replceId, originalBasel
  *  3. Insert / merge newly added ala carte items
  *  4. Lock packages
  *  5. Schedule date
- *  6. Order totals (processorders / orders)
- *  7. Credit top-up
+ *  6. Order totals:
+ *       processorders.amount / moneyPaid (card)  = newTotal - coupon
+ *       orders.fullTotal = newTotal - coupon
+ *       orders.discount  = old discount + change in ala carte discount
+ *       orders.total     = fullTotal + discount
+ *  7. Credit balance (paid orders only): creditBalance += oldFullTotal - newFullTotal
  */
 exports.confirmPackageReviewDao = ({
     orderId,
@@ -690,6 +693,30 @@ exports.confirmPackageReviewDao = ({
                     console.log(
                         `[confirmPackageReviewDao] Resolved ids: orderId=${realOrderId}, processOrderId=${realProcessOrderId}, userId=${targetUserId}`,
                     );
+
+                    // -1b. Snapshot the orders row (locked) + current ala carte discount
+                    //      BEFORE the review changes anything.
+                    const orderRows = await q(
+                        `SELECT total, fullTotal, discount, couponValue, deliveryCharge
+                         FROM orders
+                         WHERE id = ?
+                         FOR UPDATE`,
+                        [realOrderId],
+                    );
+                    if (orderRows.length === 0) {
+                        throw new Error("Order not found. Please reload the review screen and try again.");
+                    }
+                    const orderSnap = orderRows[0];
+
+                    const alacartDiscountSql = `
+                        SELECT COALESCE(SUM(discount), 0) AS totalDiscount
+                        FROM orderadditionalitems
+                        WHERE proOrderId = ?
+                    `;
+                    const beforeDiscRows = await q(alacartDiscountSql, [
+                        realProcessOrderId,
+                    ]);
+                    const oldAlacartDiscount = parseFloat(beforeDiscRows[0]?.totalDiscount) || 0;
 
                     // 0. Resolve orderpackage rows from DB (source of truth)
                     const dbPackages = await q(
@@ -886,8 +913,8 @@ exports.confirmPackageReviewDao = ({
                         if (validDeleteIds.length > 0) {
                             const deleteRes = await q(
                                 `DELETE FROM orderadditionalitems
-                                 WHERE id IN (?) AND (proOrderId = ? OR (proOrderId IS NULL AND orderId = ?))`,
-                                [validDeleteIds, realProcessOrderId, realOrderId],
+                                 WHERE id IN (?) AND proOrderId = ?`,
+                                [validDeleteIds, realProcessOrderId],
                             );
                             console.log(
                                 `[confirmPackageReviewDao] -> Deleted orderadditionalitems:`,
@@ -923,10 +950,10 @@ exports.confirmPackageReviewDao = ({
                                 `SELECT id, productId
                                  FROM orderadditionalitems
                                  WHERE id = ?
-                                   AND (proOrderId = ? OR (proOrderId IS NULL AND orderId = ?))
+                                   AND proOrderId = ?
                                  LIMIT 1
                                  FOR UPDATE`,
-                                [rowId, realProcessOrderId, realOrderId],
+                                [rowId, realProcessOrderId],
                             );
                             if (rows.length === 0) {
                                 console.warn(
@@ -1035,11 +1062,11 @@ exports.confirmPackageReviewDao = ({
                                 `SELECT id, qty, unit, price
                                  FROM orderadditionalitems
                                  WHERE productId = ?
-                                   AND (proOrderId = ? OR (proOrderId IS NULL AND orderId = ?))
+                                   AND proOrderId = ?
                                  ORDER BY id ASC
                                  LIMIT 1
                                  FOR UPDATE`,
-                                [m.productId, realProcessOrderId, realOrderId],
+                                [m.productId, realProcessOrderId],
                             );
 
                             if (existingRows.length > 0) {
@@ -1074,10 +1101,9 @@ exports.confirmPackageReviewDao = ({
                                 }
 
                                 const addRes = await q(
-                                    `INSERT INTO orderadditionalitems (orderId, proOrderId, productId, qty, unit, normalPrice, price, discount)
-                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                                    `INSERT INTO orderadditionalitems (proOrderId, productId, qty, unit, normalPrice, price, discount)
+                                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
                                     [
-                                        realOrderId,
                                         realProcessOrderId,
                                         m.productId,
                                         fromGrams(m.grams, m.unit),
@@ -1091,6 +1117,37 @@ exports.confirmPackageReviewDao = ({
                                     `[confirmPackageReviewDao] -> Inserted new row ID ${addRes.insertId} for product ${m.productId}: normal=${line.normalPrice}, price=${line.price}, discount=${line.discount}`,
                                 );
                             }
+                        }
+                    }
+
+                    // 3c. Recalculate and update ALL existing orderadditionalitems rows for this order
+                    //     using today's marketplaceitems live prices (normalPrice and discountedPrice).
+                    const allAlaCarteRows = await q(
+                        `SELECT oai.id, oai.qty, oai.unit, mi.normalPrice AS perKgNormal, mi.discountedPrice AS perKgDiscounted
+                         FROM orderadditionalitems oai
+                         JOIN marketplaceitems mi ON oai.productId = mi.id
+                         WHERE oai.proOrderId = ? OR oai.proOrderId = ? OR oai.orderId = ? OR oai.orderId = ?`,
+                        [realProcessOrderId, realOrderId, realProcessOrderId, realOrderId],
+                    );
+                    for (const row of allAlaCarteRows) {
+                        const qty = parseFloat(row.qty) || 0;
+                        const unit = String(row.unit || "kg").toLowerCase() === "g" ? "g" : "kg";
+                        const perKgNormal = parseFloat(row.perKgNormal) || 0;
+                        const perKgDiscounted = parseFloat(row.perKgDiscounted) || 0;
+                        const perKgEffective = perKgDiscounted > 0 ? perKgDiscounted : perKgNormal;
+                        const kg = unit === "g" ? qty / 1000 : qty;
+
+                        if (perKgNormal > 0) {
+                            const normalPrice = round2(perKgNormal * kg);
+                            const price = round2(perKgEffective * kg);
+                            const discount = round2(Math.max(0, normalPrice - price));
+
+                            await q(
+                                `UPDATE orderadditionalitems
+                                 SET normalPrice = ?, price = ?, discount = ?
+                                 WHERE id = ?`,
+                                [normalPrice, price, discount, row.id],
+                            );
                         }
                     }
 
@@ -1141,16 +1198,25 @@ exports.confirmPackageReviewDao = ({
                         `[confirmPackageReviewDao] Payment method: "${dbPaymentMethod}" -> isCard: ${isCard}, isDbPaid: ${isDbPaid}, newTotal: ${parsedNewTotal}, additionalAmount: ${parsedAdditional}`,
                     );
 
+                    // Coupon saved at checkout (0 for free-delivery coupons, same as createOrder).
+                    // The app's newTotal = packages + ala carte + delivery with NO coupon,
+                    // so the coupon is subtracted here.
+                    const couponValue = parseFloat(orderSnap.couponValue) || 0;
+                    const netNewTotal =
+                        parsedNewTotal != null
+                            ? round2(Math.max(0, parsedNewTotal - couponValue))
+                            : null;
+
                     // 6a. processorders
-                    if (isCard && parsedNewTotal != null) {
+                    if (isCard && netNewTotal != null) {
                         const targetCreditPaid = parseFloat(matchedOrder.creditPaid) || 0;
-                        const newMoneyPaid = Math.max(0, parsedNewTotal - targetCreditPaid);
+                        const newMoneyPaid = Math.max(0, netNewTotal - targetCreditPaid);
                         const processRes = await q(
                             "UPDATE processorders SET amount = ?, moneyPaid = ?, isFinalized = 1 WHERE id = ?",
-                            [parsedNewTotal, newMoneyPaid, realProcessOrderId],
+                            [netNewTotal, newMoneyPaid, realProcessOrderId],
                         );
                         console.log(
-                            `[confirmPackageReviewDao] processorders updated (card amount=${parsedNewTotal}, moneyPaid=${newMoneyPaid}, isFinalized=1):`,
+                            `[confirmPackageReviewDao] processorders updated (card amount=${netNewTotal}, moneyPaid=${newMoneyPaid}, isFinalized=1):`,
                             processRes.affectedRows,
                             "row(s)",
                         );
@@ -1166,58 +1232,76 @@ exports.confirmPackageReviewDao = ({
                         );
                     }
 
-                    // 6b. orders (total, fullTotal, discount)
-                    if (parsedNewTotal != null) {
-                        const orderRes = await q(
-                            `UPDATE orders
-                             SET total = ?, fullTotal = ?, discount = GREATEST(0, fullTotal - ?)
-                             WHERE id = ?`,
-                            [parsedNewTotal, parsedNewTotal, parsedNewTotal, realOrderId],
-                        );
-                        console.log(
-                            `[confirmPackageReviewDao] orders total/fullTotal updated:`,
-                            orderRes.affectedRows,
-                            "row(s)",
-                        );
+                    // 6b. orders: fullTotal, discount, total
+                    const afterDiscRows = await q(alacartDiscountSql, [
+                        realProcessOrderId,
+                        realOrderId,
+                    ]);
+                    const newAlacartDiscount = parseFloat(afterDiscRows[0]?.totalDiscount) || 0;
+
+                    // Keep whatever the order already had (package discount etc.) and only
+                    // move it by the change in ala carte discount caused by this review.
+                    const oldOrderDiscount = parseFloat(orderSnap.discount) || 0;
+                    const newOrderDiscount = round2(
+                        Math.max(0, oldOrderDiscount + (newAlacartDiscount - oldAlacartDiscount)),
+                    );
+
+                    let newOrderFullTotal = null;
+                    if (netNewTotal != null) {
+                        newOrderFullTotal = netNewTotal;
                     } else if (parsedAdditional > 0) {
-                        const fallRes = await q(
-                            `UPDATE orders
-                             SET total = total + ?, fullTotal = fullTotal + ?,
-                                 discount = GREATEST(0, fullTotal + ? - (total + ?))
-                             WHERE id = ?`,
-                            [parsedAdditional, parsedAdditional, parsedAdditional, parsedAdditional, realOrderId],
+                        newOrderFullTotal = round2(
+                            (parseFloat(orderSnap.fullTotal) || 0) + parsedAdditional,
+                        );
+                    }
+
+                    if (newOrderFullTotal != null) {
+                        // total = fullTotal + discount
+                        const newOrderTotal = round2(newOrderFullTotal + newOrderDiscount);
+                        const orderRes = await q(
+                            "UPDATE orders SET total = ?, fullTotal = ?, discount = ? WHERE id = ?",
+                            [newOrderTotal, newOrderFullTotal, newOrderDiscount, realOrderId],
                         );
                         console.log(
-                            `[confirmPackageReviewDao] orders fallback update:`,
-                            fallRes.affectedRows,
+                            `[confirmPackageReviewDao] orders updated: total=${newOrderTotal}, fullTotal=${newOrderFullTotal}, discount=${newOrderDiscount}, coupon=${couponValue}:`,
+                            orderRes.affectedRows,
                             "row(s)",
                         );
                     }
 
-                    // 7. Credit balance top-up for savings (negative diff)
-                    const parsedCreditToAdd = parseFloat(creditToAdd) || 0;
-                    if (parsedCreditToAdd > 0 && targetUserId) {
-                        const muRows = await q(
-                            "SELECT id, creditBalance FROM marketplaceusers WHERE id = ? LIMIT 1",
+                    // 7. Credit balance adjustment for PAID (card / credit) orders.
+                    //    creditBalance += (oldFullTotal - newFullTotal)
+                    //      total went DOWN -> difference is added to credit balance   (+)
+                    //      total went UP   -> difference is taken from credit balance (-)
+                    //                         (may go negative = customer owes it)
+                    //    Cash orders are not touched: nothing was paid yet.
+                    //    The app's creditToAdd value is no longer used; the DAO works it out
+                    //    from the real orders.fullTotal difference.
+                    const oldOrderFullTotal = parseFloat(orderSnap.fullTotal) || 0;
+                    const fullTotalDiff =
+                        isCard && newOrderFullTotal != null
+                            ? round2(newOrderFullTotal - oldOrderFullTotal)
+                            : 0;
+                    const creditChange = round2(-fullTotalDiff);
+
+                    if (creditChange !== 0 && targetUserId) {
+                        const creditRes = await q(
+                            "UPDATE marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?",
+                            [creditChange, targetUserId],
+                        );
+                        const balRows = await q(
+                            "SELECT creditBalance FROM marketplaceusers WHERE id = ? LIMIT 1",
                             [targetUserId],
                         );
-
-                        if (muRows.length > 0) {
-                            const oldBalance = parseFloat(muRows[0].creditBalance) || 0;
-                            const newBalance = Number((oldBalance + parsedCreditToAdd).toFixed(2));
-                            await q("UPDATE marketplaceusers SET creditBalance = ? WHERE id = ?", [
-                                newBalance,
-                                targetUserId,
-                            ]);
-                            console.log(
-                                `[confirmPackageReviewDao] creditBalance: old=${oldBalance}, added=${parsedCreditToAdd}, new=${newBalance}`,
-                            );
-                        } else {
-                            await q(
-                                "INSERT INTO marketplaceusers (id, creditBalance) VALUES (?, ?) ON DUPLICATE KEY UPDATE creditBalance = creditBalance + ?",
-                                [targetUserId, parsedCreditToAdd, parsedCreditToAdd],
-                            );
-                        }
+                        console.log(
+                            `[confirmPackageReviewDao] creditBalance changed by ${creditChange} (oldFullTotal=${oldOrderFullTotal}, newFullTotal=${newOrderFullTotal}), new balance=${balRows[0]?.creditBalance}:`,
+                            creditRes.affectedRows,
+                            "row(s)",
+                        );
+                    } else {
+                        console.log(
+                            `[confirmPackageReviewDao] creditBalance unchanged (isCard=${isCard}, fullTotalDiff=${fullTotalDiff})`,
+                        );
                     }
 
                     connection.commit((commitErr) => {
@@ -1256,60 +1340,23 @@ exports.confirmPackageReviewDao = ({
 exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
     return new Promise(async (resolve) => {
         try {
-            // 1. Latest target limit
-            const limitSql = `SELECT tarValue FROM packingtargetlimit ORDER BY id DESC LIMIT 1`;
-            const limitRows = await new Promise((res) => {
-                db.collectionofficer.query(limitSql, [], (err, rows) => {
-                    if (err) {
-                        console.warn(
-                            "[getPackingSlotAvailabilityDao] Error querying packingtargetlimit:",
-                            err.message,
-                        );
-                        return res([]);
-                    }
-                    res(rows || []);
+            let dateToUse = targetDate;
+            if (!dateToUse && processOrderId) {
+                const poRows = await new Promise((res) => {
+                    db.collectionofficer.query(
+                        "SELECT sheduleDate FROM processorders WHERE id = ? LIMIT 1",
+                        [processOrderId],
+                        (err, rows) => res(rows || [])
+                    );
                 });
-            });
-
-            const targetLimit =
-                limitRows.length > 0 && limitRows[0].tarValue != null
-                    ? parseInt(limitRows[0].tarValue, 10) || 50
-                    : 50;
-
-            // 2. Accepted orders for the schedule date
-            let countSql = `
-                SELECT COUNT(*) AS acceptedCount 
-                FROM processorders 
-                WHERE (status IS NULL OR status NOT IN ('Cancelled', 'Return', 'Return Received'))
-            `;
-            const countParams = [];
-            if (targetDate) {
-                countSql += ` AND DATE(sheduleDate) = DATE(?)`;
-                countParams.push(targetDate);
-            } else {
-                countSql += ` AND (DATE(sheduleDate) = CURDATE() OR sheduleDate IS NULL)`;
+                if (poRows.length > 0 && poRows[0].sheduleDate) {
+                    dateToUse = poRows[0].sheduleDate;
+                }
             }
 
-            const countRows = await new Promise((res) => {
-                db.collectionofficer.query(countSql, countParams, (err, rows) => {
-                    if (err) {
-                        console.warn(
-                            "[getPackingSlotAvailabilityDao] Error querying accepted orders:",
-                            err.message,
-                        );
-                        return res([]);
-                    }
-                    res(rows || []);
-                });
-            });
+            const targetInfo = await getRemainingPackingTarget(dateToUse);
 
-            const acceptedOrdersCount =
-                countRows.length > 0 && countRows[0].acceptedCount != null
-                    ? parseInt(countRows[0].acceptedCount, 10) || 0
-                    : 0;
-            const availableSlots = Math.max(0, targetLimit - acceptedOrdersCount);
-
-            // 3. Unread reminder notification count
+            // Unread reminder notification count
             let unreadReminderDays = 1;
             if (processOrderId) {
                 const notifSql = `
@@ -1328,15 +1375,22 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 }
             }
 
-            const isLimitReached = availableSlots <= 0 || unreadReminderDays >= 3;
+            const remaining = targetInfo.remaining;
+            const availableSlots = remaining;
+            const isLimitReached = remaining <= 0 || unreadReminderDays >= 3;
 
             resolve({
-                targetLimit,
-                acceptedOrdersCount,
+                targetLimit: targetInfo.packingTargetLimit,
+                acceptedOrdersCount: targetInfo.confirmOrders,
                 availableSlots,
+                remaining,
                 isLimitReached,
                 unreadReminderDays,
-                scheduleDate: targetDate || new Date().toISOString().split("T")[0],
+                scheduleDate: targetInfo.sheduleDate,
+                additionalItems: targetInfo.additionalItems,
+                packageFinalizeImdt: targetInfo.packageFinalizeImdt,
+                packageReview: targetInfo.packageReview,
+                confirmOrders: targetInfo.confirmOrders,
             });
         } catch (err) {
             console.error("[getPackingSlotAvailabilityDao] Error:", err);
@@ -1344,6 +1398,7 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 targetLimit: 50,
                 acceptedOrdersCount: 0,
                 availableSlots: 50,
+                remaining: 50,
                 isLimitReached: false,
                 unreadReminderDays: 1,
                 scheduleDate: targetDate || new Date().toISOString().split("T")[0],
@@ -1352,162 +1407,433 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
     });
 };
 
-/**
- * Cancel an order / process order and convert paid balance to credit balance in marketplaceusers.
- */
-exports.cancelOrderDao = ({ orderId, processOrderId, userId }) => {
-    return new Promise((resolve, reject) => {
-        if ((!orderId && !processOrderId) || !userId) {
-            return reject(new Error("orderId or processOrderId and userId are required"));
+exports.getRemainingPackingTarget = getRemainingPackingTarget;
+
+
+exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
+    if ((!orderId && !processOrderId) || !userId) {
+        throw new Error("orderId or processOrderId and userId are required");
+    }
+
+    const pool = db.collectionofficer;
+
+    // Promise helpers
+    const poolQuery = (sql, params) =>
+        new Promise((res, rej) =>
+            pool.query(sql, params, (e, r) => (e ? rej(e) : res(r))),
+        );
+    const getConnection = () =>
+        new Promise((res, rej) =>
+            pool.getConnection((e, c) => (e ? rej(e) : res(c))),
+        );
+    const run = (conn, sql, params) =>
+        new Promise((res, rej) =>
+            conn.query(sql, params, (e, r) => (e ? rej(e) : res(r))),
+        );
+    const begin = (conn) =>
+        new Promise((res, rej) => conn.beginTransaction((e) => (e ? rej(e) : res())));
+    const commit = (conn) =>
+        new Promise((res, rej) => conn.commit((e) => (e ? rej(e) : res())));
+    const rollback = (conn) =>
+        new Promise((res) => conn.rollback(() => res()));
+
+    /* ------------------------------------------------------------
+       0. Find the process order + verify ownership (read-only)
+    ------------------------------------------------------------ */
+    const findSql = `
+        SELECT
+            po.id AS processOrderId,
+            po.orderId AS actualOrderId,
+            po.invNo
+        FROM processorders po
+        INNER JOIN orders o ON po.orderId = o.id
+        WHERE (po.id = ? OR o.id = ?) AND o.userId = ?
+        ORDER BY po.id DESC
+        LIMIT 1
+    `;
+    const searchId = processOrderId || orderId;
+    const found = await poolQuery(findSql, [searchId, searchId, userId]);
+
+    if (!found || found.length === 0) {
+        throw new Error(
+            "Order not found or you do not have permission to cancel this order",
+        );
+    }
+
+    const pOrderId = found[0].processOrderId;
+    const actualOrderId = found[0].actualOrderId;
+    const invNo = found[0].invNo;
+
+    /* ------------------------------------------------------------
+       Transaction
+    ------------------------------------------------------------ */
+    const connection = await getConnection();
+
+    try {
+        await begin(connection);
+
+        // 1. Lock the row and read the CURRENT values inside the transaction
+        const lockedRows = await run(
+            connection,
+            `SELECT amount, creditPaid, moneyPaid, paymentMethod, isPaid, status
+             FROM processorders
+             WHERE id = ?
+             FOR UPDATE`,
+            [pOrderId],
+        );
+
+        if (!lockedRows || lockedRows.length === 0) {
+            throw new Error("Order not found");
         }
 
-        const findSql = `
-            SELECT 
-                po.id AS processOrderId,
-                po.orderId AS actualOrderId,
-                po.invNo,
-                po.amount,
-                po.creditPaid,
-                po.moneyPaid,
-                po.paymentMethod,
-                po.isPaid,
-                po.status,
-                o.userId
-            FROM processorders po
-            INNER JOIN orders o ON po.orderId = o.id
-            WHERE (po.id = ? OR o.id = ?) AND o.userId = ?
-            ORDER BY po.id DESC
-            LIMIT 1
-        `;
+        const order = lockedRows[0];
 
-        const searchId = processOrderId || orderId;
+        const currentStatus = order.status ? order.status.trim().toLowerCase() : "";
+        if (currentStatus === "cancelled") {
+            throw new Error("Order is already cancelled");
+        }
+        if (currentStatus === "delivered" || currentStatus === "picked up") {
+            throw new Error("Completed order cannot be cancelled");
+        }
 
-        db.collectionofficer.query(findSql, [searchId, searchId, userId], async (err, rows) => {
-            if (err) return reject(err);
-            if (!rows || rows.length === 0) {
-                return reject(
-                    new Error("Order not found or you do not have permission to cancel this order"),
+        // 2. Work out the refundable credit from the locked (original) values
+        const pMethod = (order.paymentMethod || "").trim().toLowerCase();
+        const rawAmount = parseFloat(order.amount) || 0;
+        const rawCreditPaid = parseFloat(order.creditPaid) || 0;
+        const rawMoneyPaid = parseFloat(order.moneyPaid) || 0;
+        const isPaid = parseInt(order.isPaid, 10) === 1;
+
+        let refundCreditAmount = 0;
+        if (pMethod === "card" || pMethod === "payhere" || (isPaid && pMethod !== "cash")) {
+            // Card / online: full amount refunded as credit
+            refundCreditAmount = rawAmount > 0 ? rawAmount : rawMoneyPaid + rawCreditPaid;
+        } else if (pMethod === "credit") {
+            // 100% paid by credit balance
+            refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : rawAmount;
+        } else {
+            // Cash: refund only the credit used at checkout
+            refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : 0;
+        }
+
+        // 3. Mark as Cancelled AND reset the payment columns
+        const cancelResult = await run(
+            connection,
+            `UPDATE processorders
+             SET status = 'Cancelled',
+                 isPaid = 0,
+                 amount = 0,
+                 creditPaid = 0,
+                 moneyPaid = 0
+             WHERE id = ?
+               AND LOWER(TRIM(status)) <> 'cancelled'`,
+            [pOrderId],
+        );
+
+        if (cancelResult.affectedRows === 0) {
+            throw new Error("Order is already cancelled");
+        }
+
+        // 4. Refund to marketplaceusers.creditBalance
+        let newCreditBalance = null;
+        if (refundCreditAmount > 0) {
+            await run(
+                connection,
+                "UPDATE marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?",
+                [refundCreditAmount, userId],
+            );
+
+            const creditRows = await run(
+                connection,
+                "SELECT creditBalance FROM marketplaceusers WHERE id = ?",
+                [userId],
+            );
+            if (creditRows && creditRows.length > 0) {
+                newCreditBalance = parseFloat(creditRows[0].creditBalance || 0);
+            }
+        }
+
+        // 5. Notifications (failures are logged but don't block the cancel)
+        const invNoDisplay = invNo || `ORD-${actualOrderId}`;
+        const notifMsg = `Your order #${invNoDisplay} has been cancelled successfully.`;
+
+        try {
+            await run(
+                connection,
+                `INSERT INTO ordernotfication (orderId, Title, message, isRead, createdAt)
+                 VALUES (?, 'Order Cancelled', ?, 0, NOW())`,
+                [pOrderId, notifMsg],
+            );
+        } catch (notifErr) {
+            console.error("Error inserting ordernotfication on cancel:", notifErr);
+        }
+
+        try {
+            const updateDashResult = await run(
+                connection,
+                `UPDATE dashnotification
+                 SET title = 'Order is Cancelled', readStatus = 0, createdAt = NOW()
+                 WHERE orderId = ?`,
+                [pOrderId],
+            );
+
+            if (!updateDashResult || updateDashResult.affectedRows === 0) {
+                await run(
+                    connection,
+                    `INSERT INTO dashnotification (orderId, title, readStatus, createdAt)
+                     VALUES (?, 'Order is Cancelled', 0, NOW())`,
+                    [pOrderId],
                 );
             }
+        } catch (dashErr) {
+            console.error("Error updating dashnotification on cancel:", dashErr);
+        }
 
-            const order = rows[0];
-            const currentStatus = order.status ? order.status.trim().toLowerCase() : "";
-            if (currentStatus === "cancelled") {
-                return reject(new Error("Order is already cancelled"));
+        await commit(connection);
+
+        // Trigger Sales Dash real-time notification to Sales Agent
+        try {
+            const salesdashNotificationService = require("../services/salesdash-notification-service");
+            if (typeof salesdashNotificationService?.notifySalesDashOrderCancelled === "function") {
+                salesdashNotificationService.notifySalesDashOrderCancelled(pOrderId, invNoDisplay).catch((err) => {
+                    console.warn("⚠️ [CancelOrder] SalesDash notification error:", err?.message);
+                });
             }
-            if (currentStatus === "delivered" || currentStatus === "picked up") {
-                return reject(new Error("Completed order cannot be cancelled"));
+        } catch (sdErr) {
+            console.warn("⚠️ [CancelOrder] SalesDash notification setup error:", sdErr?.message);
+        }
+
+        // Trigger Polygon Customer App background Push Notification (Expo/FCM) & Socket.IO
+        try {
+            const polygonNotificationService = require("../services/polygon-notification-service");
+            if (typeof polygonNotificationService?.notifyPolygonOrderCancelled === "function") {
+                polygonNotificationService.notifyPolygonOrderCancelled(pOrderId, invNoDisplay, userId).catch((err) => {
+                    console.warn("⚠️ [CancelOrder] Polygon customer background notification error:", err?.message);
+                });
             }
+        } catch (polyErr) {
+            console.warn("⚠️ [CancelOrder] Polygon customer notification setup error:", polyErr?.message);
+        }
 
-            const pOrderId = order.processOrderId;
-            const pMethod = (order.paymentMethod || "").trim().toLowerCase();
-            const rawAmount = parseFloat(order.amount) || 0;
-            const rawCreditPaid = parseFloat(order.creditPaid) || 0;
-            const rawMoneyPaid = parseFloat(order.moneyPaid) || 0;
-            const isPaid = parseInt(order.isPaid, 10) === 1;
+        return {
+            success: true,
+            orderId: actualOrderId,
+            processOrderId: pOrderId,
+            invoiceNo: invNo,
+            status: "Cancelled",
+            refundCreditAmount,
+            newCreditBalance,
+            message:
+                refundCreditAmount > 0
+                    ? `Order cancelled. Rs. ${refundCreditAmount.toFixed(2)} added to your credit balance.`
+                    : "Order cancelled successfully.",
+        };
+    } catch (err) {
+        await rollback(connection);
+        throw err;
+    } finally {
+        connection.release();
+    }
+};
 
-            // Refundable credit amount
-            let refundCreditAmount = 0;
-            if (pMethod === "card" || pMethod === "payhere" || (isPaid && pMethod !== "cash")) {
-                // Card / online: full amount refunded as credit
-                refundCreditAmount = rawAmount > 0 ? rawAmount : rawMoneyPaid + rawCreditPaid;
-            } else if (pMethod === "credit") {
-                // 100% paid by credit balance
-                refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : rawAmount;
-            } else {
-                // Cash: refund only credit used at checkout
-                refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : 0;
-            }
+/**
+ * Separate route function: confirm order with live marketplace prices.
+ * Recalculates and updates:
+ *   - orderadditionalitems (normalPrice, price, discount) using today's marketplaceitems prices
+ *   - processorders (fullTotal, total, discount, amount, moneyPaid if card)
+ *   - orders (fullTotal, total, discount)
+ *   - orderpackage (packingStatus = 'Dispatch', isLock = 1)
+ */
+exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newTotal = null }) => {
+    return new Promise((resolve, reject) => {
+        db.collectionofficer.getConnection((connErr, connection) => {
+            if (connErr) return reject(connErr);
 
-            db.collectionofficer.getConnection(async (connErr, connection) => {
-                if (connErr) return reject(connErr);
+            const q = (sql, params = []) =>
+                new Promise((res, rej) =>
+                    connection.query(sql, params, (e, r) => (e ? rej(e) : res(r || []))),
+                );
+
+            const round2 = (n) => Number((Number(n) || 0).toFixed(2));
+
+            connection.beginTransaction(async (txErr) => {
+                if (txErr) {
+                    connection.release();
+                    return reject(txErr);
+                }
 
                 try {
-                    await new Promise((res, rej) =>
-                        connection.beginTransaction((e) => (e ? rej(e) : res())),
+                    // 1. Resolve order and processorder
+                    const idSql = `
+                        SELECT
+                            po.id AS processOrderId,
+                            po.orderId AS actualOrderId,
+                            po.paymentMethod,
+                            po.isPaid,
+                            po.amount,
+                            po.moneyPaid,
+                            po.creditPaid,
+                            po.couponValue,
+                            po.isCoupon,
+                            o.userId,
+                            o.deliveryCharge,
+                            o.discount AS oldOrderDiscount,
+                            o.fullTotal AS oldOrderFullTotal
+                        FROM processorders po
+                        INNER JOIN orders o ON po.orderId = o.id
+                        WHERE (po.id = ? OR o.id = ?) AND o.userId = ?
+                        ORDER BY po.id DESC
+                        LIMIT 1
+                    `;
+                    const idRows = await q(idSql, [processOrderId || orderId, processOrderId || orderId, userId]);
+                    if (idRows.length === 0) {
+                        throw new Error("Order not found.");
+                    }
+                    const matchedOrder = idRows[0];
+                    const realProcessOrderId = matchedOrder.processOrderId;
+                    const realOrderId = matchedOrder.actualOrderId;
+                    const targetUserId = matchedOrder.userId || userId;
+
+                    // 2. Recalculate and update ALL existing orderadditionalitems rows for this order
+                    //    using today's marketplaceitems live prices (normalPrice and discountedPrice).
+                    const allAlaCarteRows = await q(
+                        `SELECT oai.id, oai.qty, oai.unit, mi.normalPrice AS perKgNormal, mi.discountedPrice AS perKgDiscounted
+                         FROM orderadditionalitems oai
+                         JOIN marketplaceitems mi ON oai.productId = mi.id
+                         WHERE oai.proOrderId = ? OR oai.proOrderId = ? OR oai.orderId = ? OR oai.orderId = ?`,
+                        [realProcessOrderId, realOrderId, realProcessOrderId, realOrderId],
                     );
 
-                    // 1. Mark processorders as Cancelled
-                    await new Promise((res, rej) => {
-                        connection.query(
-                            "UPDATE processorders SET status = 'Cancelled' WHERE id = ?",
-                            [pOrderId],
-                            (e, r) => (e ? rej(e) : res(r)),
-                        );
-                    });
+                    let updatedAlaCartePriceTotal = 0;
+                    let updatedAlaCarteDiscountTotal = 0;
 
-                    // 2. Refund to marketplaceusers.creditBalance
-                    let newCreditBalance = null;
-                    if (refundCreditAmount > 0) {
-                        await new Promise((res, rej) => {
-                            connection.query(
-                                "UPDATE marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?",
-                                [refundCreditAmount, userId],
-                                (e, r) => (e ? rej(e) : res(r)),
-                            );
-                        });
+                    for (const row of allAlaCarteRows) {
+                        const qty = parseFloat(row.qty) || 0;
+                        const unit = String(row.unit || "kg").toLowerCase() === "g" ? "g" : "kg";
+                        const perKgNormal = parseFloat(row.perKgNormal) || 0;
+                        const perKgDiscounted = parseFloat(row.perKgDiscounted) || 0;
+                        const perKgEffective = perKgDiscounted > 0 ? perKgDiscounted : perKgNormal;
+                        const kg = unit === "g" ? qty / 1000 : qty;
 
-                        const creditRows = await new Promise((res, rej) => {
-                            connection.query(
-                                "SELECT creditBalance FROM marketplaceusers WHERE id = ?",
-                                [userId],
-                                (e, r) => (e ? rej(e) : res(r)),
+                        if (perKgNormal > 0) {
+                            const normalPrice = round2(perKgNormal * kg);
+                            const price = round2(perKgEffective * kg);
+                            const discount = round2(Math.max(0, normalPrice - price));
+
+                            updatedAlaCartePriceTotal += price;
+                            updatedAlaCarteDiscountTotal += discount;
+
+                            await q(
+                                `UPDATE orderadditionalitems
+                                 SET normalPrice = ?, price = ?, discount = ?
+                                 WHERE id = ?`,
+                                [normalPrice, price, discount, row.id],
                             );
-                        });
-                        if (creditRows && creditRows.length > 0) {
-                            newCreditBalance = parseFloat(creditRows[0].creditBalance || 0);
                         }
                     }
 
-                    // 3. Notifications (ordernotfication + dashnotification)
-                    const invNoDisplay = order.invNo || `ORD-${order.actualOrderId}`;
-                    const notifMsg = `Your order #${invNoDisplay} has been cancelled successfully.`;
+                    // 3. Lock all packages of this order
+                    await q(
+                        "UPDATE orderpackage SET packingStatus = 'Dispatch', isLock = 1 WHERE orderId = ? OR orderId = ?",
+                        [realProcessOrderId, realOrderId],
+                    );
 
-                    await new Promise((res) => {
-                        connection.query(
-                            `INSERT INTO ordernotfication (orderId, Title, message, isRead, createdAt)
-                             VALUES (?, 'Order Cancelled', ?, 0, NOW())`,
-                            [pOrderId, notifMsg],
-                            (notifErr) => {
-                                if (notifErr)
-                                    console.error("Error inserting ordernotfication on cancel:", notifErr);
-                                res();
-                            },
+                    // 4. Calculate packages total
+                    const pkgRows = await q(
+                        `SELECT COALESCE(SUM((mp.productPrice + mp.packingFee + mp.serviceFee) * op.qty), 0) AS packageTotal
+                         FROM orderpackage op
+                         JOIN marketplacepackages mp ON op.packageId = mp.id
+                         WHERE op.orderId = ? OR op.orderId = ?`,
+                        [realProcessOrderId, realOrderId],
+                    );
+                    const packagesTotal = parseFloat(pkgRows[0]?.packageTotal) || 0;
+
+                    // 5. Calculate new fullTotal, discount, and total
+                    const couponValue = parseFloat(matchedOrder.couponValue) || 0;
+                    const deliveryCharge = parseFloat(matchedOrder.deliveryCharge) || 0;
+
+                    let finalFullTotal;
+                    if (newTotal != null && !isNaN(parseFloat(newTotal))) {
+                        finalFullTotal = round2(Math.max(0, parseFloat(newTotal) - couponValue));
+                    } else {
+                        finalFullTotal = round2(
+                            Math.max(0, packagesTotal + updatedAlaCartePriceTotal - couponValue + deliveryCharge),
                         );
-                    });
+                    }
 
-                    await new Promise((res) => {
-                        connection.query(
-                            `INSERT INTO dashnotification (orderId, title, readStatus, createdAt)
-                             VALUES (?, 'Order is Cancelled', 0, NOW())`,
-                            [pOrderId],
-                            (dashErr) => {
-                                if (dashErr)
-                                    console.error("Error inserting dashnotification on cancel:", dashErr);
-                                res();
-                            },
+                    const finalDiscount = round2(updatedAlaCarteDiscountTotal);
+                    const finalTotal = round2(finalFullTotal + finalDiscount);
+
+                    // 6. Payment info updates
+                    const dbPaymentMethod = (matchedOrder.paymentMethod || "").trim().toLowerCase();
+                    const isDbPaid =
+                        matchedOrder.isPaid === 1 ||
+                        matchedOrder.isPaid === true ||
+                        String(matchedOrder.isPaid) === "1";
+                    const isCard =
+                        dbPaymentMethod.includes("card") ||
+                        dbPaymentMethod.includes("payhere") ||
+                        dbPaymentMethod.includes("online") ||
+                        (isDbPaid &&
+                            !dbPaymentMethod.includes("cash") &&
+                            !dbPaymentMethod.includes("cod"));
+
+                    if (isCard) {
+                        const targetCreditPaid = parseFloat(matchedOrder.creditPaid) || 0;
+                        const newMoneyPaid = Math.max(0, finalFullTotal - targetCreditPaid);
+                        await q(
+                            `UPDATE processorders
+                             SET amount = ?, moneyPaid = ?, fullTotal = ?, total = ?, discount = ?, isFinalized = 1
+                             WHERE id = ?`,
+                            [finalFullTotal, newMoneyPaid, finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
                         );
-                    });
+                    } else {
+                        await q(
+                            `UPDATE processorders
+                             SET fullTotal = ?, total = ?, discount = ?, isFinalized = 1
+                             WHERE id = ?`,
+                            [finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
+                        );
+                    }
 
-                    await new Promise((res, rej) => connection.commit((e) => (e ? rej(e) : res())));
-                    connection.release();
+                    // 7. Update orders table
+                    await q(
+                        "UPDATE orders SET total = ?, fullTotal = ?, discount = ? WHERE id = ?",
+                        [finalTotal, finalFullTotal, finalDiscount, realOrderId],
+                    );
 
-                    resolve({
-                        success: true,
-                        orderId: order.actualOrderId,
-                        processOrderId: pOrderId,
-                        invoiceNo: order.invNo,
-                        status: "Cancelled",
-                        refundCreditAmount,
-                        newCreditBalance,
-                        message:
-                            refundCreditAmount > 0
-                                ? `Order cancelled. Rs. ${refundCreditAmount.toFixed(2)} added to your credit balance.`
-                                : "Order cancelled successfully.",
+                    // 8. Credit balance adjustment for paid orders if total changed
+                    const oldOrderFullTotal = parseFloat(matchedOrder.oldOrderFullTotal) || 0;
+                    const fullTotalDiff = isCard ? round2(finalFullTotal - oldOrderFullTotal) : 0;
+                    const creditChange = round2(-fullTotalDiff);
+
+                    if (creditChange !== 0 && targetUserId) {
+                        await q(
+                            "UPDATE marketplaceusers SET creditBalance = creditBalance + ? WHERE id = ?",
+                            [creditChange, targetUserId],
+                        );
+                    }
+
+                    connection.commit((commitErr) => {
+                        if (commitErr) {
+                            return connection.rollback(() => {
+                                connection.release();
+                                reject(commitErr);
+                            });
+                        }
+                        connection.release();
+                        resolve({
+                            status: true,
+                            message: "Order confirmed and marketplace prices updated successfully",
+                            fullTotal: finalFullTotal,
+                            total: finalTotal,
+                            discount: finalDiscount,
+                        });
                     });
-                } catch (txErr) {
-                    connection.rollback(() => connection.release());
-                    reject(txErr);
+                } catch (err) {
+                    connection.rollback(() => {
+                        connection.release();
+                        reject(err);
+                    });
                 }
             });
         });

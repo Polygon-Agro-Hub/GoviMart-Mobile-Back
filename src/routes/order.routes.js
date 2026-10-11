@@ -10,6 +10,7 @@ router.get("/package/review/:orderId", authMiddleware, packageReviewEp.getOrderP
 router.post("/package/replace-item", authMiddleware, packageReviewEp.replacePackageItem);
 router.post("/package/reset-item", authMiddleware, packageReviewEp.resetPackageItem);
 router.post("/package/confirm-review", authMiddleware, packageReviewEp.confirmPackageReview);
+router.post("/confirm-order", authMiddleware, packageReviewEp.confirmOrderWithLivePrices);
 router.post("/package/cancel-order", authMiddleware, packageReviewEp.cancelPackageOrder);
 
 router.get("/order-history", authMiddleware, orderEp.getRetailOrderHistory);

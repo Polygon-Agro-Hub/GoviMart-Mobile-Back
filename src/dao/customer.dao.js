@@ -7,6 +7,16 @@ exports.getCustomerProfileDao = async (userId) => {
   return results;
 };
 
+/**
+ * Looks up a marketplace user by email address.
+ * Used by the Payments.lk card.saved webhook to resolve customerEmail → userId.
+ */
+exports.getCustomerByEmailDao = async (email) => {
+  const query = "SELECT id FROM marketplaceusers WHERE email = ? LIMIT 1";
+  const [results] = await db.collectionofficer.promise().query(query, [email]);
+  return results[0] || null;
+};
+
 exports.getSuggestionsDao = async () => {
   const query = `
     SELECT DISTINCT 
@@ -790,11 +800,15 @@ exports.updateUserPhoneDao = async (userId, phoneCode, phoneNumber) => {
   return result;
 };
 
-// Update user credit balance (clear balance or adjust)
+// Update user credit balance (clear negative balance or adjust)
 exports.updateCreditBalanceDao = async (userId, creditBalance) => {
+  // Settle negative credit balance cleanly to 0.00 without overshooting into positive credit on duplicate calls
   const query = `
     UPDATE marketplaceusers
-    SET creditBalance = creditBalance + ?
+    SET creditBalance = CASE 
+      WHEN creditBalance < 0 THEN LEAST(0.00, creditBalance + ?)
+      ELSE creditBalance 
+    END
     WHERE id = ?
   `;
   const [result] = await db.collectionofficer.promise().query(query, [creditBalance, userId]);

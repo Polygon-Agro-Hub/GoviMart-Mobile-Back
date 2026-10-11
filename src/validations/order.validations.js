@@ -16,6 +16,8 @@ exports.createOrderSchema = Joi.object({
     deliveryCharge: Joi.number().min(0).default(0),
     creditPaid: Joi.number().min(0).default(0),
     moneyPaid: Joi.number().min(0).default(0),
+    isPaid: Joi.number().valid(0, 1).optional(),
+    amount: Joi.number().min(0).optional(),
     isFinalizeImdt: Joi.number().valid(0, 1).default(0),
     checkoutDetails: Joi.object({
         deliveryMethod: Joi.string().valid('home', 'pickup').required(),

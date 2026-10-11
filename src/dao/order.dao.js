@@ -89,10 +89,6 @@ exports.getCartItemsForOrderDao = (cartId) => {
     });
 };
 
-/**
- * Insert a new row into `orders` within an open transaction.
- * For pickup orders, resolves assignCoMCenId from distributedcompanycenter.
- */
 exports.createOrderWithTransactionDao = (connection, orderData) => {
     return new Promise((resolve, reject) => {
         const {
@@ -109,7 +105,7 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
             isCoupon,
             couponValue,
             couponType,
-            total,
+            total, // ignored: total is recalculated below as fullTotal + discount
             fullTotal,
             discount,
             sheduleType,
@@ -126,6 +122,11 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
             deliveryCharge,
             isFinalizeImdt,
         } = orderData;
+
+        // ── orders.total = fullTotal + discount ───────────────────────────────
+        const parsedFullTotal = parseFloat(fullTotal) || 0;
+        const parsedDiscount = parseFloat(discount) || 0;
+        const orderTotal = parseFloat((parsedFullTotal + parsedDiscount).toFixed(2));
 
         const formatMethod = (m) => {
             if (!m) return m;
@@ -169,10 +170,9 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
                 INSERT INTO orders (
                     userId, orderApp, delivaryMethod, centerId, buildingType,
                     title, fullName, phonecode1, phone1, phonecode2, phone2,
-                    isCoupon, couponType, couponValue, total, fullTotal, discount,
-                    deliveryCharge, sheduleType, validityPeriod, selectedDays, sheduleTime,
+                    sheduleType, validityPeriod, selectedDays, sheduleTime,
                     isPackage, isFinalizeImdt, latitude, longitude, assignCoMCenId
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             const values = [
                 userId,
@@ -186,13 +186,6 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
                 phone1,
                 phonecode2 || null,
                 phone2 || null,
-                isCoupon ? 1 : 0,
-                isCoupon ? couponType || null : null,
-                parseFloat(couponValue) || 0,
-                total,
-                fullTotal,
-                discount,
-                parseFloat(deliveryCharge) || 0,
                 normalizedScheduleType,
                 parsedValidityPeriod,
                 parsedSelectedDays,
@@ -311,6 +304,13 @@ exports.createProcessOrderWithTransactionDao = (
             moneyPaid,
             status,
             sheduleDate,
+            isCoupon = 0,
+            couponType = null,
+            couponValue = 0.0,
+            total = null,
+            fullTotal = null,
+            discount = null,
+            deliveryCharge = null,
         } = processOrderData;
 
         const formatMethod = (m) => {
@@ -371,20 +371,29 @@ exports.createProcessOrderWithTransactionDao = (
                             let finalMoneyPaid = 0; // only set for full card-only payment
                             let finalCreditPaid = rawCreditPaid;
 
-                            if (
-                                normalized === "card" ||
-                                normalized === "payhere" ||
-                                normalized === "credit" ||
-                                (rawCreditPaid > 0 &&
-                                    rawAmount > 0 &&
-                                    rawCreditPaid >= rawAmount)
-                            ) {
-                                // Card payment (with or without credit balance, or 100% credit balance)
+                            const is100PercentCredit = rawCreditPaid > 0 && rawAmount > 0 && rawCreditPaid >= rawAmount;
+                            const isCardMethod = normalized === "card" || normalized === "payhere" || normalized === "credit";
+
+                            if (is100PercentCredit) {
                                 finalMethod = "Card";
                                 finalIsPaid = 1;
-                                finalAmount = rawAmount; // grandTotal
-                                finalCreditPaid = rawCreditPaid; // credit used (may be 0)
-                                finalMoneyPaid = Math.max(0, rawAmount - rawCreditPaid); // grandTotal - creditUsed (0 if 100% credit)
+                                finalAmount = rawAmount;
+                                finalCreditPaid = rawCreditPaid;
+                                finalMoneyPaid = 0;
+                            } else if (isCardMethod) {
+                                finalMethod = "Card";
+                                if (Number(isPaid) === 1 && rawMoneyPaid > 0) {
+                                    finalIsPaid = 1;
+                                    finalAmount = rawAmount;
+                                    finalCreditPaid = rawCreditPaid;
+                                    finalMoneyPaid = rawMoneyPaid;
+                                } else {
+                                    // Not earliest date / payment postponed to delivery date
+                                    finalIsPaid = 0;
+                                    finalAmount = 0.0;
+                                    finalCreditPaid = rawCreditPaid;
+                                    finalMoneyPaid = 0.0;
+                                }
                             } else {
                                 // Cash (with or without partial credit)
                                 finalMethod = "Cash";
@@ -396,8 +405,9 @@ exports.createProcessOrderWithTransactionDao = (
                             const sql = `
                             INSERT INTO processorders (
                                 orderId, invNo, transactionId, paymentMethod,
-                                isPaid, amount, creditPaid, moneyPaid, status, reportStatus, qrCode, sheduleDate
-                            ) VALUES (?, @new_inv_no, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                isPaid, amount, creditPaid, moneyPaid, status, reportStatus, qrCode, sheduleDate,
+                                isCoupon, couponType, couponValue, total, fullTotal, discount, deliveryCharge
+                            ) VALUES (?, @new_inv_no, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         `;
                             const values = [
                                 orderId,
@@ -411,6 +421,13 @@ exports.createProcessOrderWithTransactionDao = (
                                 null,
                                 qrCodeUrl,
                                 sheduleDate ? new Date(sheduleDate) : null,
+                                isCoupon ? 1 : 0,
+                                isCoupon ? couponType || null : null,
+                                parseFloat(couponValue) || 0,
+                                total !== null ? parseFloat(total) : null,
+                                fullTotal !== null ? parseFloat(fullTotal) : null,
+                                discount !== null ? parseFloat(discount) : null,
+                                deliveryCharge !== null ? parseFloat(deliveryCharge) : null,
                             ];
 
                             connection.query(sql, values, (err3, insertResult) => {
@@ -524,13 +541,12 @@ exports.saveOrderAdditionalItemWithTransactionDao = (
             calcPrice = calcNormal - calcDiscount;
 
             const sql = `
-                INSERT INTO orderadditionalitems (orderId, proOrderId, productId, qty, unit, normalPrice, price, discount)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO orderadditionalitems (proOrderId, productId, qty, unit, normalPrice, price, discount)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             `;
             connection.query(
                 sql,
                 [
-                    orderId,
                     proOrderId || null,
                     productId,
                     qty,
@@ -663,10 +679,11 @@ exports.getRetailOrderHistoryDao = async (userId) => {
         o.createdAt AS createdAt,
         o.sheduleTime AS scheduleTime,
         o.delivaryMethod AS delivaryMethod,
-        o.discount AS orderDiscount,
-        o.fulltotal AS fullTotal,
+        COALESCE(po.discount, o.discount) AS orderDiscount,
+        COALESCE(po.fullTotal, o.fulltotal) AS fullTotal,
         po.invNo AS invoiceNo,
-        po.status AS processStatus
+        po.status AS processStatus,
+        po.isFinalized
       FROM orders o
       LEFT JOIN (
         SELECT *
@@ -698,7 +715,7 @@ exports.getRetailOrderHistoryDao = async (userId) => {
         oai.discount AS itemDiscount
       FROM orderadditionalitems oai
       JOIN marketplaceitems mi ON oai.productId = mi.id
-      WHERE oai.orderId = ?
+      WHERE oai.proOrderId = ?
     `;
 
         db.collectionofficer.query(orderQuery, [userId], async (err, orders) => {
@@ -778,6 +795,13 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
         p.packTime,
         p.outDlvrDate,
         p.deliveredTime,
+        p.isCoupon AS isCoupon,
+        p.couponType AS couponType,
+        p.couponValue AS couponValue,
+        p.total AS total,
+        p.fullTotal AS fullTotal,
+        p.discount AS discount,
+        p.deliveryCharge AS deliveryCharge,
         ohf.fee AS returnHandlingFee,
         dro.note AS returnNote,
         rr.rsnEnglish AS returnReason,
@@ -1165,17 +1189,19 @@ exports.getOrderAdditionalItemsDao = async (orderId) => {
                 oai.productId,
                 mi.varietyId,
                 cv.id as cropVarietyId,
-                cv.cropGroupId
+                cv.cropGroupId,
+                mi.normalPrice AS marketNormalPrice,
+                mi.discountedPrice AS marketDiscountedPrice
               FROM orderadditionalitems oai
               JOIN marketplaceitems mi ON oai.productId = mi.id
               LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-              WHERE oai.orderId = ? OR oai.proOrderId = ?
+              WHERE oai.proOrderId = ?
               ORDER BY oai.id
             `;
 
                 db.collectionofficer.query(
                     sql,
-                    [actualOrderId, processOrderId],
+                    [processOrderId || actualOrderId],
                     (err2, results) => {
                         if (err2) {
                             return reject(new Error("Database error: " + err2.message));
@@ -1419,15 +1445,15 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                 o.id AS actualOrderId,
                 o.centerId,
                 o.delivaryMethod AS deliveryMethod,
-                o.discount AS orderDiscount,
+                COALESCE(po.discount, 0) AS orderDiscount,
                 o.createdAt AS invoiceDate,
                 po.sheduleDate AS scheduledDate,
                 o.buildingType,
-                o.fullTotal AS fullTotal,
-                o.isCoupon,
-                o.couponValue,
-                o.couponType,
-                o.deliveryCharge,
+                po.fullTotal AS fullTotal,
+                po.isCoupon AS isCoupon,
+                po.couponValue AS couponValue,
+                po.couponType AS couponType,
+                po.deliveryCharge AS deliveryCharge,
                 po.id AS processOrderId,
                 po.invNo AS invoiceNumber,
                 po.paymentMethod AS paymentMethod,
@@ -1439,7 +1465,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
             FROM processorders po
             INNER JOIN orders o ON po.orderId = o.id
             WHERE (po.id = ? OR o.id = ?) AND o.userId = ?
-            ORDER BY po.id DESC
+            ORDER BY po.id ASC
             LIMIT 1
         `;
 
@@ -1484,7 +1510,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                 FROM orderadditionalitems oai
                 JOIN marketplaceitems mi ON oai.productId = mi.id
                 LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-                WHERE oai.orderId = ?
+                WHERE oai.proOrderId = ?
             `;
 
                 const billingQuery = `
@@ -1521,7 +1547,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                     new Promise((res, rej) => {
                         db.collectionofficer.query(
                             additionalItemsQuery,
-                            [actualOrderId],
+                            [processOrderId],
                             (e, r) => (e ? rej(e) : res(r || [])),
                         );
                     }),
@@ -1693,8 +1719,9 @@ exports.recalculateAndPersistCreditLimitDao = async (userId) => {
         const currentTierValue = parseFloat(userRows[0].creditLimitBonusTier || 0);
         const currentTierCount = Math.floor(currentTierValue / TIER_THRESHOLD);
 
+        // CHANGED: use processorders.amount (not orders.fullTotal)
         const [rows] = await connection.query(
-            `SELECT COALESCE(SUM(o.fullTotal), 0) AS deliveredTotal
+            `SELECT COALESCE(SUM(p.amount), 0) AS deliveredTotal
              FROM processorders p
              INNER JOIN orders o ON o.id = p.orderId
              WHERE o.userId = ?

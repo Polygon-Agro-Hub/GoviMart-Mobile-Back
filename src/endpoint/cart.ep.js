@@ -59,6 +59,8 @@ exports.getUserCart = asyncHandler(async (req, res) => {
         quantity: pkg.quantity,
         totalItems: totalItems || 1,
         isUnavailable: pkg.status !== "Enabled" || pkg.isValid !== 1,
+        packageType: pkg.packageType || null,
+        endDate: pkg.endDate || null,
       };
     })
   );

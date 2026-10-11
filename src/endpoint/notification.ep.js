@@ -125,7 +125,10 @@ exports.triggerNotification = asyncHandler(async (req, res) => {
     req.headers["authorization"]?.replace(/^Bearer\s+/i, "") ||
     req.body?.serviceToken;
 
-  if (process.env.POLYGON_TRIGGER_SECRET && serviceToken && serviceToken !== process.env.POLYGON_TRIGGER_SECRET) {
+  const { POLYGON_TRIGGER_SECRET } = require("../constants/notification-secrets");
+  const expectedSecret = POLYGON_TRIGGER_SECRET;
+
+  if (expectedSecret && serviceToken !== expectedSecret) {
     return res.status(401).json({
       status: false,
       message: "Unauthorized: Invalid service token for notification trigger",

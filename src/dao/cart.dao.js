@@ -79,7 +79,9 @@ exports.getCartPackagesDao = (cartId) => {
         mp.image,
         (mp.productPrice + mp.packingFee + mp.serviceFee) AS price,
         mp.status,
-        mp.isValid
+        mp.isValid,
+        mp.packageType,
+        DATE_FORMAT(mp.endDate, '%Y-%m-%d') AS endDate
       FROM cartpackage cp
       JOIN marketplacepackages mp ON cp.packageId = mp.id
       WHERE cp.cartId = ?
