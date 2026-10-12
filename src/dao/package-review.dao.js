@@ -129,7 +129,7 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                 o.id AS actualOrderId,
                 o.userId,
                 o.delivaryMethod,
-                COALESCE(o.deliveryCharge, 0) AS deliveryCharge,
+                COALESCE(po.deliveryCharge, 0) AS deliveryCharge,
                 o.sheduleTime,
                 o.sheduleType,
                 po.id AS processOrderId,
