@@ -358,3 +358,44 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
         });
     }
 });
+
+exports.cancelOrderBeforeConfirm = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
+    const userId = getUserId(req);
+    const { orderId, processOrderId } = req.body;
+
+    if (!userId) {
+        return res.status(401).json({
+            status: false,
+            message: "Unauthorized",
+        });
+    }
+
+    if (!orderId && !processOrderId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderId or processOrderId is required",
+        });
+    }
+
+    try {
+        const result = await packageReviewDao.cancelOrderBeforeConfirmDao({
+            orderId,
+            processOrderId,
+            userId,
+        });
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+            data: result,
+        });
+    } catch (error) {
+        console.error("[cancelOrderBeforeConfirm] Error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to cancel order",
+        });
+    }
+});
