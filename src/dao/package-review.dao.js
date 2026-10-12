@@ -767,9 +767,9 @@ exports.confirmPackageReviewDao = ({
                     }
                     const orderSnap = orderRows[0];
 
-                    // A finalized review order can never be reviewed again
-                    if (Number(orderSnap.isFinalized) === 1) {
-                        throw new Error("This order package review has already been finalized.");
+                    // A confirmed order can never be reviewed again
+                    if (Number(orderSnap.isConfirmed) === 1) {
+                        throw new Error("This order has already been confirmed.");
                     }
 
                     const alacartDiscountSql = `
@@ -1171,7 +1171,7 @@ exports.confirmPackageReviewDao = ({
                         ? settle.newCreditPaid
                         : parseFloat(matchedOrder.creditPaid) || 0;
 
-                    // REVIEW step flags: isFinalized = 1
+                    // REVIEW step flags: isFinalized = 1, isConfirmed = 0
                     if (settle && settle.isCard) {
                         const newAmount = finalFullTotal;
                         const newMoneyPaid = round2(Math.max(0, newAmount - creditPaid));
