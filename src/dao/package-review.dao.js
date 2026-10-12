@@ -767,9 +767,9 @@ exports.confirmPackageReviewDao = ({
                     }
                     const orderSnap = orderRows[0];
 
-                    // A confirmed order can never be reviewed again
-                    if (Number(orderSnap.isConfirmed) === 1) {
-                        throw new Error("This order has already been confirmed.");
+                    // A finalized review order can never be reviewed again
+                    if (Number(orderSnap.isFinalized) === 1) {
+                        throw new Error("This order package review has already been finalized.");
                     }
 
                     const alacartDiscountSql = `
