@@ -767,9 +767,9 @@ exports.confirmPackageReviewDao = ({
                     }
                     const orderSnap = orderRows[0];
 
-                    // A confirmed order can never be reviewed again
-                    if (Number(orderSnap.isConfirmed) === 1) {
-                        throw new Error("This order has already been confirmed.");
+                    // A finalized review order can never be reviewed again
+                    if (Number(orderSnap.isFinalized) === 1) {
+                        throw new Error("This order package review has already been finalized.");
                     }
 
                     const alacartDiscountSql = `
@@ -1171,25 +1171,26 @@ exports.confirmPackageReviewDao = ({
                         ? settle.newCreditPaid
                         : parseFloat(matchedOrder.creditPaid) || 0;
 
-                    // REVIEW step flags: isFinalized = 1, isConfirmed = 0
+                    // REVIEW step flags: isFinalized = 1
                     if (settle && settle.isCard) {
-                        // card part = total - credit, saved in BOTH amount and moneyPaid
-                        const newMoneyPaid = round2(Math.max(0, newFullTotal - creditPaid));
+                        const newAmount = finalFullTotal;
+                        const newMoneyPaid = round2(Math.max(0, newAmount - creditPaid));
                         await q(
                             `UPDATE processorders
                              SET amount = ?, moneyPaid = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
                                  isFinalized = 1
                              WHERE id = ?`,
-                            [newMoneyPaid, newMoneyPaid, creditPaid, finalFullTotal, finalTotal, newOrderDiscount, realProcessOrderId],
+                            [newAmount, newMoneyPaid, creditPaid, finalFullTotal, finalTotal, newOrderDiscount, realProcessOrderId],
                         );
                     } else if (settle && settle.isCreditOnly) {
                         // 100% credit order: paid amount follows the reduced total
+                        const newAmount = finalFullTotal;
                         await q(
                             `UPDATE processorders
                              SET amount = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
                                  isFinalized = 1
                              WHERE id = ?`,
-                            [creditPaid, creditPaid, finalFullTotal, finalTotal, newOrderDiscount, realProcessOrderId],
+                            [newAmount, creditPaid, finalFullTotal, finalTotal, newOrderDiscount, realProcessOrderId],
                         );
                     } else {
                         await q(
@@ -1755,23 +1756,24 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
 
                     // isFinalized is NOT set here, only isConfirmed.
                     if (settle.isCard) {
-                        // card part = total - credit, saved in BOTH amount and moneyPaid
-                        const newMoneyPaid = round2(Math.max(0, finalFullTotal - creditPaid));
+                        const newAmount = finalFullTotal;
+                        const newMoneyPaid = round2(Math.max(0, newAmount - creditPaid));
                         await q(
                             `UPDATE processorders
                              SET amount = ?, moneyPaid = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
                                  isConfirmed = 1
                              WHERE id = ?`,
-                            [newMoneyPaid, newMoneyPaid, creditPaid, finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
+                            [newAmount, newMoneyPaid, creditPaid, finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
                         );
                     } else if (settle.isCreditOnly) {
                         // 100% credit order: paid amount follows the reduced total
+                        const newAmount = finalFullTotal;
                         await q(
                             `UPDATE processorders
                              SET amount = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
                                  isConfirmed = 1
                              WHERE id = ?`,
-                            [creditPaid, creditPaid, finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
+                            [newAmount, creditPaid, finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
                         );
                     } else {
                         await q(
