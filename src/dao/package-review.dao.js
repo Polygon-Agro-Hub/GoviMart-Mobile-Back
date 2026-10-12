@@ -198,13 +198,13 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                             ) l ON d.packageId = l.packageId AND d.createdAt = l.max_createdAt
                             GROUP BY d.packageId
                         ) dfp ON dfp.packageId = op.packageId
-                        WHERE op.orderId = ? OR op.orderId = ?
+                        WHERE op.orderId = ?
                     `;
 
                     const packages = await new Promise((res, rej) => {
                         db.collectionofficer.query(
                             packagesSql,
-                            [processOrderId, actualOrderId],
+                            [processOrderId],
                             (e, r) => (e ? rej(e) : res(r || [])),
                         );
                     });
@@ -778,8 +778,8 @@ exports.confirmPackageReviewDao = ({
                     const dbPackages = await q(
                         `SELECT op.id AS orderPackageId, op.packageId, op.qty, op.packingStatus
                          FROM orderpackage op
-                         WHERE op.orderId = ? OR op.orderId = ?`,
-                        [realProcessOrderId, realOrderId],
+                         WHERE op.orderId = ?`,
+                        [realProcessOrderId],
                     );
 
                     if (dbPackages.length === 0 && Array.isArray(packages) && packages.length > 0) {
