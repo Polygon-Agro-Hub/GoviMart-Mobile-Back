@@ -2,14 +2,46 @@ const db = require("../startup/database");
 const { emitNotificationToUser, emitUnreadCountToUser } = require("../socket/socket");
 
 /**
+ * Builds the "effective" return reason and fixes the message text.
+ */
+const formatNotificationMessage = (rawMessage, returnReason, returnNote) => {
+  let msg = rawMessage || "";
+  const effectiveReason =
+    returnReason && returnReason.toLowerCase() === "other" && returnNote
+      ? returnNote
+      : returnNote ||
+      (returnReason && returnReason.toLowerCase() !== "other" ? returnReason : "");
+
+  if (effectiveReason) {
+    msg = msg.replace(
+      /Reason\s*:\s*[“"'\`\u201C\u201D\u2018\u2019]?Other[”"'\`\u201C\u201D\u2018\u2019]?/gi,
+      `Reason : “${effectiveReason}”`
+    );
+  }
+
+  // Move Reason section to a second line (newline)
+  msg = msg.replace(/([^\n\r])\s*(?:[.]\s*)?(Reason\s*[:：])/gi, (match, prefix, reasonTag) => {
+    const trimmedPrefix = prefix.trimEnd();
+    const hasPunctuation = /[.!?]$/.test(trimmedPrefix);
+    return trimmedPrefix + (hasPunctuation ? "" : ".") + "\n" + reasonTag;
+  });
+
+  return { message: msg, effectiveReason };
+};
+
+const buildRoleFilter = (buyerType) => {
+  const isWholesale = buyerType && String(buyerType).toLowerCase() === "wholesale";
+  return isWholesale
+    ? "AND LOWER(n.Title) NOT LIKE '%package finalization review%' AND LOWER(n.Title) NOT LIKE '%package review%'"
+    : "";
+};
+
+/**
  * Fetch all notifications for a given user.
  */
 exports.getUserNotificationsDao = (userId, limit = 50, offset = 0, buyerType = "Retail") => {
   return new Promise((resolve, reject) => {
-    const isWholesale = buyerType && String(buyerType).toLowerCase() === "wholesale";
-    const roleFilter = isWholesale
-      ? "AND LOWER(n.Title) NOT LIKE '%package finalization review%' AND LOWER(n.Title) NOT LIKE '%package review%'"
-      : "";
+    const roleFilter = buildRoleFilter(buyerType);
 
     const sql = `
       SELECT 
@@ -25,6 +57,7 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0, buyerType = "
         po.sheduleDate,
         po.status AS orderStatus,
         po.isFinalized,
+        po.isConfirmed,
         o.delivaryMethod,
         rr.rsnEnglish AS returnReason,
         dro.note AS returnNote
@@ -47,31 +80,18 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0, buyerType = "
       }
 
       const formatted = (results || []).map((row) => {
-        let msg = row.message || "";
-        const returnReason = row.returnReason;
-        const returnNote = row.returnNote;
-        const effectiveReason =
-          returnReason && returnReason.toLowerCase() === "other" && returnNote
-            ? returnNote
-            : returnNote || (returnReason && returnReason.toLowerCase() !== "other" ? returnReason : "");
-
-        if (effectiveReason) {
-          msg = msg.replace(
-            /Reason\s*:\s*[“"'\`\u201C\u201D\u2018\u2019]?Other[”"'\`\u201C\u201D\u2018\u2019]?/gi,
-            `Reason : “${effectiveReason}”`
-          );
-        }
-
-        // Move Reason section to a second line (newline)
-        msg = msg.replace(/([^\n\r])\s*(?:[.]\s*)?(Reason\s*[:：])/gi, (match, prefix, reasonTag) => {
-          const trimmedPrefix = prefix.trimEnd();
-          const hasPunctuation = /[.!?]$/.test(trimmedPrefix);
-          return trimmedPrefix + (hasPunctuation ? "" : ".") + "\n" + reasonTag;
-        });
+        const { message, effectiveReason } = formatNotificationMessage(
+          row.message,
+          row.returnReason,
+          row.returnNote
+        );
         return {
           ...row,
-          returnReason: effectiveReason || returnReason,
-          message: msg,
+          // always send real numbers so the app can trust these flags
+          isFinalized: Number(row.isFinalized) === 1 ? 1 : 0,
+          isConfirmed: Number(row.isConfirmed) === 1 ? 1 : 0,
+          returnReason: effectiveReason || row.returnReason,
+          message,
         };
       });
 
@@ -85,10 +105,7 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0, buyerType = "
  */
 exports.getUnreadCountDao = (userId, buyerType = "Retail") => {
   return new Promise((resolve, reject) => {
-    const isWholesale = buyerType && String(buyerType).toLowerCase() === "wholesale";
-    const roleFilter = isWholesale
-      ? "AND LOWER(n.Title) NOT LIKE '%package finalization review%' AND LOWER(n.Title) NOT LIKE '%package review%'"
-      : "";
+    const roleFilter = buildRoleFilter(buyerType);
 
     const sql = `
       SELECT COUNT(*) AS unreadCount
@@ -206,6 +223,8 @@ exports.createNotificationDao = (arg1, arg2, arg3) => {
           po.amount,
           po.sheduleDate,
           po.status AS orderStatus,
+          po.isFinalized,
+          po.isConfirmed,
           o.userId,
           o.delivaryMethod,
           rr.rsnEnglish AS returnReason,
@@ -225,29 +244,15 @@ exports.createNotificationDao = (arg1, arg2, arg3) => {
         }
 
         const notifData = rows[0];
-        const returnReason = notifData.returnReason;
-        const returnNote = notifData.returnNote;
-        const effectiveReason =
-          returnReason && returnReason.toLowerCase() === "other" && returnNote
-            ? returnNote
-            : returnNote || (returnReason && returnReason.toLowerCase() !== "other" ? returnReason : "");
-
-        if (effectiveReason) {
-          notifData.message = notifData.message.replace(
-            /Reason\s*:\s*[“"'\`\u201C\u201D\u2018\u2019]?Other[”"'\`\u201C\u201D\u2018\u2019]?/gi,
-            `Reason : “${effectiveReason}”`
-          );
-          notifData.returnReason = effectiveReason;
-        }
-
-        // Move Reason section to a second line (newline)
-        if (notifData.message) {
-          notifData.message = notifData.message.replace(/([^\n\r])\s*(?:[.]\s*)?(Reason\s*[:：])/gi, (match, prefix, reasonTag) => {
-            const trimmedPrefix = prefix.trimEnd();
-            const hasPunctuation = /[.!?]$/.test(trimmedPrefix);
-            return trimmedPrefix + (hasPunctuation ? "" : ".") + "\n" + reasonTag;
-          });
-        }
+        const { message: fixedMessage, effectiveReason } = formatNotificationMessage(
+          notifData.message,
+          notifData.returnReason,
+          notifData.returnNote
+        );
+        notifData.message = fixedMessage;
+        if (effectiveReason) notifData.returnReason = effectiveReason;
+        notifData.isFinalized = Number(notifData.isFinalized) === 1 ? 1 : 0;
+        notifData.isConfirmed = Number(notifData.isConfirmed) === 1 ? 1 : 0;
 
         // Emit in real-time via Socket.IO
         if (notifData.userId) {
@@ -259,7 +264,7 @@ exports.createNotificationDao = (arg1, arg2, arg3) => {
             try {
               const notificationCache = require("../services/notification-cache");
               notificationCache.setUnreadCount(notifData.userId, unreadCount);
-            } catch (_) {}
+            } catch (_) { }
 
             emitNotificationToUser(notifData.userId, notifData);
             emitUnreadCountToUser(notifData.userId, unreadCount);
@@ -407,7 +412,7 @@ exports.seedDummyNotificationsForUserDao = (userId) => {
         ];
 
         // Insert each dummy template with timestamp
-        const insertPromises = dummyTemplates.map((item, idx) => {
+        const insertPromises = dummyTemplates.map((item) => {
           return new Promise((res, rej) => {
             const createdAt = new Date(Date.now() - item.minutesAgo * 60 * 1000);
             const sql = `
@@ -437,12 +442,14 @@ exports.seedDummyNotificationsForUserDao = (userId) => {
 
 /**
  * Resolve customer userId and processOrderId from orderId (handles both processorders.id and orders.id).
+ * Now also returns isFinalized, isConfirmed and orderStatus.
  */
 exports.resolveOrderCustomerDetailsDao = (orderId) => {
   return new Promise((resolve) => {
     // 1. Check if orderId matches processorders.id
     const sql1 = `
-      SELECT po.id AS processOrderId, po.invNo, o.id AS orderId, o.userId
+      SELECT po.id AS processOrderId, po.invNo, po.isFinalized, po.isConfirmed,
+             po.status AS orderStatus, o.id AS orderId, o.userId
       FROM processorders po
       JOIN orders o ON po.orderId = o.id
       WHERE po.id = ?
@@ -455,7 +462,8 @@ exports.resolveOrderCustomerDetailsDao = (orderId) => {
 
       // 2. Check if orderId matches orders.id
       const sql2 = `
-        SELECT po.id AS processOrderId, po.invNo, o.id AS orderId, o.userId
+        SELECT po.id AS processOrderId, po.invNo, po.isFinalized, po.isConfirmed,
+               po.status AS orderStatus, o.id AS orderId, o.userId
         FROM orders o
         JOIN processorders po ON po.orderId = o.id
         WHERE o.id = ?
@@ -474,11 +482,13 @@ exports.resolveOrderCustomerDetailsDao = (orderId) => {
 
 /**
  * Get latest process order and invoice number for a given user.
+ * Now also returns isFinalized, isConfirmed and orderStatus.
  */
 exports.getLatestProcessOrderForUserDao = (userId) => {
   return new Promise((resolve) => {
     const sql = `
-      SELECT po.id AS processOrderId, po.invNo, o.id AS orderId, o.userId
+      SELECT po.id AS processOrderId, po.invNo, po.isFinalized, po.isConfirmed,
+             po.status AS orderStatus, o.id AS orderId, o.userId
       FROM processorders po
       JOIN orders o ON po.orderId = o.id
       WHERE o.userId = ?
@@ -493,4 +503,3 @@ exports.getLatestProcessOrderForUserDao = (userId) => {
     });
   });
 };
-
