@@ -673,30 +673,30 @@ exports.getRetailOrderHistoryDao = async (userId) => {
         }
 
         const orderQuery = `
-      SELECT 
-        po.id AS orderId,
-        po.sheduleDate AS scheduleDate,
-        o.createdAt AS createdAt,
-        o.sheduleTime AS scheduleTime,
-        o.delivaryMethod AS delivaryMethod,
-        COALESCE(po.discount, o.discount) AS orderDiscount,
-        COALESCE(po.fullTotal, o.fulltotal) AS fullTotal,
-        po.invNo AS invoiceNo,
-        po.status AS processStatus,
-        po.isFinalized
-      FROM orders o
-      LEFT JOIN (
-        SELECT *
-        FROM processorders
-        WHERE id IN (
-          SELECT MAX(id)
-          FROM processorders
-          GROUP BY orderId
-        )
-      ) po ON o.id = po.orderId
-      WHERE o.userId = ?
-      ORDER BY o.createdAt DESC
-    `;
+  SELECT 
+    po.id AS orderId,
+    po.sheduleDate AS scheduleDate,
+    o.createdAt AS createdAt,
+    o.sheduleTime AS scheduleTime,
+    o.delivaryMethod AS delivaryMethod,
+    COALESCE(po.discount, 0) AS orderDiscount,
+    COALESCE(po.fullTotal, po.total, 0) AS fullTotal,
+    po.invNo AS invoiceNo,
+    po.status AS processStatus,
+    po.isFinalized
+  FROM orders o
+  LEFT JOIN (
+    SELECT *
+    FROM processorders
+    WHERE id IN (
+      SELECT MAX(id)
+      FROM processorders
+      GROUP BY orderId
+    )
+  ) po ON o.id = po.orderId
+  WHERE o.userId = ?
+  ORDER BY o.createdAt DESC
+`;
 
         const familyPackItemsQuery = `
       SELECT 
@@ -1829,7 +1829,7 @@ async function getOrdersForSheduleDate(sheduleDate, userId = null) {
             o.fullName,
             o.isPackage,
             o.isFinalizeImdt,
-            o.total,
+            po.total,
             o.createdAt,
             po.id AS processOrderId,
             po.invNo,
