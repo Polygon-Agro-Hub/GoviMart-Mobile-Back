@@ -12,6 +12,7 @@ router.post("/package/reset-item", authMiddleware, packageReviewEp.resetPackageI
 router.post("/package/confirm-review", authMiddleware, packageReviewEp.confirmPackageReview);
 router.post("/confirm-order", authMiddleware, packageReviewEp.confirmOrderWithLivePrices);
 router.post("/package/cancel-order", authMiddleware, packageReviewEp.cancelPackageOrder);
+router.post("/package/cancel-before-confirm", authMiddleware, packageReviewEp.cancelOrderBeforeConfirm);
 
 router.get("/order-history", authMiddleware, orderEp.getRetailOrderHistory);
 router.get("/pickup-centers", authMiddleware, orderEp.getPickupCenters);
