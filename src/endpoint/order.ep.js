@@ -34,10 +34,12 @@ exports.getRetailOrderHistory = async (req, res) => {
 exports.getRetailOrderById = async (req, res) => {
     try {
         const { orderId } = req.params;
+        const processOrderId = req.query?.processOrderId;
         const { userId } = req.user;
-        console.log("Received orderId:", orderId, "for userId:", userId); // Debug log
+        const targetId = processOrderId || orderId;
+        console.log("Received orderId:", orderId, "processOrderId:", processOrderId, "for userId:", userId); // Debug log
 
-        const order = await RetailOrderDao.getRetailOrderByIdDao(orderId, userId);
+        const order = await RetailOrderDao.getRetailOrderByIdDao(targetId, userId, processOrderId);
 
         res.status(200).json({
             status: true,

@@ -10,6 +10,10 @@ const { getRemainingPackingTarget } = require("./packing-target.dao");
 
 const round2 = (n) => Number((Number(n) || 0).toFixed(2));
 
+// Fixed service fee for orders with orders.orderApp = 'Dash' AND orders.isPackage = 0.
+// It is ADDED on top of the delivery charge (keep in sync with the app).
+const DASH_SERVICE_FEE = 180;
+
 /**
  * Card / online order? Credit-only and cash(+credit) orders return false.
  */
@@ -129,6 +133,8 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                 o.id AS actualOrderId,
                 o.userId,
                 o.delivaryMethod,
+                o.orderApp,
+                o.isPackage,
                 COALESCE(po.deliveryCharge, 0) AS deliveryCharge,
                 o.sheduleTime,
                 o.sheduleType,
@@ -1557,9 +1563,11 @@ const INCLUDE_PACKAGE_DISCOUNT = false;
  *   packages      : packagesTotal = (productPrice + packingFee + serviceFee) x qty
  *                   (package discount is NOT used while INCLUDE_PACKAGE_DISCOUNT = false)
  *
- *   total     (normal price) = packagesTotal + sum(normalPrice) + delivery
+ *   total     (normal price) = packagesTotal + sum(normalPrice) + delivery + Dash service fee
  *   discount                 = sum(ala carte discount) only
  *   fullTotal (payable)      = total - discount - coupon
+ *
+ *   Dash service fee: orderApp = 'Dash' AND isPackage = 0 -> + DASH_SERVICE_FEE (on top of delivery)
  *
  * Updates: orderadditionalitems, orderpackage (lock), processorders only.
  * The `orders` table is NOT updated for totals.
@@ -1600,6 +1608,8 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                             po.curDlvrCharge,
                             po.fullTotal AS oldOrderFullTotal,
                             o.delivaryMethod,
+                            o.orderApp,
+                            o.isPackage,
                             o.userId
                          FROM processorders po
                          INNER JOIN orders o ON po.orderId = o.id
@@ -1706,7 +1716,7 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                         ? round2(parseFloat(pkgRows[0]?.packageDiscount) || 0)
                         : 0;
 
-                    // 5. Delivery + coupon (same rules as the app screen)
+                    // 5. Delivery / Service fee + coupon (same rules as the app screen)
                     const isPickup =
                         String(matchedOrder.delivaryMethod || "").toUpperCase() === "PICKUP";
                     const isCouponApplied = Number(matchedOrder.isCoupon) === 1;
@@ -1715,11 +1725,30 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                         isCouponApplied &&
                         (couponTypeStr.includes("free") || couponTypeStr.includes("delivery"));
 
+                    // DASH SERVICE FEE: only orderApp = 'Dash' AND isPackage = 0 get the fixed
+                    // "Service Fee" (added on top of delivery)
+                    const isDash =
+                        String(matchedOrder.orderApp || "").trim().toLowerCase() === "dash";
+                    const isPackageValue = matchedOrder.isPackage;
+                    const isDashServiceFee =
+                        isDash &&
+                        isPackageValue != null &&
+                        String(isPackageValue).trim() !== "" &&
+                        Number(isPackageValue) === 0;
+
                     const rawDelivery =
                         matchedOrder.curDlvrCharge != null && matchedOrder.curDlvrCharge !== ""
                             ? parseFloat(matchedOrder.curDlvrCharge) || 0
                             : parseFloat(matchedOrder.deliveryCharge) || 0;
-                    const deliveryCharge = isPickup || isFreeDeliveryCoupon ? 0 : rawDelivery;
+
+                    // Delivery keeps its normal rules for every order.
+                    const deliveryCharge =
+                        isPickup || isFreeDeliveryCoupon ? 0 : rawDelivery;
+
+                    // DASH SERVICE FEE: fixed service fee (DASH_SERVICE_FEE) is ADDED on top of
+                    // delivery. Always charged (no pickup / free-delivery waiver) and
+                    // included in both total and fullTotal below.
+                    const serviceFee = isDashServiceFee ? DASH_SERVICE_FEE : 0;
 
                     const couponDiscount =
                         isCouponApplied && !isFreeDeliveryCoupon
@@ -1728,7 +1757,7 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
 
                     // 6. Final numbers (nothing from the old stored totals)
                     const finalTotal = round2(
-                        packagesTotal + packageDiscount + alaNormalTotal + deliveryCharge,
+                        packagesTotal + packageDiscount + alaNormalTotal + deliveryCharge + serviceFee,
                     );
                     const finalDiscount = round2(packageDiscount + alaDiscountTotal);
                     const finalFullTotal = round2(
