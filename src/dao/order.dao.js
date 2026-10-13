@@ -1161,21 +1161,37 @@ function buildPackageList(packRows, itemsByPackId) {
     return packages;
 }
 
-exports.getOrderAdditionalItemsDao = async (orderId) => {
+exports.getOrderAdditionalItemsDao = async (orderId, processOrderId = null) => {
     return new Promise((resolve, reject) => {
-        if (!orderId) {
+        if (!orderId && !processOrderId) {
             return reject(new Error("Invalid orderId"));
         }
 
-        const poSql =
-            "SELECT id, orderId FROM processorders WHERE id = ? OR orderId = ? ORDER BY (id = ?) DESC LIMIT 1";
+        const poSql = `
+            SELECT id, orderId 
+            FROM processorders 
+            WHERE (? IS NOT NULL AND id = ?)
+               OR id = ? 
+               OR orderId = ? 
+            ORDER BY 
+               (? IS NOT NULL AND id = ?) DESC,
+               (id = ?) DESC, 
+               sheduleDate ASC,
+               id ASC 
+            LIMIT 1
+        `;
         db.collectionofficer.query(
             poSql,
-            [orderId, orderId, orderId],
+            [
+                processOrderId, processOrderId,
+                orderId, orderId,
+                processOrderId, processOrderId,
+                orderId,
+            ],
             (err, poRows) => {
                 if (err) return reject(new Error("Database error: " + err.message));
 
-                const processOrderId = poRows?.[0]?.id || orderId;
+                const resolvedProcessOrderId = poRows?.[0]?.id || processOrderId || orderId;
                 const actualOrderId = poRows?.[0]?.orderId || orderId;
 
                 const sql = `
@@ -1197,13 +1213,14 @@ exports.getOrderAdditionalItemsDao = async (orderId) => {
               FROM orderadditionalitems oai
               JOIN marketplaceitems mi ON oai.productId = mi.id
               LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-              WHERE oai.proOrderId = ?
+              WHERE oai.proOrderId = ? 
+                 OR (oai.proOrderId = ? AND NOT EXISTS (SELECT 1 FROM orderadditionalitems sub WHERE sub.proOrderId = ?))
               ORDER BY oai.id
             `;
 
                 db.collectionofficer.query(
                     sql,
-                    [processOrderId || actualOrderId],
+                    [resolvedProcessOrderId, actualOrderId, resolvedProcessOrderId],
                     (err2, results) => {
                         if (err2) {
                             return reject(new Error("Database error: " + err2.message));
@@ -1436,11 +1453,16 @@ const getPackageDetailsForProcessedItemsDao = (processedFamilyPackItems) => {
     });
 };
 
-exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
+exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId, options = {}) => {
     return new Promise((resolve, reject) => {
         if (!orderIdOrProcessOrderId || !userId) {
             return reject(new Error("Invalid orderId or userId"));
         }
+
+        const optProcessOrderId = options?.processOrderId ? String(options.processOrderId).trim() : null;
+        const optInvNo = options?.invNo ? String(options.invNo).trim() : null;
+        const idParam = String(orderIdOrProcessOrderId).trim();
+        const isInvNoParam = idParam.toUpperCase().startsWith("INV-") ? 1 : 0;
 
         const invoiceQuery = `
             SELECT 
@@ -1466,14 +1488,39 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                 po.qrCode
             FROM processorders po
             INNER JOIN orders o ON po.orderId = o.id
-            WHERE (po.id = ? OR o.id = ?) AND o.userId = ?
-            ORDER BY po.id ASC
+            WHERE (
+                (? IS NOT NULL AND po.id = ?)
+                OR (? IS NOT NULL AND po.invNo = ?)
+                OR (? = 1 AND po.invNo = ?)
+                OR po.id = ?
+                OR o.id = ?
+            ) AND o.userId = ?
+            ORDER BY 
+                (? IS NOT NULL AND po.id = ?) DESC,
+                (? IS NOT NULL AND po.invNo = ?) DESC,
+                (? = 1 AND po.invNo = ?) DESC,
+                (po.id = ?) DESC,
+                (po.invNo = ?) DESC,
+                po.id ASC
             LIMIT 1
         `;
 
         db.collectionofficer.query(
             invoiceQuery,
-            [orderIdOrProcessOrderId, orderIdOrProcessOrderId, userId],
+            [
+                optProcessOrderId, optProcessOrderId,
+                optInvNo, optInvNo,
+                isInvNoParam, idParam,
+                idParam,
+                idParam,
+                userId,
+                // ORDER BY params:
+                optProcessOrderId, optProcessOrderId,
+                optInvNo, optInvNo,
+                isInvNoParam, idParam,
+                idParam,
+                idParam,
+            ],
             (err, invoiceResult) => {
                 if (err) return reject(err);
                 if (!invoiceResult || invoiceResult.length === 0) return resolve(null);
@@ -1495,7 +1542,8 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                     ((mp.productPrice + mp.packingFee + mp.serviceFee) * op.qty) AS amount
                 FROM orderpackage op
                 JOIN marketplacepackages mp ON op.packageId = mp.id
-                WHERE op.orderId = ?
+                WHERE op.orderId = ? 
+                   OR (op.orderId = ? AND NOT EXISTS (SELECT 1 FROM orderpackage sub WHERE sub.orderId = ?))
             `;
 
                 const additionalItemsQuery = `
@@ -1512,7 +1560,8 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                 FROM orderadditionalitems oai
                 JOIN marketplaceitems mi ON oai.productId = mi.id
                 LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-                WHERE oai.proOrderId = ?
+                WHERE oai.proOrderId = ? 
+                   OR (oai.proOrderId = ? AND NOT EXISTS (SELECT 1 FROM orderadditionalitems sub WHERE sub.proOrderId = ?))
             `;
 
                 const billingQuery = `
@@ -1542,14 +1591,14 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId) => {
                     new Promise((res, rej) => {
                         db.collectionofficer.query(
                             familyPackItemsQuery,
-                            [processOrderId],
+                            [processOrderId, actualOrderId, processOrderId],
                             (e, r) => (e ? rej(e) : res(r || [])),
                         );
                     }),
                     new Promise((res, rej) => {
                         db.collectionofficer.query(
                             additionalItemsQuery,
-                            [processOrderId],
+                            [processOrderId, actualOrderId, processOrderId],
                             (e, r) => (e ? rej(e) : res(r || [])),
                         );
                     }),

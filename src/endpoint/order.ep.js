@@ -76,8 +76,9 @@ exports.getOrderPackages = async (req, res) => {
 exports.getOrderAdditionalItems = async (req, res) => {
     try {
         const { orderId } = req.params;
+        const { processOrderId } = req.query;
 
-        const additionalItems = await RetailOrderDao.getOrderAdditionalItemsDao(orderId);
+        const additionalItems = await RetailOrderDao.getOrderAdditionalItemsDao(orderId, processOrderId);
 
         res.json({
             status: true,
@@ -847,8 +848,12 @@ exports.getDeliveryCities = asyncHandler(async (req, res) => {
 exports.getInvoiceByOrderId = asyncHandler(async (req, res) => {
     const { orderId } = req.params;
     const { userId } = req.user;
+    const { processOrderId, invNo } = req.query;
 
-    const result = await RetailOrderDao.getInvoiceByOrderIdDao(orderId, userId);
+    const result = await RetailOrderDao.getInvoiceByOrderIdDao(orderId, userId, {
+        processOrderId,
+        invNo,
+    });
 
     if (!result || !result.invoice) {
         return res.status(404).json({
