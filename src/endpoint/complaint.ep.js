@@ -1,9 +1,50 @@
+const path = require("path");
+const convert = require("heic-convert");
 const complainDao = require("../dao/complaint.dao");
 const asyncHandler = require("express-async-handler");
 const uploadFileToS3 = require("../middlewares/s3upload"); // adjust path to your s3 upload util
 const {
   createComplainSchema,
 } = require("../validations/complaint.validations");
+
+// ---------- HEIC helpers ----------
+const HEIC_BRANDS = ["heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1"];
+
+const isHeic = (file) => {
+  const ext = path.extname(file.originalname || "").toLowerCase();
+  if (/image\/(heic|heif|heic-sequence|heif-sequence)/.test(file.mimetype || "")) {
+    return true;
+  }
+  if (ext === ".heic" || ext === ".heif") return true;
+
+  // Sniff magic bytes (covers application/octet-stream with no/wrong extension)
+  if (file.buffer && file.buffer.length > 12) {
+    const isFtyp = file.buffer.toString("ascii", 4, 8) === "ftyp";
+    const brand = file.buffer.toString("ascii", 8, 12);
+    return isFtyp && HEIC_BRANDS.includes(brand);
+  }
+  return false;
+};
+
+// Converts HEIC/HEIF to JPEG; passes everything else through untouched
+const normalizeImage = async (file) => {
+  if (!isHeic(file)) {
+    return { buffer: file.buffer, name: file.originalname };
+  }
+
+  const output = await convert({
+    buffer: file.buffer,
+    format: "JPEG",
+    quality: 0.8,
+  });
+
+  const baseName = (file.originalname || `image_${Date.now()}`).replace(
+    /\.[^.]+$/,
+    "",
+  );
+
+  return { buffer: Buffer.from(output), name: `${baseName}.jpg` };
+};
 
 // Get All Complain Categories
 exports.getComplainCategories = asyncHandler(async (req, res) => {
@@ -74,24 +115,29 @@ exports.createComplain = asyncHandler(async (req, res) => {
       complain,
     );
 
-    // Upload images (if any) to R2 and save URLs
+    // Convert (if HEIC) and upload images (if any), then save URLs
     const uploadedImages = [];
+    let failedImages = 0;
+
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
         try {
+          const { buffer, name } = await normalizeImage(file);
+
           const imageUrl = await uploadFileToS3(
-            file.buffer,
-            file.originalname,
+            buffer,
+            name,
             "complain-images",
           );
           await complainDao.addComplainImageDao(complainId, imageUrl);
           uploadedImages.push(imageUrl);
         } catch (uploadErr) {
+          failedImages++;
           console.error(
-            "Failed to upload one complaint image:",
+            `Failed to process/upload complaint image (${file.originalname}):`,
             uploadErr.message,
           );
-          // continue uploading remaining images even if one fails
+          // continue with remaining images even if one fails
         }
       }
     }
@@ -103,6 +149,7 @@ exports.createComplain = asyncHandler(async (req, res) => {
         id: complainId,
         refId: nextRefId,
         images: uploadedImages,
+        failedImages,
       },
     });
   } catch (err) {

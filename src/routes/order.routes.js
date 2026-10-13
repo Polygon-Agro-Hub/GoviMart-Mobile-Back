@@ -10,7 +10,9 @@ router.get("/package/review/:orderId", authMiddleware, packageReviewEp.getOrderP
 router.post("/package/replace-item", authMiddleware, packageReviewEp.replacePackageItem);
 router.post("/package/reset-item", authMiddleware, packageReviewEp.resetPackageItem);
 router.post("/package/confirm-review", authMiddleware, packageReviewEp.confirmPackageReview);
+router.post("/confirm-order", authMiddleware, packageReviewEp.confirmOrderWithLivePrices);
 router.post("/package/cancel-order", authMiddleware, packageReviewEp.cancelPackageOrder);
+router.post("/package/cancel-before-confirm", authMiddleware, packageReviewEp.cancelOrderBeforeConfirm);
 
 router.get("/order-history", authMiddleware, orderEp.getRetailOrderHistory);
 router.get("/pickup-centers", authMiddleware, orderEp.getPickupCenters);
@@ -20,6 +22,8 @@ router.post("/check-coupon", authMiddleware, orderEp.checkCouponAvalability);
 router.post("/create-order", authMiddleware, orderEp.createOrder);
 
 router.get("/invoice/:orderId", authMiddleware, orderEp.getInvoiceByOrderId);
+router.get("/schedule-orders", authMiddleware, orderEp.getOrdersForSheduleDateEndpoint);
+router.get("/schedule-orders/:sheduleDate", authMiddleware, orderEp.getOrdersForSheduleDateEndpoint);
 router.get("/:orderId", authMiddleware, orderEp.getRetailOrderById);
 router.get('/packages/:orderId', authMiddleware, orderEp.getOrderPackages);
 router.get("/additional-items/:orderId", authMiddleware, orderEp.getOrderAdditionalItems);

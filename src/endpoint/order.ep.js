@@ -2,6 +2,7 @@ const asyncHandler = require("express-async-handler");
 const RetailOrderDao = require("../dao/order.dao");
 const cartDao = require("../dao/cart.dao");
 const customerDao = require("../dao/customer.dao");
+const orderSmsService = require("../services/sms/order-sms.service");
 
 const {
     couponValidationSchema,
@@ -75,8 +76,9 @@ exports.getOrderPackages = async (req, res) => {
 exports.getOrderAdditionalItems = async (req, res) => {
     try {
         const { orderId } = req.params;
+        const { processOrderId } = req.query;
 
-        const additionalItems = await RetailOrderDao.getOrderAdditionalItemsDao(orderId);
+        const additionalItems = await RetailOrderDao.getOrderAdditionalItemsDao(orderId, processOrderId);
 
         res.json({
             status: true,
@@ -545,19 +547,48 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 // ── 5c. Create process order(s) ───────────────────────────────
                 let primaryProcessOrderId = null;
                 let primaryInvNo = null;
+                let primaryScheduledDate = null;
                 const createdProcessOrders = [];
 
-                if (normScheduleType === "Twice a Week") {
-                    // Special condition: 2 individual rows in processorders for the 2 days
-                    let date1 = null;
-                    let date2 = null;
+                // Financial fields for 1st processorder (coupon applied if any)
+                const firstOrderFinancials = {
+                    isCoupon: isCoupon ? 1 : 0,
+                    couponType: isCoupon ? couponType || null : null,
+                    couponValue: finalCouponValue,
+                    total: parseFloat((calculatedGrandTotal + effectiveProductDiscount).toFixed(2)),
+                    fullTotal: calculatedGrandTotal,
+                    discount: effectiveProductDiscount,
+                    deliveryCharge: finalDeliveryCharge,
+                };
 
-                    if (Array.isArray(calculatedOrders) && calculatedOrders.length >= 2) {
-                        date1 = parseScheduleDate(calculatedOrders[0]?.date || calculatedOrders[0]?.dateStr);
-                        date2 = parseScheduleDate(calculatedOrders[1]?.date || calculatedOrders[1]?.dateStr);
+                // Normal financial fields for subsequent recurring processorders (orders 2..N: NO coupon applied)
+                const normalDeliveryCharge = isHomeDelivery
+                    ? (parseFloat(checkoutDetails?.normalDeliveryCharge || deliveryCharge) || 0)
+                    : 0;
+                const normalGrandTotal = Math.max(0, parseFloat((calculatedDiscountedItemsTotal + normalDeliveryCharge).toFixed(2)));
+                const normalOrderFinancials = {
+                    isCoupon: 0,
+                    couponType: null,
+                    couponValue: 0.0,
+                    total: parseFloat((normalGrandTotal + effectiveProductDiscount).toFixed(2)),
+                    fullTotal: normalGrandTotal,
+                    discount: effectiveProductDiscount,
+                    deliveryCharge: normalDeliveryCharge,
+                };
+
+                const isRecurring = normScheduleType === "Once a Week" || normScheduleType === "Twice a Week";
+
+                if (isRecurring) {
+                    // Resolve all recurring order dates from calculatedOrders or by generating them
+                    const targetDates = [];
+                    if (Array.isArray(calculatedOrders) && calculatedOrders.length > 0) {
+                        for (const orderItem of calculatedOrders) {
+                            const d = parseScheduleDate(orderItem.date || orderItem.dateStr);
+                            if (d) targetDates.push(d);
+                        }
                     }
 
-                    if (!date1 || !date2) {
+                    if (targetDates.length === 0) {
                         const DAY_MAP = { Mo: 1, Tu: 2, We: 3, Th: 4, Fr: 5, Sa: 6, Su: 0 };
                         const minDate = new Date();
                         minDate.setDate(minDate.getDate() + 3);
@@ -565,82 +596,92 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                         const daysArr = Array.isArray(effRecurringDays) && effRecurringDays.length > 0
                             ? effRecurringDays
-                            : ["Tu", "Sa"];
+                            : normScheduleType === "Twice a Week" ? ["Tu", "Sa"] : ["Tu"];
 
-                        const computedDates = daysArr.map((d) => {
+                        const numWeeks = parseInt(effValidityPeriod, 10) || 4;
+                        const allComputed = [];
+
+                        daysArr.forEach((d) => {
                             const targetDay = DAY_MAP[d] !== undefined ? DAY_MAP[d] : 2;
-                            const dt = new Date(minDate);
-                            while (dt.getDay() !== targetDay) {
-                                dt.setDate(dt.getDate() + 1);
+                            const firstDate = new Date(minDate);
+                            while (firstDate.getDay() !== targetDay) {
+                                firstDate.setDate(firstDate.getDate() + 1);
                             }
-                            return dt;
-                        }).sort((a, b) => a.getTime() - b.getTime());
+                            for (let w = 0; w < numWeeks; w++) {
+                                const nextDate = new Date(firstDate);
+                                nextDate.setDate(firstDate.getDate() + w * 7);
+                                allComputed.push(nextDate);
+                            }
+                        });
 
-                        date1 = date1 || computedDates[0];
-                        date2 = date2 || computedDates[1] || computedDates[0];
+                        allComputed.sort((a, b) => a.getTime() - b.getTime());
+                        targetDates.push(...allComputed);
                     }
 
-                    // Insert 1st process order
-                    const proc1 = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
-                        orderId,
-                        paymentMethod,
-                        isPaid: 0,
-                        amount: calculatedGrandTotal,
-                        creditPaid: requestedCredit,
-                        moneyPaid: Math.max(0, calculatedGrandTotal - requestedCredit),
-                        status: "Ordered",
-                        sheduleDate: date1,
-                    });
-                    createdProcessOrders.push(proc1);
+                    // Create an individual processorders row for each scheduled date (e.g. 8 rows for 4 weeks twice a week)
+                    const clientIsPaid = Number(req.body.isPaid) === 1 ? 1 : 0;
 
-                    // Insert 2nd process order
-                    const proc2 = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
-                        orderId,
-                        paymentMethod,
-                        isPaid: 0,
-                        amount: calculatedGrandTotal,
-                        creditPaid: requestedCredit,
-                        moneyPaid: Math.max(0, calculatedGrandTotal - requestedCredit),
-                        status: "Ordered",
-                        sheduleDate: date2,
-                    });
-                    createdProcessOrders.push(proc2);
+                    for (let i = 0; i < targetDates.length; i++) {
+                        const sDate = targetDates[i];
+                        const isFirstOrder = i === 0;
 
-                    primaryProcessOrderId = proc1.insertId;
-                    primaryInvNo = proc1.invNo;
+                        // Only the 1st order collects the payment today if paying up front; subsequent orders are pending
+                        const rowCreditPaid = isFirstOrder ? requestedCredit : 0;
+                        const rowMoneyPaid = (isFirstOrder && clientIsPaid === 1) ? Math.max(0, calculatedGrandTotal - requestedCredit) : 0;
+                        const rowAmount = (isFirstOrder && clientIsPaid === 1) ? calculatedGrandTotal : 0;
+                        const rowFinancials = isFirstOrder ? firstOrderFinancials : normalOrderFinancials;
 
-                    // ── 5d. Save order items for both process orders ───────────
-                    const additionalItems = cartItems.filter((i) => i.itemType === "additional");
-                    for (const item of additionalItems) {
-                        await RetailOrderDao.saveOrderAdditionalItemWithTransactionDao(connection, orderId, item, proc1.insertId);
-                    }
+                        const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
+                            orderId,
+                            paymentMethod: paymentMethod || (isFirstOrder ? "Card" : "Cash"),
+                            isPaid: isFirstOrder ? clientIsPaid : 0,
+                            amount: rowAmount,
+                            creditPaid: rowCreditPaid,
+                            moneyPaid: rowMoneyPaid,
+                            status: "Ordered",
+                            sheduleDate: sDate,
+                            ...rowFinancials,
+                        });
 
-                    // Packages link to each processOrderId
-                    const packageItems = cartItems.filter((i) => i.itemType === "package");
-                    for (const pkg of packageItems) {
-                        await RetailOrderDao.saveOrderPackageWithTransactionDao(connection, proc1.insertId, pkg);
-                        await RetailOrderDao.saveOrderPackageWithTransactionDao(connection, proc2.insertId, pkg);
+                        createdProcessOrders.push(proc);
+
+                        if (isFirstOrder) {
+                            primaryProcessOrderId = proc.insertId;
+                            primaryInvNo = proc.invNo;
+                            primaryScheduledDate = sDate;
+                        }
+
+                        // ── 5d. Save order items for each process order ────────
+                        await RetailOrderDao.saveOrderItemsWithTransactionDao(
+                            connection, orderId, proc.insertId, cartItems
+                        );
                     }
                 } else {
-                    // One Time or Once a Week: 1 process order row
+                    // One Time: 1 process order row
                     let targetDate = parseScheduleDate(deliveryDate);
                     if (!targetDate && Array.isArray(calculatedOrders) && calculatedOrders.length > 0) {
                         targetDate = parseScheduleDate(calculatedOrders[0]?.date || calculatedOrders[0]?.dateStr);
                     }
 
+                    const clientIsPaid = Number(req.body.isPaid) === 1 ? 1 : 0;
+                    const oneTimeMoneyPaid = clientIsPaid === 1 ? Math.max(0, calculatedGrandTotal - requestedCredit) : 0;
+                    const oneTimeAmount = clientIsPaid === 1 ? calculatedGrandTotal : 0;
+
                     const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
                         orderId,
                         paymentMethod,
-                        isPaid: 0,
-                        amount: calculatedGrandTotal,
+                        isPaid: clientIsPaid,
+                        amount: oneTimeAmount,
                         creditPaid: requestedCredit,
-                        moneyPaid: Math.max(0, calculatedGrandTotal - requestedCredit),
+                        moneyPaid: oneTimeMoneyPaid,
                         status: "Ordered",
                         sheduleDate: targetDate,
+                        ...firstOrderFinancials,
                     });
                     createdProcessOrders.push(proc);
                     primaryProcessOrderId = proc.insertId;
                     primaryInvNo = proc.invNo;
+                    primaryScheduledDate = targetDate;
 
                     // ── 5d. Save all order items ──────────────────────────────
                     await RetailOrderDao.saveOrderItemsWithTransactionDao(
@@ -678,6 +719,63 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     RetailOrderDao.recalculateAndPersistCreditLimitDao(userId).catch((limitErr) => {
                         console.error("[createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
                     });
+
+                    // ── ShoutOUT SMS Dispatch (best-effort, after commit) ──
+                    (async () => {
+                        try {
+                            // 1. Determine Earliest Possible Schedule Date (EPSD)
+                            let earliestDeliveryDateObj = null;
+                            if (checkoutDetails?.earliestDeliveryDate) {
+                                earliestDeliveryDateObj = parseScheduleDate(checkoutDetails.earliestDeliveryDate);
+                            }
+                            if (!earliestDeliveryDateObj) {
+                                earliestDeliveryDateObj = new Date();
+                                earliestDeliveryDateObj.setDate(earliestDeliveryDateObj.getDate() + 3);
+                            }
+
+                            const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
+                            const toDateStr = (d) => {
+                                if (!d) return null;
+                                const dt = (d instanceof Date) ? d : new Date(d);
+                                return isNaN(dt.getTime()) ? null : `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+                            };
+
+                            const scheduledDateStr = toDateStr(primaryScheduledDate);
+                            const earliestDateStr = toDateStr(earliestDeliveryDateObj);
+
+                            const isType1 = Boolean(scheduledDateStr && earliestDateStr && scheduledDateStr <= earliestDateStr);
+
+                            console.log(`[createOrder SMS] scheduledDate: ${scheduledDateStr}, earliestDate: ${earliestDateStr}, isType1: ${isType1}, paymentMethod: ${paymentMethod}`);
+
+                            if (isType1) {
+                                // Type 1: Deliver Date = E.P.S.D.
+                                // 1. Payment Cash or Cash + Credit
+                                // 2. Payment Direct User to the Pay Now Screen - After Payment Success
+                                // 3. Payment Full Credit
+                                // SMS: “Dear Customer, your order : [INV NO] is confirmed. Thank you for ordering with Polygon!”
+                                await orderSmsService.sendOrderConfirmedSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    invNo: primaryInvNo,
+                                });
+                            } else {
+                                // Type 2: Delivery Date After E.P.S.D.
+                                // 1. Cash or Cash+Credit:
+                                //    SMS When the Order is placed: “Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on [Processing Date]. Please confirm your order by 6:00 PM or it will be cancelled.”
+                                // 2. Card:
+                                //    SMS When the Order is placed: “Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on [Processing Date]. Please pay by 6:00 PM to confirm your order, or it will be cancelled.”
+                                const isCard = String(paymentMethod).toLowerCase() === "card";
+                                await orderSmsService.sendOrderPlacedAfterEpsdSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    deliveryDate: primaryScheduledDate || scheduledDateStr,
+                                    isCardPayment: isCard,
+                                });
+                            }
+                        } catch (smsErr) {
+                            console.error("[createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
+                        }
+                    })();
 
                     return safeRespond(201, {
                         status: true,
@@ -750,8 +848,12 @@ exports.getDeliveryCities = asyncHandler(async (req, res) => {
 exports.getInvoiceByOrderId = asyncHandler(async (req, res) => {
     const { orderId } = req.params;
     const { userId } = req.user;
+    const { processOrderId, invNo } = req.query;
 
-    const result = await RetailOrderDao.getInvoiceByOrderIdDao(orderId, userId);
+    const result = await RetailOrderDao.getInvoiceByOrderIdDao(orderId, userId, {
+        processOrderId,
+        invNo,
+    });
 
     if (!result || !result.invoice) {
         return res.status(404).json({
@@ -788,3 +890,36 @@ exports.getDeliveredOrdersTotal = async (req, res) => {
         });
     }
 };
+
+/**
+ * GET /api/order/schedule-orders/:sheduleDate?
+ * Fetch orders scheduled for a specific date (or the user's latest scheduled order date).
+ */
+exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
+    const userId = req.user?.id || req.user?.userId;
+    let sheduleDate = req.query.sheduleDate || req.params.sheduleDate;
+
+    if (!sheduleDate) {
+        if (userId) {
+            sheduleDate = await RetailOrderDao.getLatestScheduleDateForUser(userId);
+        }
+
+        if (!sheduleDate) {
+            const d = new Date();
+            d.setDate(d.getDate() + 3);
+            sheduleDate = d.toISOString().slice(0, 10);
+        }
+    }
+
+    const result = await RetailOrderDao.getOrdersForSheduleDate(sheduleDate, userId);
+
+    return res.status(200).json({
+        status: true,
+        sheduleDate: result.sheduleDate,
+        orderDate: result.orderDate,
+        count: result.count,
+        order: result.orders.length > 0 ? result.orders[0] : null,
+        orders: result.orders,
+    });
+});
+

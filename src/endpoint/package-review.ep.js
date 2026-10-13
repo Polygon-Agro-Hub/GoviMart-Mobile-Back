@@ -1,5 +1,6 @@
 const asyncHandler = require("express-async-handler");
 const packageReviewDao = require("../dao/package-review.dao");
+const orderSmsService = require("../services/sms/order-sms.service");
 
 const ensureRetailUser = (req, res) => {
     const buyerType = req.user?.buyerType;
@@ -171,6 +172,22 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
     }
 
     try {
+        // Validate remaining packing slots count: if 0, return error
+        try {
+            const slotInfo = await packageReviewDao.getPackingSlotAvailabilityDao(
+                newScheduleDate || null,
+                processOrderId || orderId,
+            );
+            if (slotInfo && slotInfo.remaining <= 0) {
+                return res.status(400).json({
+                    status: false,
+                    message: "Sorry, no packing slots are available for this schedule date. We cannot accept any more orders.",
+                });
+            }
+        } catch (valErr) {
+            console.warn("[confirmPackageReview Endpoint] Slot validation check error:", valErr.message);
+        }
+
         const result = await packageReviewDao.confirmPackageReviewDao({
             orderId,
             processOrderId,
@@ -189,6 +206,24 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
         });
 
         console.log("[confirmPackageReview Endpoint] Success response:", result);
+
+        // Dispatch confirmed SMS after customer accepts review (best-effort)
+        (async () => {
+            try {
+                const { invNo, userId: resolvedUserId } = await orderSmsService.resolveOrderDetails(
+                    processOrderId || orderId,
+                    userId
+                );
+                if (invNo) {
+                    await orderSmsService.sendOrderConfirmedSms({
+                        userId: resolvedUserId,
+                        invNo,
+                    });
+                }
+            } catch (smsErr) {
+                console.warn("[confirmPackageReview] Confirmation SMS error:", smsErr.message);
+            }
+        })();
 
         return res.status(200).json({
             status: true,
@@ -259,6 +294,105 @@ exports.cancelPackageOrder = asyncHandler(async (req, res) => {
         });
     } catch (error) {
         console.error("[cancelPackageOrder] Error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to cancel order",
+        });
+    }
+});
+
+/**
+ * POST /api/order/confirm-order
+ * Separate route: confirms order with live marketplace prices, updating orderadditionalitems,
+ * processorders (fullTotal, total, discount, amount, moneyPaid), and orders (fullTotal, total, discount).
+ */
+exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
+    const userId = getUserId(req);
+    const { orderId, processOrderId, newTotal } = req.body;
+
+    if (!orderId && !processOrderId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderId or processOrderId is required",
+        });
+    }
+
+    try {
+        const result = await packageReviewDao.confirmOrderWithLivePricesDao({
+            orderId,
+            processOrderId,
+            userId,
+            newTotal,
+        });
+
+        // Dispatch confirmed SMS after customer confirms order with live prices (best-effort)
+        (async () => {
+            try {
+                const { invNo, userId: resolvedUserId } = await orderSmsService.resolveOrderDetails(
+                    processOrderId || orderId,
+                    userId
+                );
+                if (invNo) {
+                    await orderSmsService.sendOrderConfirmedSms({
+                        userId: resolvedUserId,
+                        invNo,
+                    });
+                }
+            } catch (smsErr) {
+                console.warn("[confirmOrderWithLivePrices] Confirmation SMS error:", smsErr.message);
+            }
+        })();
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+            data: result,
+        });
+    } catch (error) {
+        console.error("[confirmOrderWithLivePrices] Error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to confirm order with live prices",
+        });
+    }
+});
+
+exports.cancelOrderBeforeConfirm = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
+    const userId = getUserId(req);
+    const { orderId, processOrderId } = req.body;
+
+    if (!userId) {
+        return res.status(401).json({
+            status: false,
+            message: "Unauthorized",
+        });
+    }
+
+    if (!orderId && !processOrderId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderId or processOrderId is required",
+        });
+    }
+
+    try {
+        const result = await packageReviewDao.cancelOrderBeforeConfirmDao({
+            orderId,
+            processOrderId,
+            userId,
+        });
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+            data: result,
+        });
+    } catch (error) {
+        console.error("[cancelOrderBeforeConfirm] Error:", error);
         return res.status(400).json({
             status: false,
             message: error.message || "Failed to cancel order",

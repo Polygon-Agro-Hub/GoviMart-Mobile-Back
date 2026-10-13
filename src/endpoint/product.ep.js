@@ -17,16 +17,6 @@ exports.getAllProduct = async (req, res) => {
   }
 
   try {
-    // Check in-memory package cache if no search filter
-    const cachedPackages = packageCache.getCachedPackages(search);
-    if (cachedPackages) {
-      return res.status(200).json({
-        status: true,
-        message: "Product found.",
-        product: cachedPackages,
-      });
-    }
-
     const productData = await ProductDao.getAllProductDao(search);
     if (productData.length === 0) {
       return res.json({
@@ -36,11 +26,6 @@ exports.getAllProduct = async (req, res) => {
           : "No product found",
         product: [],
       });
-    }
-
-    // Cache default package list in memory
-    if (!search || search.trim() === "") {
-      packageCache.setCachedPackages(productData);
     }
 
     res.status(200).json({
@@ -113,20 +98,26 @@ exports.getPackageDetails = async (req, res) => {
     // const packageIdNum = parseInt(packageId, 10);
     // console.log(packageIdNum);
 
-    const packageItemData = await ProductDao.getAllPackageItemsDao(packageId);
-    if (packageItemData.length === 0) {
+    const [packageItemData, packageInfo] = await Promise.all([
+      ProductDao.getAllPackageItemsDao(packageId),
+      ProductDao.getPackageDetailsByIdDao(packageId),
+    ]);
+
+    if ((!packageItemData || packageItemData.length === 0) && !packageInfo) {
       return res.json({
         status: false,
         message: "No package data found",
         product: [],
       });
     }
-    // console.log(packageItemData);
 
     res.status(200).json({
       status: true,
       message: "Product found.",
-      packageItems: packageItemData,
+      packageItems: packageItemData || [],
+      packageInfo: packageInfo || null,
+      packageType: packageInfo?.packageType || null,
+      endDate: packageInfo?.endDate || null,
     });
   } catch (err) {
     console.error("Error during get product:", err);
