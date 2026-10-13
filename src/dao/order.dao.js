@@ -773,11 +773,13 @@ exports.getRetailOrderHistoryDao = async (userId) => {
     });
 };
 
-exports.getRetailOrderByIdDao = async (orderId, userId) => {
+exports.getRetailOrderByIdDao = async (orderId, userId, processOrderId = null) => {
     return new Promise((resolve, reject) => {
         if (!orderId || !userId) {
             return reject("Invalid orderId or userId");
         }
+
+        const effectiveProcessOrderId = processOrderId || orderId;
 
         const orderSql = `
       SELECT 
@@ -823,7 +825,7 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
       LEFT JOIN driverreturnorders dro ON dro.drvOrderId = do_order.id
       LEFT JOIN returnreason rr ON rr.id = dro.returnReasonId
       WHERE (p.id = ? OR o.id = ?) AND o.userId = ?
-      ORDER BY p.id DESC
+      ORDER BY (p.id = ?) DESC, p.sheduleDate ASC, p.id ASC
     `;
 
         const houseSql = `SELECT * FROM orderhouse WHERE orderId = ?`;
@@ -850,7 +852,7 @@ exports.getRetailOrderByIdDao = async (orderId, userId) => {
 
         db.collectionofficer.query(
             orderSql,
-            [orderId, orderId, userId],
+            [orderId, orderId, userId, effectiveProcessOrderId],
             (err, orders) => {
                 if (err) return reject("Error fetching order: " + err);
                 if (!orders || orders.length === 0)
@@ -983,8 +985,14 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
             return reject(new Error("Invalid orderId"));
         }
 
-        const poSql = "SELECT id, orderId FROM processorders WHERE id = ? LIMIT 1";
-        db.collectionofficer.query(poSql, [orderId], (poErr, poRows) => {
+        const poSql = `
+            SELECT id, orderId 
+            FROM processorders 
+            WHERE id = ? OR orderId = ? 
+            ORDER BY (id = ?) DESC, sheduleDate ASC, id ASC 
+            LIMIT 1
+        `;
+        db.collectionofficer.query(poSql, [orderId, orderId, orderId], (poErr, poRows) => {
             if (poErr) return reject(new Error("Database error: " + poErr.message));
 
             const processOrderId = poRows?.[0]?.id || orderId;
@@ -1167,36 +1175,43 @@ exports.getOrderAdditionalItemsDao = async (orderId, processOrderId = null) => {
             return reject(new Error("Invalid orderId"));
         }
 
-        const poSql = `
-            SELECT id, orderId 
-            FROM processorders 
-            WHERE (? IS NOT NULL AND id = ?)
-               OR id = ? 
-               OR orderId = ? 
-            ORDER BY 
-               (? IS NOT NULL AND id = ?) DESC,
-               (id = ?) DESC, 
-               sheduleDate ASC,
-               id ASC 
-            LIMIT 1
-        `;
-        db.collectionofficer.query(
-            poSql,
-            [
-                processOrderId, processOrderId,
-                orderId, orderId,
-                processOrderId, processOrderId,
-                orderId,
-            ],
-            (err, poRows) => {
-                if (err) return reject(new Error("Database error: " + err.message));
+        const resolveTargetProcessOrderId = () => {
+            return new Promise((res) => {
+                if (processOrderId) {
+                    return res(processOrderId);
+                }
 
-                const resolvedProcessOrderId = poRows?.[0]?.id || processOrderId || orderId;
-                const actualOrderId = poRows?.[0]?.orderId || orderId;
+                // 1. Check if orderId directly matches orderadditionalitems.proOrderId
+                const directSql = "SELECT proOrderId FROM orderadditionalitems WHERE proOrderId = ? LIMIT 1";
+                db.collectionofficer.query(directSql, [orderId], (dErr, dRows) => {
+                    if (!dErr && dRows && dRows.length > 0) {
+                        return res(orderId);
+                    }
 
+                    // 2. Resolve processOrderId from processorders table (by id or parent orderId)
+                    const poSql = `
+                        SELECT id 
+                        FROM processorders 
+                        WHERE id = ? OR orderId = ? 
+                        ORDER BY (id = ?) DESC, sheduleDate ASC, id ASC 
+                        LIMIT 1
+                    `;
+                    db.collectionofficer.query(poSql, [orderId, orderId, orderId], (poErr, poRows) => {
+                        if (poErr || !poRows || poRows.length === 0) {
+                            return res(orderId);
+                        }
+                        res(poRows[0].id);
+                    });
+                });
+            });
+        };
+
+        resolveTargetProcessOrderId()
+            .then((resolvedProOrderId) => {
                 const sql = `
               SELECT
                 oai.id,
+                oai.proOrderId,
                 oai.qty,
                 oai.unit,
                 COALESCE(oai.price, mi.discountedPrice, mi.normalPrice, 0) AS price,
@@ -1214,13 +1229,13 @@ exports.getOrderAdditionalItemsDao = async (orderId, processOrderId = null) => {
               JOIN marketplaceitems mi ON oai.productId = mi.id
               LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
               WHERE oai.proOrderId = ? 
-                 OR (oai.proOrderId = ? AND NOT EXISTS (SELECT 1 FROM orderadditionalitems sub WHERE sub.proOrderId = ?))
+                 OR oai.proOrderId IN (SELECT id FROM processorders WHERE id = ? OR orderId = ?)
               ORDER BY oai.id
             `;
 
                 db.collectionofficer.query(
                     sql,
-                    [resolvedProcessOrderId, actualOrderId, resolvedProcessOrderId],
+                    [resolvedProOrderId, orderId, orderId],
                     (err2, results) => {
                         if (err2) {
                             return reject(new Error("Database error: " + err2.message));
@@ -1228,8 +1243,8 @@ exports.getOrderAdditionalItemsDao = async (orderId, processOrderId = null) => {
                         resolve(results || []);
                     },
                 );
-            },
-        );
+            })
+            .catch(reject);
     });
 };
 
