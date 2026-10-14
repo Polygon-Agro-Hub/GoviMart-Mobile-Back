@@ -126,7 +126,9 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
         // ── orders.total = fullTotal + discount ───────────────────────────────
         const parsedFullTotal = parseFloat(fullTotal) || 0;
         const parsedDiscount = parseFloat(discount) || 0;
-        const orderTotal = parseFloat((parsedFullTotal + parsedDiscount).toFixed(2));
+        const orderTotal = parseFloat(
+            (parsedFullTotal + parsedDiscount).toFixed(2),
+        );
 
         const formatMethod = (m) => {
             if (!m) return m;
@@ -371,8 +373,14 @@ exports.createProcessOrderWithTransactionDao = (
                             let finalMoneyPaid = 0; // only set for full card-only payment
                             let finalCreditPaid = rawCreditPaid;
 
-                            const is100PercentCredit = rawCreditPaid > 0 && rawAmount > 0 && rawCreditPaid >= rawAmount;
-                            const isCardMethod = normalized === "card" || normalized === "payhere" || normalized === "credit";
+                            const is100PercentCredit =
+                                rawCreditPaid > 0 &&
+                                rawAmount > 0 &&
+                                rawCreditPaid >= rawAmount;
+                            const isCardMethod =
+                                normalized === "card" ||
+                                normalized === "payhere" ||
+                                normalized === "credit";
 
                             if (is100PercentCredit) {
                                 finalMethod = "Card";
@@ -773,7 +781,11 @@ exports.getRetailOrderHistoryDao = async (userId) => {
     });
 };
 
-exports.getRetailOrderByIdDao = async (orderId, userId, processOrderId = null) => {
+exports.getRetailOrderByIdDao = async (
+    orderId,
+    userId,
+    processOrderId = null,
+) => {
     return new Promise((resolve, reject) => {
         if (!orderId || !userId) {
             return reject("Invalid orderId or userId");
@@ -992,15 +1004,18 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
             ORDER BY (id = ?) DESC, sheduleDate ASC, id ASC 
             LIMIT 1
         `;
-        db.collectionofficer.query(poSql, [orderId, orderId, orderId], (poErr, poRows) => {
-            if (poErr) return reject(new Error("Database error: " + poErr.message));
+        db.collectionofficer.query(
+            poSql,
+            [orderId, orderId, orderId],
+            (poErr, poRows) => {
+                if (poErr) return reject(new Error("Database error: " + poErr.message));
 
-            const processOrderId = poRows?.[0]?.id || orderId;
-            const actualOrderId = poRows?.[0]?.orderId || orderId;
+                const processOrderId = poRows?.[0]?.id || orderId;
+                const actualOrderId = poRows?.[0]?.orderId || orderId;
 
-            // Select the raw fee components separately so we can log/inspect them,
-            // instead of only ever seeing the pre-summed total.
-            const packagesSql = `
+                // Select the raw fee components separately so we can log/inspect them,
+                // instead of only ever seeing the pre-summed total.
+                const packagesSql = `
               SELECT 
                 op.id AS orderPackageId,
                 op.orderId,
@@ -1019,42 +1034,42 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
               ORDER BY op.id
             `;
 
-            db.collectionofficer.query(
-                packagesSql,
-                [processOrderId],
-                (err, packRows) => {
-                    if (err) {
-                        return reject(new Error("Database error: " + err.message));
-                    }
-
-                    if (!packRows || packRows.length === 0) {
-                        return resolve([]);
-                    }
-
-                    // Defensive check: flag any package whose price components look
-                    // suspicious (null, zero, or suspiciously uniform) so it shows up
-                    // in server logs instead of silently reaching the client.
-                    packRows.forEach((p) => {
-                        const rawProduct = parseFloat(p.rawProductPrice);
-                        const rawPacking = parseFloat(p.rawPackingFee);
-                        const rawService = parseFloat(p.rawServiceFee);
-                        if (
-                            Number.isNaN(rawProduct) ||
-                            Number.isNaN(rawPacking) ||
-                            Number.isNaN(rawService) ||
-                            (rawProduct === 0 && rawPacking === 0 && rawService === 0)
-                        ) {
-                            console.warn(
-                                `[getOrderPackageDetailsDao] Suspicious fee data for packageId=${p.packageId} ` +
-                                `(orderPackageId=${p.orderPackageId}): productPrice=${p.rawProductPrice}, ` +
-                                `packingFee=${p.rawPackingFee}, serviceFee=${p.rawServiceFee}`,
-                            );
+                db.collectionofficer.query(
+                    packagesSql,
+                    [processOrderId],
+                    (err, packRows) => {
+                        if (err) {
+                            return reject(new Error("Database error: " + err.message));
                         }
-                    });
 
-                    const opIds = packRows.map((p) => p.orderPackageId);
+                        if (!packRows || packRows.length === 0) {
+                            return resolve([]);
+                        }
 
-                    const itemsSql = `
+                        // Defensive check: flag any package whose price components look
+                        // suspicious (null, zero, or suspiciously uniform) so it shows up
+                        // in server logs instead of silently reaching the client.
+                        packRows.forEach((p) => {
+                            const rawProduct = parseFloat(p.rawProductPrice);
+                            const rawPacking = parseFloat(p.rawPackingFee);
+                            const rawService = parseFloat(p.rawServiceFee);
+                            if (
+                                Number.isNaN(rawProduct) ||
+                                Number.isNaN(rawPacking) ||
+                                Number.isNaN(rawService) ||
+                                (rawProduct === 0 && rawPacking === 0 && rawService === 0)
+                            ) {
+                                console.warn(
+                                    `[getOrderPackageDetailsDao] Suspicious fee data for packageId=${p.packageId} ` +
+                                    `(orderPackageId=${p.orderPackageId}): productPrice=${p.rawProductPrice}, ` +
+                                    `packingFee=${p.rawPackingFee}, serviceFee=${p.rawServiceFee}`,
+                                );
+                            }
+                        });
+
+                        const opIds = packRows.map((p) => p.orderPackageId);
+
+                        const itemsSql = `
                   SELECT 
                     opi.id,
                     opi.orderPackageId,
@@ -1075,77 +1090,89 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
                   ORDER BY opi.id ASC, opi.orderPackageId ASC, opi.productType ASC, opi.productId ASC, opi.qty ASC, opi.price ASC, opi.createdAt ASC
                 `;
 
-                    db.collectionofficer.query(itemsSql, [opIds], (itemErr, itemRows) => {
-                        if (itemErr) {
-                            return reject(new Error("Database error: " + itemErr.message));
-                        }
+                        db.collectionofficer.query(
+                            itemsSql,
+                            [opIds],
+                            (itemErr, itemRows) => {
+                                if (itemErr) {
+                                    return reject(
+                                        new Error("Database error: " + itemErr.message),
+                                    );
+                                }
 
-                        const itemsByPackId = {};
-                        (itemRows || []).forEach((item) => {
-                            if (!itemsByPackId[item.orderPackageId]) {
-                                itemsByPackId[item.orderPackageId] = [];
-                            }
-                            const unit = item.unitType ? String(item.unitType).trim() : "kg";
-                            itemsByPackId[item.orderPackageId].push({
-                                itemName: item.itemName || item.typeName || "Item",
-                                quantity: `${parseFloat(item.qty || 1)} ${unit}`,
-                                image:
-                                    item.image ||
-                                    "https://images.unsplash.com/photo-1542838132-92c53300491e?w=200",
-                                price: parseFloat(item.price || 0),
-                            });
-                        });
+                                const itemsByPackId = {};
+                                (itemRows || []).forEach((item) => {
+                                    if (!itemsByPackId[item.orderPackageId]) {
+                                        itemsByPackId[item.orderPackageId] = [];
+                                    }
+                                    const unit = item.unitType
+                                        ? String(item.unitType).trim()
+                                        : "kg";
+                                    itemsByPackId[item.orderPackageId].push({
+                                        itemName: item.itemName || item.typeName || "Item",
+                                        quantity: `${parseFloat(item.qty || 1)} ${unit}`,
+                                        image:
+                                            item.image ||
+                                            "https://images.unsplash.com/photo-1542838132-92c53300491e?w=200",
+                                        price: parseFloat(item.price || 0),
+                                    });
+                                });
 
-                        const fallbackPackIds = packRows
-                            .filter(
-                                (p) =>
-                                    !itemsByPackId[p.orderPackageId] ||
-                                    itemsByPackId[p.orderPackageId].length === 0,
-                            )
-                            .map((p) => p.packageId);
+                                const fallbackPackIds = packRows
+                                    .filter(
+                                        (p) =>
+                                            !itemsByPackId[p.orderPackageId] ||
+                                            itemsByPackId[p.orderPackageId].length === 0,
+                                    )
+                                    .map((p) => p.packageId);
 
-                        if (fallbackPackIds.length > 0) {
-                            const fallbackSql = `
+                                if (fallbackPackIds.length > 0) {
+                                    const fallbackSql = `
                           SELECT pd.packageId, pd.qty AS itemQty, pt.typeName
                           FROM packagedetails pd
                           JOIN producttypes pt ON pd.productTypeId = pt.id
                           WHERE pd.packageId IN (?)
                         `;
-                            db.collectionofficer.query(
-                                fallbackSql,
-                                [fallbackPackIds],
-                                (fbErr, fbRows) => {
-                                    if (!fbErr && fbRows) {
-                                        packRows.forEach((pack) => {
-                                            if (
-                                                !itemsByPackId[pack.orderPackageId] ||
-                                                itemsByPackId[pack.orderPackageId].length === 0
-                                            ) {
-                                                itemsByPackId[pack.orderPackageId] = fbRows
-                                                    .filter((r) => r.packageId === pack.packageId)
-                                                    .map((r) => ({
-                                                        itemName: r.typeName,
-                                                        quantity: `${r.itemQty} units`,
-                                                        image:
-                                                            "https://images.unsplash.com/photo-1542838132-92c53300491e?w=200",
-                                                        price: 0,
-                                                    }));
+                                    db.collectionofficer.query(
+                                        fallbackSql,
+                                        [fallbackPackIds],
+                                        (fbErr, fbRows) => {
+                                            if (!fbErr && fbRows) {
+                                                packRows.forEach((pack) => {
+                                                    if (
+                                                        !itemsByPackId[pack.orderPackageId] ||
+                                                        itemsByPackId[pack.orderPackageId].length === 0
+                                                    ) {
+                                                        itemsByPackId[pack.orderPackageId] = fbRows
+                                                            .filter((r) => r.packageId === pack.packageId)
+                                                            .map((r) => ({
+                                                                itemName: r.typeName,
+                                                                quantity: `${r.itemQty} units`,
+                                                                image:
+                                                                    "https://images.unsplash.com/photo-1542838132-92c53300491e?w=200",
+                                                                price: 0,
+                                                            }));
+                                                    }
+                                                });
                                             }
-                                        });
-                                    }
 
+                                            const packages = buildPackageList(
+                                                packRows,
+                                                itemsByPackId,
+                                            );
+                                            resolve(packages);
+                                        },
+                                    );
+                                } else {
                                     const packages = buildPackageList(packRows, itemsByPackId);
                                     resolve(packages);
-                                },
-                            );
-                        } else {
-                            const packages = buildPackageList(packRows, itemsByPackId);
-                            resolve(packages);
-                        }
-                    });
-                },
-            );
-        });
+                                }
+                            },
+                        );
+                    },
+                );
+            },
+        );
     });
 };
 
@@ -1182,7 +1209,8 @@ exports.getOrderAdditionalItemsDao = async (orderId, processOrderId = null) => {
                 }
 
                 // 1. Check if orderId directly matches orderadditionalitems.proOrderId
-                const directSql = "SELECT proOrderId FROM orderadditionalitems WHERE proOrderId = ? LIMIT 1";
+                const directSql =
+                    "SELECT proOrderId FROM orderadditionalitems WHERE proOrderId = ? LIMIT 1";
                 db.collectionofficer.query(directSql, [orderId], (dErr, dRows) => {
                     if (!dErr && dRows && dRows.length > 0) {
                         return res(orderId);
@@ -1196,12 +1224,16 @@ exports.getOrderAdditionalItemsDao = async (orderId, processOrderId = null) => {
                         ORDER BY (id = ?) DESC, sheduleDate ASC, id ASC 
                         LIMIT 1
                     `;
-                    db.collectionofficer.query(poSql, [orderId, orderId, orderId], (poErr, poRows) => {
-                        if (poErr || !poRows || poRows.length === 0) {
-                            return res(orderId);
-                        }
-                        res(poRows[0].id);
-                    });
+                    db.collectionofficer.query(
+                        poSql,
+                        [orderId, orderId, orderId],
+                        (poErr, poRows) => {
+                            if (poErr || !poRows || poRows.length === 0) {
+                                return res(orderId);
+                            }
+                            res(poRows[0].id);
+                        },
+                    );
                 });
             });
         };
@@ -1405,7 +1437,9 @@ const getPickupInfoDao = (isPickup, centerId) => {
                 return resolve(null);
             }
             if (!rows || rows.length === 0) {
-                console.warn(`[getPickupInfoDao] No distributedcenter row for id=${centerId}`);
+                console.warn(
+                    `[getPickupInfoDao] No distributedcenter row for id=${centerId}`,
+                );
                 return resolve(null);
             }
             const r = rows[0];
@@ -1468,13 +1502,19 @@ const getPackageDetailsForProcessedItemsDao = (processedFamilyPackItems) => {
     });
 };
 
-exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId, options = {}) => {
+exports.getInvoiceByOrderIdDao = (
+    orderIdOrProcessOrderId,
+    userId,
+    options = {},
+) => {
     return new Promise((resolve, reject) => {
         if (!orderIdOrProcessOrderId || !userId) {
             return reject(new Error("Invalid orderId or userId"));
         }
 
-        const optProcessOrderId = options?.processOrderId ? String(options.processOrderId).trim() : null;
+        const optProcessOrderId = options?.processOrderId
+            ? String(options.processOrderId).trim()
+            : null;
         const optInvNo = options?.invNo ? String(options.invNo).trim() : null;
         const idParam = String(orderIdOrProcessOrderId).trim();
         const isInvNoParam = idParam.toUpperCase().startsWith("INV-") ? 1 : 0;
@@ -1523,16 +1563,22 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId, options = {})
         db.collectionofficer.query(
             invoiceQuery,
             [
-                optProcessOrderId, optProcessOrderId,
-                optInvNo, optInvNo,
-                isInvNoParam, idParam,
+                optProcessOrderId,
+                optProcessOrderId,
+                optInvNo,
+                optInvNo,
+                isInvNoParam,
+                idParam,
                 idParam,
                 idParam,
                 userId,
                 // ORDER BY params:
-                optProcessOrderId, optProcessOrderId,
-                optInvNo, optInvNo,
-                isInvNoParam, idParam,
+                optProcessOrderId,
+                optProcessOrderId,
+                optInvNo,
+                optInvNo,
+                isInvNoParam,
+                idParam,
                 idParam,
                 idParam,
             ],
@@ -1879,7 +1925,7 @@ exports.markOrderPaidDao = async (identifier, transactionId) => {
 async function getOrdersForSheduleDate(sheduleDate, userId = null) {
     const promiseDb = db.collectionofficer.promise();
     let userCondition = "";
-    const params = [sheduleDate, sheduleDate];
+    const params = [sheduleDate];
     if (userId) {
         userCondition = "AND o.userId = ? AND COALESCE(po.isFinalized, 0) = 0";
         params.push(userId);
@@ -1907,26 +1953,25 @@ async function getOrdersForSheduleDate(sheduleDate, userId = null) {
             END AS orderType
         FROM collection_officer.processorders po
         JOIN collection_officer.orders o ON o.id = po.orderId
-        WHERE (DATE_FORMAT(po.sheduleDate, '%Y-%m-%d') = ? OR DATE(po.sheduleDate) = ?)
+        WHERE DATE(po.sheduleDate) = ?
             AND po.status = 'Ordered'
-            -- both types: ala carte OR package + imdt
-            AND (
-                o.isPackage = 0
-                OR (o.isPackage = 1 AND o.isFinalizeImdt = 1)
-            )
-            -- Exclude orders created today
-            AND (DATE(o.createdAt) < CURDATE() OR DATE_FORMAT(o.createdAt, '%Y-%m-%d') < CURDATE())
-            -- Check isConfirmed = 0 (only unconfirmed orders)
             AND COALESCE(po.isConfirmed, 0) = 0
+            AND (
+                (o.isPackage = 1 AND o.isFinalizeImdt = 1)
+                OR (o.isPackage = 0 AND o.isFinalizeImdt = 0)
+            )
             ${userCondition}
         ORDER BY po.id ASC
         `,
         params,
     );
 
-    const resolvedOrderDate = rows.length > 0 && rows[0].createdAt
-        ? new Date(rows[0].createdAt).toISOString().slice(0, 10)
-        : new Date(new Date(sheduleDate).getTime() - 3 * 86400000).toISOString().slice(0, 10);
+    const resolvedOrderDate =
+        rows.length > 0 && rows[0].createdAt
+            ? new Date(rows[0].createdAt).toISOString().slice(0, 10)
+            : new Date(new Date(sheduleDate).getTime() - 3 * 86400000)
+                .toISOString()
+                .slice(0, 10);
 
     return {
         sheduleDate,
@@ -1983,4 +2028,3 @@ async function getLatestScheduleDateForUser(userId) {
 
 exports.getOrdersForSheduleDate = getOrdersForSheduleDate;
 exports.getLatestScheduleDateForUser = getLatestScheduleDateForUser;
-

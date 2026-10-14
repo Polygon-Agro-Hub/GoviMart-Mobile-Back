@@ -901,25 +901,22 @@ exports.getDeliveredOrdersTotal = async (req, res) => {
     }
 };
 
+// Returns YYYY-MM-DD for (today in Sri Lanka + N days)
+const getColomboDatePlus = (days) => {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Colombo" });
+    const d = new Date(`${today}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+};
+
 /**
  * GET /api/order/schedule-orders/:sheduleDate?
- * Fetch orders scheduled for a specific date (or the user's latest scheduled order date).
+ * Default sheduleDate = today + 3 days 
  */
 exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
     const userId = req.user?.id || req.user?.userId;
-    let sheduleDate = req.query.sheduleDate || req.params.sheduleDate;
-
-    if (!sheduleDate) {
-        if (userId) {
-            sheduleDate = await RetailOrderDao.getLatestScheduleDateForUser(userId);
-        }
-
-        if (!sheduleDate) {
-            const d = new Date();
-            d.setDate(d.getDate() + 3);
-            sheduleDate = d.toISOString().slice(0, 10);
-        }
-    }
+    const sheduleDate =
+        req.query.sheduleDate || req.params.sheduleDate || getColomboDatePlus(3);
 
     const result = await RetailOrderDao.getOrdersForSheduleDate(sheduleDate, userId);
 
