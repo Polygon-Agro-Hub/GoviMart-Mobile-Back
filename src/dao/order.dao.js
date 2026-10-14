@@ -680,102 +680,53 @@ exports.getRetailOrderHistoryDao = async (userId) => {
             return reject("Invalid userId");
         }
 
+        // One row per processorders record (every invoice) for each order
         const orderQuery = `
-  SELECT 
-    po.id AS orderId,
-    po.sheduleDate AS scheduleDate,
-    o.createdAt AS createdAt,
-    o.sheduleTime AS scheduleTime,
-    o.delivaryMethod AS delivaryMethod,
-    COALESCE(po.discount, 0) AS orderDiscount,
-    COALESCE(po.fullTotal, po.total, 0) AS fullTotal,
-    po.invNo AS invoiceNo,
-    po.status AS processStatus,
-    po.isFinalized
-  FROM orders o
-  LEFT JOIN (
-    SELECT *
-    FROM processorders
-    WHERE id IN (
-      SELECT MAX(id)
-      FROM processorders
-      GROUP BY orderId
-    )
-  ) po ON o.id = po.orderId
-  WHERE o.userId = ?
-  ORDER BY o.createdAt DESC
-`;
+            SELECT 
+                po.id AS orderId,              -- processorders.id (unique per invoice)
+                o.id AS parentOrderId,         -- orders.id
+                po.sheduleDate AS scheduleDate,
+                o.createdAt AS createdAt,
+                o.sheduleTime AS scheduleTime,
+                o.delivaryMethod AS delivaryMethod,
+                COALESCE(po.discount, 0) AS orderDiscount,
+                COALESCE(po.fullTotal, po.total, 0) AS fullTotal,
+                po.invNo AS invoiceNo,
+                po.status AS processStatus,
+                po.isFinalized
+            FROM orders o
+            LEFT JOIN processorders po ON o.id = po.orderId
+            WHERE o.userId = ?
+            ORDER BY o.createdAt DESC, po.id DESC
+        `;
 
-        const familyPackItemsQuery = `
-      SELECT 
-        op.id,
-        mp.productPrice AS amount
-      FROM orderpackage op
-      JOIN marketplacepackages mp ON op.packageId = mp.id
-      WHERE op.orderId = ?
-    `;
-
-        const additionalItemsQuery = `
-      SELECT
-        oai.price AS unitPrice,
-        oai.qty AS quantity,
-        (oai.price * oai.qty) AS amount,
-        oai.discount AS itemDiscount
-      FROM orderadditionalitems oai
-      JOIN marketplaceitems mi ON oai.productId = mi.id
-      WHERE oai.proOrderId = ?
-    `;
-
-        db.collectionofficer.query(orderQuery, [userId], async (err, orders) => {
+        db.collectionofficer.query(orderQuery, [userId], (err, orders) => {
             if (err) {
                 return reject("Error fetching retail order history: " + err);
             }
 
             try {
-                const normalizedOrders = await Promise.all(
-                    orders.map(async (order) => {
-                        // (Optional) Keep the below two fetches in case you want item breakdown later
-                        const familyPackItems = await new Promise((res, rej) => {
-                            db.collectionofficer.query(
-                                familyPackItemsQuery,
-                                [order.orderId],
-                                (err, items) => {
-                                    if (err) return rej("Family pack query error: " + err);
-                                    res(items || []);
-                                },
-                            );
-                        });
+                const normalizedOrders = (orders || []).map((order) => {
+                    const fullTotal = parseFloat(order.fullTotal || 0).toFixed(2);
 
-                        const additionalItems = await new Promise((res, rej) => {
-                            db.collectionofficer.query(
-                                additionalItemsQuery,
-                                [order.orderId],
-                                (err, items) => {
-                                    if (err) return rej("Additional items query error: " + err);
-                                    res(items || []);
-                                },
-                            );
-                        });
-
-                        // ✅ Use fullTotal directly from DB
-                        const fullTotal = parseFloat(order.fullTotal || 0).toFixed(2);
-
-                        return {
-                            orderId: String(order.orderId) || "N/A",
-                            invoiceNo: order.invoiceNo ? String(order.invoiceNo) : "N/A",
-                            scheduleDate: order.scheduleDate || "N/A",
-                            scheduleTime: order.scheduleTime || "N/A",
-                            delivaryMethod: order.delivaryMethod || "N/A",
-                            fullTotal: `Rs. ${fullTotal}`,
-                            createdAt: order.createdAt || "N/A",
-                            processStatus: order.processStatus || "Pending",
-                        };
-                    }),
-                );
+                    return {
+                        // processorders.id (falls back to orders.id if no processorders row yet)
+                        orderId: String(order.orderId ?? order.parentOrderId),
+                        // orders.id
+                        parentOrderId: String(order.parentOrderId),
+                        invoiceNo: order.invoiceNo ? String(order.invoiceNo) : "N/A",
+                        scheduleDate: order.scheduleDate || "N/A",
+                        scheduleTime: order.scheduleTime || "N/A",
+                        delivaryMethod: order.delivaryMethod || "N/A",
+                        fullTotal: `Rs. ${fullTotal}`,
+                        createdAt: order.createdAt || "N/A",
+                        processStatus: order.processStatus || "Pending",
+                    };
+                });
 
                 resolve(normalizedOrders);
-            } catch (err) {
-                reject("Error processing order totals: " + err);
+            } catch (e) {
+                reject("Error processing order history: " + e);
             }
         });
     });
@@ -1621,8 +1572,8 @@ exports.getInvoiceByOrderIdDao = (
                 FROM orderadditionalitems oai
                 JOIN marketplaceitems mi ON oai.productId = mi.id
                 LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-                WHERE oai.proOrderId = ?
-                ORDER BY oai.id ASC
+                WHERE oai.proOrderId = ? 
+                   OR (oai.proOrderId = ? AND NOT EXISTS (SELECT 1 FROM orderadditionalitems sub WHERE sub.proOrderId = ?))
             `;
 
                 const billingQuery = `
@@ -1659,7 +1610,7 @@ exports.getInvoiceByOrderIdDao = (
                     new Promise((res, rej) => {
                         db.collectionofficer.query(
                             additionalItemsQuery,
-                            [processOrderId],
+                            [processOrderId, actualOrderId, processOrderId],
                             (e, r) => (e ? rej(e) : res(r || [])),
                         );
                     }),
