@@ -20,8 +20,11 @@ const DASH_SERVICE_FEE = 180;
 const isCardPayment = (paymentMethod, isPaid) => {
     const m = (paymentMethod || "").trim().toLowerCase();
     const paid = isPaid === 1 || isPaid === true || String(isPaid) === "1";
-    if (m.includes("card") || m.includes("payhere") || m.includes("online")) return true;
-    return paid && !m.includes("cash") && !m.includes("cod") && !m.includes("credit");
+    if (m.includes("card") || m.includes("payhere") || m.includes("online"))
+        return true;
+    return (
+        paid && !m.includes("cash") && !m.includes("cod") && !m.includes("credit")
+    );
 };
 
 /**
@@ -89,7 +92,9 @@ const settleCredit = ({
         creditPaid > 0 && moneyPaid <= 0 && creditPaid >= oldFullTotal - 0.01;
     const isCreditOnly =
         fullyByCredit ||
-        (m.includes("credit") && !m.includes("cash") && !m.includes("cod") &&
+        (m.includes("credit") &&
+            !m.includes("cash") &&
+            !m.includes("cod") &&
             !isCardPayment(paymentMethod, isPaid));
     const isCard = !isCreditOnly && isCardPayment(paymentMethod, isPaid);
 
@@ -100,7 +105,8 @@ const settleCredit = ({
         newCreditPaid = Math.min(creditPaid, newFullTotal);
         creditChange = oldFullTotal - newFullTotal;
     } else if (isCreditOnly) {
-        const paidByCredit = creditPaid > 0 ? creditPaid : amount > 0 ? amount : oldFullTotal;
+        const paidByCredit =
+            creditPaid > 0 ? creditPaid : amount > 0 ? amount : oldFullTotal;
         newCreditPaid = Math.min(paidByCredit, newFullTotal);
         creditChange = paidByCredit - newCreditPaid; // refund only when the price was reduced
     } else {
@@ -208,10 +214,8 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                     `;
 
                     const packages = await new Promise((res, rej) => {
-                        db.collectionofficer.query(
-                            packagesSql,
-                            [processOrderId],
-                            (e, r) => (e ? rej(e) : res(r || [])),
+                        db.collectionofficer.query(packagesSql, [processOrderId], (e, r) =>
+                            e ? rej(e) : res(r || []),
                         );
                     });
 
@@ -229,7 +233,9 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                     }
 
                     const orderPackageIds = packages.map((p) => p.orderPackageId);
-                    const packageIds = Array.from(new Set(packages.map((p) => p.packageId)));
+                    const packageIds = Array.from(
+                        new Set(packages.map((p) => p.packageId)),
+                    );
                     const placeholders = orderPackageIds.map(() => "?").join(", ");
                     const pkgPlaceholders = packageIds.map(() => "?").join(", ");
 
@@ -365,38 +371,45 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                             AND MPI.category = 'Retail'
                     `;
 
-                    const [items, defineItems, baselineItems, additionalItems, excludeRows] =
-                        await Promise.all([
-                            new Promise((res, rej) =>
-                                db.collectionofficer.query(itemsSql, orderPackageIds, (e, r) =>
-                                    e ? rej(e) : res(r || []),
-                                ),
+                    const [
+                        items,
+                        defineItems,
+                        baselineItems,
+                        additionalItems,
+                        excludeRows,
+                    ] = await Promise.all([
+                        new Promise((res, rej) =>
+                            db.collectionofficer.query(itemsSql, orderPackageIds, (e, r) =>
+                                e ? rej(e) : res(r || []),
                             ),
-                            new Promise((res, rej) =>
-                                db.collectionofficer.query(
-                                    defineItemsSql,
-                                    [...packageIds, ...packageIds],
-                                    (e, r) => (e ? rej(e) : res(r || [])),
-                                ),
+                        ),
+                        new Promise((res, rej) =>
+                            db.collectionofficer.query(
+                                defineItemsSql,
+                                [...packageIds, ...packageIds],
+                                (e, r) => (e ? rej(e) : res(r || [])),
                             ),
-                            new Promise((res, rej) =>
-                                db.collectionofficer.query(baselineSql, orderPackageIds, (e, r) =>
-                                    e ? rej(e) : res(r || []),
-                                ),
+                        ),
+                        new Promise((res, rej) =>
+                            db.collectionofficer.query(
+                                baselineSql,
+                                orderPackageIds,
+                                (e, r) => (e ? rej(e) : res(r || [])),
                             ),
-                            new Promise((res, rej) =>
-                                db.collectionofficer.query(
-                                    additionalSql,
-                                    [processOrderId],
-                                    (e, r) => (e ? rej(e) : res(r || [])),
-                                ),
+                        ),
+                        new Promise((res, rej) =>
+                            db.collectionofficer.query(
+                                additionalSql,
+                                [processOrderId],
+                                (e, r) => (e ? rej(e) : res(r || [])),
                             ),
-                            new Promise((res, rej) =>
-                                db.collectionofficer.query(excludeSql, [userId], (e, r) =>
-                                    e ? rej(e) : res(r || []),
-                                ),
+                        ),
+                        new Promise((res, rej) =>
+                            db.collectionofficer.query(excludeSql, [userId], (e, r) =>
+                                e ? rej(e) : res(r || []),
                             ),
-                        ]);
+                        ),
+                    ]);
 
                     const excludedProductIds = new Set(
                         (excludeRows || []).map((x) => Number(x.productId)),
@@ -404,7 +417,9 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
 
                     // Assemble packages with nested items and baselines
                     const structuredPackages = packages.map((pkg) => {
-                        let pkgItems = items.filter((i) => i.orderPackageId === pkg.orderPackageId);
+                        let pkgItems = items.filter(
+                            (i) => i.orderPackageId === pkg.orderPackageId,
+                        );
                         let pkgBaselines = baselineItems.filter(
                             (b) => b.orderPackageId === pkg.orderPackageId,
                         );
@@ -572,7 +587,14 @@ exports.replacePackageItemDao = ({
                         await new Promise((res, rej) => {
                             connection.query(
                                 updateItemSql,
-                                [newProductId, productType, newQty, newPrice, replceId, orderPackageId],
+                                [
+                                    newProductId,
+                                    productType,
+                                    newQty,
+                                    newPrice,
+                                    replceId,
+                                    orderPackageId,
+                                ],
                                 (e, r) => (e ? rej(e) : res(r)),
                             );
                         });
@@ -605,7 +627,12 @@ exports.replacePackageItemDao = ({
 /**
  * Reset a package item back to its default baseline state (from prevdefineproduct)
  */
-exports.resetPackageItemDao = ({ orderPackageId, userId, replceId, originalBaselineId }) => {
+exports.resetPackageItemDao = ({
+    orderPackageId,
+    userId,
+    replceId,
+    originalBaselineId,
+}) => {
     return new Promise((resolve, reject) => {
         db.collectionofficer.getConnection((connErr, connection) => {
             if (connErr) return reject(connErr);
@@ -655,7 +682,14 @@ exports.resetPackageItemDao = ({ orderPackageId, userId, replceId, originalBasel
                         await new Promise((res, rej) => {
                             connection.query(
                                 restoreSql,
-                                [base.productId, base.productType, base.qty, base.price, replceId, orderPackageId],
+                                [
+                                    base.productId,
+                                    base.productType,
+                                    base.qty,
+                                    base.price,
+                                    replceId,
+                                    orderPackageId,
+                                ],
                                 (e, r) => (e ? rej(e) : res(r)),
                             );
                         });
@@ -716,7 +750,10 @@ exports.confirmPackageReviewDao = ({
     return new Promise((resolve, reject) => {
         db.collectionofficer.getConnection((connErr, connection) => {
             if (connErr) {
-                console.error("[confirmPackageReviewDao] DB Connection Error:", connErr);
+                console.error(
+                    "[confirmPackageReviewDao] DB Connection Error:",
+                    connErr,
+                );
                 return reject(connErr);
             }
 
@@ -752,7 +789,9 @@ exports.confirmPackageReviewDao = ({
                         [processOrderId || orderId, userId],
                     );
                     if (idRows.length === 0) {
-                        throw new Error("Order not found. Please reload the review screen and try again.");
+                        throw new Error(
+                            "Order not found. Please reload the review screen and try again.",
+                        );
                     }
                     const matchedOrder = idRows[0];
                     const realProcessOrderId = matchedOrder.processOrderId;
@@ -769,13 +808,17 @@ exports.confirmPackageReviewDao = ({
                         [realProcessOrderId],
                     );
                     if (orderRows.length === 0) {
-                        throw new Error("Order not found. Please reload the review screen and try again.");
+                        throw new Error(
+                            "Order not found. Please reload the review screen and try again.",
+                        );
                     }
                     const orderSnap = orderRows[0];
 
                     // A finalized review order can never be reviewed again
                     if (Number(orderSnap.isFinalized) === 1) {
-                        throw new Error("This order package review has already been finalized.");
+                        throw new Error(
+                            "This order package review has already been finalized.",
+                        );
                     }
 
                     const alacartDiscountSql = `
@@ -783,8 +826,11 @@ exports.confirmPackageReviewDao = ({
                         FROM orderadditionalitems
                         WHERE proOrderId = ?
                     `;
-                    const beforeDiscRows = await q(alacartDiscountSql, [realProcessOrderId]);
-                    const oldAlacartDiscount = parseFloat(beforeDiscRows[0]?.totalDiscount) || 0;
+                    const beforeDiscRows = await q(alacartDiscountSql, [
+                        realProcessOrderId,
+                    ]);
+                    const oldAlacartDiscount =
+                        parseFloat(beforeDiscRows[0]?.totalDiscount) || 0;
 
                     // 0. orderpackage rows from DB
                     const dbPackages = await q(
@@ -794,7 +840,11 @@ exports.confirmPackageReviewDao = ({
                         [realProcessOrderId],
                     );
 
-                    if (dbPackages.length === 0 && Array.isArray(packages) && packages.length > 0) {
+                    if (
+                        dbPackages.length === 0 &&
+                        Array.isArray(packages) &&
+                        packages.length > 0
+                    ) {
                         throw new Error(
                             "Package data has changed for this order. Please reload the review screen and try again.",
                         );
@@ -814,7 +864,11 @@ exports.confirmPackageReviewDao = ({
                                     Number(p.orderPackageId) === Number(targetPkgDbId) ||
                                     Number(p.packageId) === Number(dbPkg.packageId),
                             );
-                            if (matched && Array.isArray(matched.items) && matched.items.length > 0) {
+                            if (
+                                matched &&
+                                Array.isArray(matched.items) &&
+                                matched.items.length > 0
+                            ) {
                                 pkgItems = matched.items;
                                 fromPayload = true;
                             }
@@ -837,10 +891,15 @@ exports.confirmPackageReviewDao = ({
                         }
 
                         if (pkgItems.length > 0) {
-                            await q("DELETE FROM orderpackageitems WHERE orderPackageId = ?", [targetPkgDbId]);
+                            await q(
+                                "DELETE FROM orderpackageitems WHERE orderPackageId = ?",
+                                [targetPkgDbId],
+                            );
 
                             for (const item of pkgItems) {
-                                const prodId = item.productId ? parseInt(Number(item.productId), 10) : null;
+                                const prodId = item.productId
+                                    ? parseInt(Number(item.productId), 10)
+                                    : null;
                                 if (!prodId) continue;
 
                                 let finalProductType = null;
@@ -879,7 +938,14 @@ exports.confirmPackageReviewDao = ({
                                 await q(
                                     `INSERT INTO prevdefineproduct (orderPackageId, replceId, productType, productId, qty, price)
                                      VALUES (?, ?, ?, ?, ?, ?)`,
-                                    [targetPkgDbId, insertRes.insertId, finalProductType, prodId, qty, price],
+                                    [
+                                        targetPkgDbId,
+                                        insertRes.insertId,
+                                        finalProductType,
+                                        prodId,
+                                        qty,
+                                        price,
+                                    ],
                                 );
                             }
 
@@ -894,12 +960,26 @@ exports.confirmPackageReviewDao = ({
 
                     // 1. Replacements (only packages not synced from payload)
                     if (Array.isArray(replacements) && replacements.length > 0) {
-                        const validPkgIds = new Set(dbPackages.map((p) => Number(p.orderPackageId)));
+                        const validPkgIds = new Set(
+                            dbPackages.map((p) => Number(p.orderPackageId)),
+                        );
 
                         for (const rep of replacements) {
-                            const { orderPackageId, replceId, newProductId, productType, newQty, newPrice } = rep;
+                            const {
+                                orderPackageId,
+                                replceId,
+                                newProductId,
+                                productType,
+                                newQty,
+                                newPrice,
+                            } = rep;
 
-                            if (!orderPackageId || !newProductId || !validPkgIds.has(Number(orderPackageId))) continue;
+                            if (
+                                !orderPackageId ||
+                                !newProductId ||
+                                !validPkgIds.has(Number(orderPackageId))
+                            )
+                                continue;
                             if (syncedFromPayload.has(Number(orderPackageId))) continue;
 
                             let targetReplceId = replceId;
@@ -911,7 +991,8 @@ exports.confirmPackageReviewDao = ({
                             );
                             if (matchingItems.length > 0) {
                                 targetReplceId = matchingItems[0].id;
-                                if (!targetProductType) targetProductType = matchingItems[0].productType;
+                                if (!targetProductType)
+                                    targetProductType = matchingItems[0].productType;
                             }
 
                             if (targetReplceId) {
@@ -919,14 +1000,24 @@ exports.confirmPackageReviewDao = ({
                                     `UPDATE orderpackageitems
                                      SET productId = ?, productType = COALESCE(?, productType), qty = ?, price = ?
                                      WHERE id = ? AND orderPackageId = ?`,
-                                    [newProductId, targetProductType, newQty, newPrice, targetReplceId, orderPackageId],
+                                    [
+                                        newProductId,
+                                        targetProductType,
+                                        newQty,
+                                        newPrice,
+                                        targetReplceId,
+                                        orderPackageId,
+                                    ],
                                 );
                             }
                         }
                     }
 
                     // 2. Delete removed ala carte rows
-                    if (Array.isArray(deletedAdditionalItemIds) && deletedAdditionalItemIds.length > 0) {
+                    if (
+                        Array.isArray(deletedAdditionalItemIds) &&
+                        deletedAdditionalItemIds.length > 0
+                    ) {
                         const validDeleteIds = deletedAdditionalItemIds
                             .map((id) => Number(id))
                             .filter((id) => !isNaN(id) && id > 0);
@@ -940,13 +1031,17 @@ exports.confirmPackageReviewDao = ({
                     }
 
                     // 2b. Update edited existing ala carte rows
-                    if (Array.isArray(updatedAdditionalItems) && updatedAdditionalItems.length > 0) {
+                    if (
+                        Array.isArray(updatedAdditionalItems) &&
+                        updatedAdditionalItems.length > 0
+                    ) {
                         for (const u of updatedAdditionalItems) {
                             const rowId = Number(u.id);
                             const qty = parseFloat(u.qty);
                             if (!rowId || isNaN(qty) || qty <= 0) continue;
 
-                            const unit = String(u.unit || "kg").toLowerCase() === "g" ? "g" : "kg";
+                            const unit =
+                                String(u.unit || "kg").toLowerCase() === "g" ? "g" : "kg";
 
                             const rows = await q(
                                 `SELECT id, productId
@@ -962,9 +1057,14 @@ exports.confirmPackageReviewDao = ({
                                 "SELECT normalPrice, discountedPrice FROM marketplaceitems WHERE id = ? LIMIT 1",
                                 [rows[0].productId],
                             );
-                            const perKgNormal = miRows.length ? parseFloat(miRows[0].normalPrice) || 0 : 0;
-                            const perKgDiscounted = miRows.length ? parseFloat(miRows[0].discountedPrice) || 0 : 0;
-                            const perKgEffective = perKgDiscounted > 0 ? perKgDiscounted : perKgNormal;
+                            const perKgNormal = miRows.length
+                                ? parseFloat(miRows[0].normalPrice) || 0
+                                : 0;
+                            const perKgDiscounted = miRows.length
+                                ? parseFloat(miRows[0].discountedPrice) || 0
+                                : 0;
+                            const perKgEffective =
+                                perKgDiscounted > 0 ? perKgDiscounted : perKgNormal;
                             const kg = unit === "g" ? qty / 1000 : qty;
 
                             let normalPrice, price, discount;
@@ -1022,16 +1122,25 @@ exports.confirmPackageReviewDao = ({
                                 "SELECT normalPrice, discountedPrice FROM marketplaceitems WHERE id = ? LIMIT 1",
                                 [m.productId],
                             );
-                            const perKgNormal = miRows.length ? parseFloat(miRows[0].normalPrice) || 0 : 0;
-                            const perKgDiscounted = miRows.length ? parseFloat(miRows[0].discountedPrice) || 0 : 0;
-                            const perKgEffective = perKgDiscounted > 0 ? perKgDiscounted : perKgNormal;
+                            const perKgNormal = miRows.length
+                                ? parseFloat(miRows[0].normalPrice) || 0
+                                : 0;
+                            const perKgDiscounted = miRows.length
+                                ? parseFloat(miRows[0].discountedPrice) || 0
+                                : 0;
+                            const perKgEffective =
+                                perKgDiscounted > 0 ? perKgDiscounted : perKgNormal;
                             const hasMarketPrice = perKgNormal > 0;
 
                             const calcLine = (grams) => {
                                 const kg = grams / 1000;
                                 const normalPrice = round2(perKgNormal * kg);
                                 const price = round2(perKgEffective * kg);
-                                return { normalPrice, price, discount: round2(Math.max(0, normalPrice - price)) };
+                                return {
+                                    normalPrice,
+                                    price,
+                                    discount: round2(Math.max(0, normalPrice - price)),
+                                };
                             };
 
                             const existingRows = await q(
@@ -1053,7 +1162,9 @@ exports.confirmPackageReviewDao = ({
                                 if (hasMarketPrice) {
                                     line = calcLine(totalGrams);
                                 } else {
-                                    const sum = round2((parseFloat(ex.price) || 0) + m.payloadPrice);
+                                    const sum = round2(
+                                        (parseFloat(ex.price) || 0) + m.payloadPrice,
+                                    );
                                     line = { normalPrice: sum, price: sum, discount: 0 };
                                 }
 
@@ -1100,10 +1211,12 @@ exports.confirmPackageReviewDao = ({
                     );
                     for (const row of allAlaCarteRows) {
                         const qty = parseFloat(row.qty) || 0;
-                        const unit = String(row.unit || "kg").toLowerCase() === "g" ? "g" : "kg";
+                        const unit =
+                            String(row.unit || "kg").toLowerCase() === "g" ? "g" : "kg";
                         const perKgNormal = parseFloat(row.perKgNormal) || 0;
                         const perKgDiscounted = parseFloat(row.perKgDiscounted) || 0;
-                        const perKgEffective = perKgDiscounted > 0 ? perKgDiscounted : perKgNormal;
+                        const perKgEffective =
+                            perKgDiscounted > 0 ? perKgDiscounted : perKgNormal;
                         const kg = unit === "g" ? qty / 1000 : qty;
 
                         if (perKgNormal > 0) {
@@ -1142,20 +1255,28 @@ exports.confirmPackageReviewDao = ({
                             ? round2(Math.max(0, parsedNewTotal - couponValue))
                             : null;
 
-                    const afterDiscRows = await q(alacartDiscountSql, [realProcessOrderId]);
-                    const newAlacartDiscount = parseFloat(afterDiscRows[0]?.totalDiscount) || 0;
+                    const afterDiscRows = await q(alacartDiscountSql, [
+                        realProcessOrderId,
+                    ]);
+                    const newAlacartDiscount =
+                        parseFloat(afterDiscRows[0]?.totalDiscount) || 0;
 
                     const oldOrderDiscount = parseFloat(orderSnap.discount) || 0;
                     const newOrderDiscount = round2(
-                        Math.max(0, oldOrderDiscount + (newAlacartDiscount - oldAlacartDiscount)),
+                        Math.max(
+                            0,
+                            oldOrderDiscount + (newAlacartDiscount - oldAlacartDiscount),
+                        ),
                     );
 
                     const oldFullTotal = parseFloat(orderSnap.fullTotal) || 0;
                     let newFullTotal = null;
                     if (netNewTotal != null) newFullTotal = netNewTotal;
-                    else if (parsedAdditional > 0) newFullTotal = round2(oldFullTotal + parsedAdditional);
+                    else if (parsedAdditional > 0)
+                        newFullTotal = round2(oldFullTotal + parsedAdditional);
 
-                    const finalFullTotal = newFullTotal != null ? newFullTotal : oldFullTotal;
+                    const finalFullTotal =
+                        newFullTotal != null ? newFullTotal : oldFullTotal;
                     const finalTotal =
                         newFullTotal != null
                             ? round2(newFullTotal + newOrderDiscount)
@@ -1186,7 +1307,15 @@ exports.confirmPackageReviewDao = ({
                              SET amount = ?, moneyPaid = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
                                  isFinalized = 1
                              WHERE id = ?`,
-                            [newAmount, newMoneyPaid, creditPaid, finalFullTotal, finalTotal, newOrderDiscount, realProcessOrderId],
+                            [
+                                newAmount,
+                                newMoneyPaid,
+                                creditPaid,
+                                finalFullTotal,
+                                finalTotal,
+                                newOrderDiscount,
+                                realProcessOrderId,
+                            ],
                         );
                     } else if (settle && settle.isCreditOnly) {
                         // 100% credit order: paid amount follows the reduced total
@@ -1196,7 +1325,14 @@ exports.confirmPackageReviewDao = ({
                              SET amount = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
                                  isFinalized = 1
                              WHERE id = ?`,
-                            [newAmount, creditPaid, finalFullTotal, finalTotal, newOrderDiscount, realProcessOrderId],
+                            [
+                                newAmount,
+                                creditPaid,
+                                finalFullTotal,
+                                finalTotal,
+                                newOrderDiscount,
+                                realProcessOrderId,
+                            ],
                         );
                     } else {
                         await q(
@@ -1204,13 +1340,23 @@ exports.confirmPackageReviewDao = ({
                              SET creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
                                  isFinalized = 1
                              WHERE id = ?`,
-                            [creditPaid, finalFullTotal, finalTotal, newOrderDiscount, realProcessOrderId],
+                            [
+                                creditPaid,
+                                finalFullTotal,
+                                finalTotal,
+                                newOrderDiscount,
+                                realProcessOrderId,
+                            ],
                         );
                     }
 
                     // 7. Credit balance
                     const creditChange = settle ? settle.creditChange : 0;
-                    const shortfall = await applyCreditChange(q, targetUserId, creditChange);
+                    const shortfall = await applyCreditChange(
+                        q,
+                        targetUserId,
+                        creditChange,
+                    );
 
                     connection.commit((commitErr) => {
                         if (commitErr) {
@@ -1227,7 +1373,10 @@ exports.confirmPackageReviewDao = ({
                         });
                     });
                 } catch (err) {
-                    console.error("[confirmPackageReviewDao] Execution Error (Rolling back):", err);
+                    console.error(
+                        "[confirmPackageReviewDao] Execution Error (Rolling back):",
+                        err,
+                    );
                     connection.rollback(() => {
                         connection.release();
                         reject(err);
@@ -1237,7 +1386,6 @@ exports.confirmPackageReviewDao = ({
         });
     });
 };
-
 
 /**
  * Fetch latest packing target limit, count accepted orders for the date,
@@ -1272,13 +1420,20 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                     WHERE orderId = ? AND isRead = 0
                 `;
                 const notifRows = await new Promise((res) => {
-                    db.collectionofficer.query(notifSql, [processOrderId], (err, rows) => {
-                        if (err) return res([]);
-                        res(rows || []);
-                    });
+                    db.collectionofficer.query(
+                        notifSql,
+                        [processOrderId],
+                        (err, rows) => {
+                            if (err) return res([]);
+                            res(rows || []);
+                        },
+                    );
                 });
                 if (notifRows.length > 0 && notifRows[0].unreadCount > 0) {
-                    unreadReminderDays = Math.min(3, parseInt(notifRows[0].unreadCount, 10) || 1);
+                    unreadReminderDays = Math.min(
+                        3,
+                        parseInt(notifRows[0].unreadCount, 10) || 1,
+                    );
                 }
             }
 
@@ -1340,11 +1495,12 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
             conn.query(sql, params, (e, r) => (e ? rej(e) : res(r))),
         );
     const begin = (conn) =>
-        new Promise((res, rej) => conn.beginTransaction((e) => (e ? rej(e) : res())));
+        new Promise((res, rej) =>
+            conn.beginTransaction((e) => (e ? rej(e) : res())),
+        );
     const commit = (conn) =>
         new Promise((res, rej) => conn.commit((e) => (e ? rej(e) : res())));
-    const rollback = (conn) =>
-        new Promise((res) => conn.rollback(() => res()));
+    const rollback = (conn) => new Promise((res) => conn.rollback(() => res()));
 
     // 0. Find the process order + verify ownership (read-only)
     const findSql = `
@@ -1498,29 +1654,47 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
         // Sales Dash real-time notification
         try {
             const salesdashNotificationService = require("../services/salesdash-notification-service");
-            if (typeof salesdashNotificationService?.notifySalesDashOrderCancelled === "function") {
+            if (
+                typeof salesdashNotificationService?.notifySalesDashOrderCancelled ===
+                "function"
+            ) {
                 salesdashNotificationService
                     .notifySalesDashOrderCancelled(pOrderId, invNoDisplay)
                     .catch((err) => {
-                        console.warn("⚠️ [CancelOrder] SalesDash notification error:", err?.message);
+                        console.warn(
+                            "⚠️ [CancelOrder] SalesDash notification error:",
+                            err?.message,
+                        );
                     });
             }
         } catch (sdErr) {
-            console.warn("⚠️ [CancelOrder] SalesDash notification setup error:", sdErr?.message);
+            console.warn(
+                "⚠️ [CancelOrder] SalesDash notification setup error:",
+                sdErr?.message,
+            );
         }
 
         // Polygon customer app push notification (Expo/FCM) & Socket.IO
         try {
             const polygonNotificationService = require("../services/polygon-notification-service");
-            if (typeof polygonNotificationService?.notifyPolygonOrderCancelled === "function") {
+            if (
+                typeof polygonNotificationService?.notifyPolygonOrderCancelled ===
+                "function"
+            ) {
                 polygonNotificationService
                     .notifyPolygonOrderCancelled(pOrderId, invNoDisplay, userId)
                     .catch((err) => {
-                        console.warn("⚠️ [CancelOrder] Polygon customer background notification error:", err?.message);
+                        console.warn(
+                            "⚠️ [CancelOrder] Polygon customer background notification error:",
+                            err?.message,
+                        );
                     });
             }
         } catch (polyErr) {
-            console.warn("⚠️ [CancelOrder] Polygon customer notification setup error:", polyErr?.message);
+            console.warn(
+                "⚠️ [CancelOrder] Polygon customer notification setup error:",
+                polyErr?.message,
+            );
         }
 
         return {
@@ -1572,7 +1746,12 @@ const INCLUDE_PACKAGE_DISCOUNT = false;
  * Updates: orderadditionalitems, orderpackage (lock), processorders only.
  * The `orders` table is NOT updated for totals.
  */
-exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newTotal = null }) => {
+exports.confirmOrderWithLivePricesDao = ({
+    orderId,
+    processOrderId,
+    userId,
+    newTotal = null,
+}) => {
     return new Promise((resolve, reject) => {
         db.collectionofficer.getConnection((connErr, connection) => {
             if (connErr) return reject(connErr);
@@ -1594,6 +1773,7 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                     const idRows = await q(
                         `SELECT
                             po.id AS processOrderId,
+                            po.invNo,
                             po.orderId AS actualOrderId,
                             po.paymentMethod,
                             po.isPaid,
@@ -1650,7 +1830,8 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
 
                     for (const row of alaRows) {
                         const qty = parseFloat(row.qty) || 0;
-                        const unit = String(row.unit || "kg").toLowerCase() === "g" ? "g" : "kg";
+                        const unit =
+                            String(row.unit || "kg").toLowerCase() === "g" ? "g" : "kg";
                         const kg = unit === "g" ? qty / 1000 : qty;
 
                         const mktNormal = parseFloat(row.perKgNormal) || 0;
@@ -1711,24 +1892,32 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                          WHERE op.orderId = ?`,
                         [realProcessOrderId],
                     );
-                    const packagesTotal = round2(parseFloat(pkgRows[0]?.packageTotal) || 0);
+                    const packagesTotal = round2(
+                        parseFloat(pkgRows[0]?.packageTotal) || 0,
+                    );
                     const packageDiscount = INCLUDE_PACKAGE_DISCOUNT
                         ? round2(parseFloat(pkgRows[0]?.packageDiscount) || 0)
                         : 0;
 
                     // 5. Delivery / Service fee + coupon (same rules as the app screen)
                     const isPickup =
-                        String(matchedOrder.delivaryMethod || "").toUpperCase() === "PICKUP";
+                        String(matchedOrder.delivaryMethod || "").toUpperCase() ===
+                        "PICKUP";
                     const isCouponApplied = Number(matchedOrder.isCoupon) === 1;
-                    const couponTypeStr = String(matchedOrder.couponType || "").toLowerCase();
+                    const couponTypeStr = String(
+                        matchedOrder.couponType || "",
+                    ).toLowerCase();
                     const isFreeDeliveryCoupon =
                         isCouponApplied &&
-                        (couponTypeStr.includes("free") || couponTypeStr.includes("delivery"));
+                        (couponTypeStr.includes("free") ||
+                            couponTypeStr.includes("delivery"));
 
                     // DASH SERVICE FEE: only orderApp = 'Dash' AND isPackage = 0 get the fixed
                     // "Service Fee" (added on top of delivery)
                     const isDash =
-                        String(matchedOrder.orderApp || "").trim().toLowerCase() === "dash";
+                        String(matchedOrder.orderApp || "")
+                            .trim()
+                            .toLowerCase() === "dash";
                     const isPackageValue = matchedOrder.isPackage;
                     const isDashServiceFee =
                         isDash &&
@@ -1737,7 +1926,8 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                         Number(isPackageValue) === 0;
 
                     const rawDelivery =
-                        matchedOrder.curDlvrCharge != null && matchedOrder.curDlvrCharge !== ""
+                        matchedOrder.curDlvrCharge != null &&
+                            matchedOrder.curDlvrCharge !== ""
                             ? parseFloat(matchedOrder.curDlvrCharge) || 0
                             : parseFloat(matchedOrder.deliveryCharge) || 0;
 
@@ -1757,14 +1947,21 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
 
                     // 6. Final numbers (nothing from the old stored totals)
                     const finalTotal = round2(
-                        packagesTotal + packageDiscount + alaNormalTotal + deliveryCharge + serviceFee,
+                        packagesTotal +
+                        packageDiscount +
+                        alaNormalTotal +
+                        deliveryCharge +
+                        serviceFee,
                     );
                     const finalDiscount = round2(packageDiscount + alaDiscountTotal);
                     const finalFullTotal = round2(
                         Math.max(0, finalTotal - finalDiscount - couponDiscount),
                     );
 
-                    if (newTotal != null && Math.abs(parseFloat(newTotal) - finalFullTotal) > 0.01) {
+                    if (
+                        newTotal != null &&
+                        Math.abs(parseFloat(newTotal) - finalFullTotal) > 0.01
+                    ) {
                         console.warn(
                             `[confirmOrderWithLivePrices] app total ${newTotal} != server total ${finalFullTotal}; server value used`,
                         );
@@ -1792,7 +1989,15 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                              SET amount = ?, moneyPaid = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
                                  isConfirmed = 1
                              WHERE id = ?`,
-                            [newAmount, newMoneyPaid, creditPaid, finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
+                            [
+                                newAmount,
+                                newMoneyPaid,
+                                creditPaid,
+                                finalFullTotal,
+                                finalTotal,
+                                finalDiscount,
+                                realProcessOrderId,
+                            ],
                         );
                     } else if (settle.isCreditOnly) {
                         // 100% credit order: paid amount follows the reduced total
@@ -1802,7 +2007,14 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                              SET amount = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
                                  isConfirmed = 1
                              WHERE id = ?`,
-                            [newAmount, creditPaid, finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
+                            [
+                                newAmount,
+                                creditPaid,
+                                finalFullTotal,
+                                finalTotal,
+                                finalDiscount,
+                                realProcessOrderId,
+                            ],
                         );
                     } else {
                         await q(
@@ -1810,12 +2022,22 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                              SET creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
                                  isConfirmed = 1
                              WHERE id = ?`,
-                            [creditPaid, finalFullTotal, finalTotal, finalDiscount, realProcessOrderId],
+                            [
+                                creditPaid,
+                                finalFullTotal,
+                                finalTotal,
+                                finalDiscount,
+                                realProcessOrderId,
+                            ],
                         );
                     }
 
                     // 8. Credit balance (marketplaceusers.creditBalance)
-                    const shortfall = await applyCreditChange(q, targetUserId, settle.creditChange);
+                    const shortfall = await applyCreditChange(
+                        q,
+                        targetUserId,
+                        settle.creditChange,
+                    );
 
                     connection.commit((commitErr) => {
                         if (commitErr) {
@@ -1827,11 +2049,14 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
                         connection.release();
                         resolve({
                             status: true,
-                            message: "Order confirmed and marketplace prices updated successfully",
+                            message:
+                                "Order confirmed and marketplace prices updated successfully",
                             fullTotal: finalFullTotal,
                             total: finalTotal,
                             discount: finalDiscount,
                             creditShortfall: shortfall,
+                            invNo: matchedOrder.invNo,
+                            processOrderId: realProcessOrderId,
                         });
                     });
                 } catch (err) {
@@ -1845,7 +2070,11 @@ exports.confirmOrderWithLivePricesDao = ({ orderId, processOrderId, userId, newT
     });
 };
 
-exports.cancelOrderBeforeConfirmDao = async ({ orderId, processOrderId, userId }) => {
+exports.cancelOrderBeforeConfirmDao = async ({
+    orderId,
+    processOrderId,
+    userId,
+}) => {
     if ((!orderId && !processOrderId) || !userId) {
         throw new Error("orderId or processOrderId and userId are required");
     }
@@ -1866,11 +2095,12 @@ exports.cancelOrderBeforeConfirmDao = async ({ orderId, processOrderId, userId }
             conn.query(sql, params, (e, r) => (e ? rej(e) : res(r))),
         );
     const begin = (conn) =>
-        new Promise((res, rej) => conn.beginTransaction((e) => (e ? rej(e) : res())));
+        new Promise((res, rej) =>
+            conn.beginTransaction((e) => (e ? rej(e) : res())),
+        );
     const commit = (conn) =>
         new Promise((res, rej) => conn.commit((e) => (e ? rej(e) : res())));
-    const rollback = (conn) =>
-        new Promise((res) => conn.rollback(() => res()));
+    const rollback = (conn) => new Promise((res) => conn.rollback(() => res()));
 
     // 0. Find the process order + verify ownership (read-only)
     const findSql = `
@@ -2032,29 +2262,47 @@ exports.cancelOrderBeforeConfirmDao = async ({ orderId, processOrderId, userId }
         // Sales Dash real-time notification
         try {
             const salesdashNotificationService = require("../services/salesdash-notification-service");
-            if (typeof salesdashNotificationService?.notifySalesDashOrderCancelled === "function") {
+            if (
+                typeof salesdashNotificationService?.notifySalesDashOrderCancelled ===
+                "function"
+            ) {
                 salesdashNotificationService
                     .notifySalesDashOrderCancelled(pOrderId, invNoDisplay)
                     .catch((err) => {
-                        console.warn("⚠️ [CancelBeforeConfirm] SalesDash notification error:", err?.message);
+                        console.warn(
+                            "⚠️ [CancelBeforeConfirm] SalesDash notification error:",
+                            err?.message,
+                        );
                     });
             }
         } catch (sdErr) {
-            console.warn("⚠️ [CancelBeforeConfirm] SalesDash notification setup error:", sdErr?.message);
+            console.warn(
+                "⚠️ [CancelBeforeConfirm] SalesDash notification setup error:",
+                sdErr?.message,
+            );
         }
 
         // Polygon customer app push notification (Expo/FCM) & Socket.IO
         try {
             const polygonNotificationService = require("../services/polygon-notification-service");
-            if (typeof polygonNotificationService?.notifyPolygonOrderCancelled === "function") {
+            if (
+                typeof polygonNotificationService?.notifyPolygonOrderCancelled ===
+                "function"
+            ) {
                 polygonNotificationService
                     .notifyPolygonOrderCancelled(pOrderId, invNoDisplay, userId)
                     .catch((err) => {
-                        console.warn("⚠️ [CancelBeforeConfirm] Polygon customer background notification error:", err?.message);
+                        console.warn(
+                            "⚠️ [CancelBeforeConfirm] Polygon customer background notification error:",
+                            err?.message,
+                        );
                     });
             }
         } catch (polyErr) {
-            console.warn("⚠️ [CancelBeforeConfirm] Polygon customer notification setup error:", polyErr?.message);
+            console.warn(
+                "⚠️ [CancelBeforeConfirm] Polygon customer notification setup error:",
+                polyErr?.message,
+            );
         }
 
         return {
