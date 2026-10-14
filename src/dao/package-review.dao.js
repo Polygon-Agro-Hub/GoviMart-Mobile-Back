@@ -1760,6 +1760,7 @@ exports.confirmOrderWithLivePricesDao = ({
     processOrderId,
     userId,
     newTotal = null,
+    isPaid = null,
 }) => {
     return new Promise((resolve, reject) => {
         db.collectionofficer.getConnection((connErr, connection) => {
@@ -1996,7 +1997,7 @@ exports.confirmOrderWithLivePricesDao = ({
                         await q(
                             `UPDATE processorders
                              SET amount = ?, moneyPaid = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
-                                 isConfirmed = 1
+                                 isPaid = 1, isConfirmed = 1
                              WHERE id = ?`,
                             [
                                 newAmount,
