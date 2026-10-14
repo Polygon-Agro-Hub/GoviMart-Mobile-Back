@@ -101,9 +101,17 @@ const settleCredit = ({
     let newCreditPaid;
     let creditChange;
 
+    const wasPaid = Number(isPaid) === 1 || isPaid === true;
+
     if (isCard) {
         newCreditPaid = Math.min(creditPaid, newFullTotal);
-        creditChange = oldFullTotal - newFullTotal;
+        if (wasPaid) {
+            creditChange = oldFullTotal - newFullTotal;
+        } else {
+            // Unpaid card order: previous oldFullTotal was never paid,
+            // and the full new balance was just paid via card gateway.
+            creditChange = 0;
+        }
     } else if (isCreditOnly) {
         const paidByCredit =
             creditPaid > 0 ? creditPaid : amount > 0 ? amount : oldFullTotal;
@@ -739,6 +747,7 @@ exports.confirmPackageReviewDao = ({
     additionalAmount = 0,
     newScheduleDate = null,
     paymentMethod = null,
+    isPaid = null,
     newTotal = null,
     creditToAdd = 0,
     replacements = [],
@@ -1305,7 +1314,7 @@ exports.confirmPackageReviewDao = ({
                         await q(
                             `UPDATE processorders
                              SET amount = ?, moneyPaid = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
-                                 isFinalized = 1
+                                 isPaid = 1, isFinalized = 1
                              WHERE id = ?`,
                             [
                                 newAmount,
@@ -1751,6 +1760,7 @@ exports.confirmOrderWithLivePricesDao = ({
     processOrderId,
     userId,
     newTotal = null,
+    isPaid = null,
 }) => {
     return new Promise((resolve, reject) => {
         db.collectionofficer.getConnection((connErr, connection) => {
@@ -1987,7 +1997,7 @@ exports.confirmOrderWithLivePricesDao = ({
                         await q(
                             `UPDATE processorders
                              SET amount = ?, moneyPaid = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
-                                 isConfirmed = 1
+                                 isPaid = 1, isConfirmed = 1
                              WHERE id = ?`,
                             [
                                 newAmount,
