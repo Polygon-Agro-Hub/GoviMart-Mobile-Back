@@ -1554,8 +1554,7 @@ exports.getInvoiceByOrderIdDao = (
                     ((mp.productPrice + mp.packingFee + mp.serviceFee) * op.qty) AS amount
                 FROM orderpackage op
                 JOIN marketplacepackages mp ON op.packageId = mp.id
-                WHERE op.orderId = ? 
-                   OR (op.orderId = ? AND NOT EXISTS (SELECT 1 FROM orderpackage sub WHERE sub.orderId = ?))
+                WHERE op.orderId = ?
             `;
 
                 const additionalItemsQuery = `
@@ -1572,8 +1571,8 @@ exports.getInvoiceByOrderIdDao = (
                 FROM orderadditionalitems oai
                 JOIN marketplaceitems mi ON oai.productId = mi.id
                 LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-                WHERE oai.proOrderId = ? 
-                   OR (oai.proOrderId = ? AND NOT EXISTS (SELECT 1 FROM orderadditionalitems sub WHERE sub.proOrderId = ?))
+                WHERE oai.proOrderId = ?
+                ORDER BY oai.id ASC
             `;
 
                 const billingQuery = `
@@ -1603,14 +1602,14 @@ exports.getInvoiceByOrderIdDao = (
                     new Promise((res, rej) => {
                         db.collectionofficer.query(
                             familyPackItemsQuery,
-                            [processOrderId, actualOrderId, processOrderId],
+                            [processOrderId],
                             (e, r) => (e ? rej(e) : res(r || [])),
                         );
                     }),
                     new Promise((res, rej) => {
                         db.collectionofficer.query(
                             additionalItemsQuery,
-                            [processOrderId, actualOrderId, processOrderId],
+                            [processOrderId],
                             (e, r) => (e ? rej(e) : res(r || [])),
                         );
                     }),
