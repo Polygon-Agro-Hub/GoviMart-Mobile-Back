@@ -235,7 +235,7 @@ const sendOrderPlacedPayToConfirmSms = async ({ userId, phone, deliveryDate }) =
       return { success: false, error: "Missing phone number" };
     }
 
-    const message = `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${confirmDateStr}. Please pay by 6:00 PM to confirm your order, or it will be canceled.`;
+    const message = `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${confirmDateStr}. Please pay by 6:00 PM to confirm your order, or it will be Cancelled.`;
     return await sendSms(resolvedPhone, message);
   } catch (err) {
     console.error("[Order SMS] Error in sendOrderPlacedPayToConfirmSms:", err.message);
