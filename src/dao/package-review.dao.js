@@ -162,6 +162,9 @@ exports.getOrderPackageReviewDao = (orderIdOrProcessOrderId, userId) => {
                 po.status,
                 po.isFinalized,
                 po.isConfirmed,
+                COALESCE(po.isCoupon, 0) AS isCoupon,
+                po.couponType,
+                COALESCE(po.couponValue, 0) AS couponValue,
                 po.packagePackStatus,
                 po.sheduleDate AS processScheduleDate,
                 po.sheduleDate AS sheduleDate
