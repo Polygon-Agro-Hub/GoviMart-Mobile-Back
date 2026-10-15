@@ -148,6 +148,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
         additionalAmount = 0,
         newScheduleDate = null,
         paymentMethod = null,
+        isPaid = null,
         newTotal = null,
         creditToAdd = 0,
         replacements = [],
@@ -196,6 +197,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
             additionalAmount,
             newScheduleDate,
             paymentMethod,
+            isPaid,
             newTotal,
             creditToAdd,
             replacements,
@@ -207,23 +209,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
 
         console.log("[confirmPackageReview Endpoint] Success response:", result);
 
-        // Dispatch confirmed SMS after customer accepts review (best-effort)
-        (async () => {
-            try {
-                const { invNo, userId: resolvedUserId } = await orderSmsService.resolveOrderDetails(
-                    processOrderId || orderId,
-                    userId
-                );
-                if (invNo) {
-                    await orderSmsService.sendOrderConfirmedSms({
-                        userId: resolvedUserId,
-                        invNo,
-                    });
-                }
-            } catch (smsErr) {
-                console.warn("[confirmPackageReview] Confirmation SMS error:", smsErr.message);
-            }
-        })();
+
 
         return res.status(200).json({
             status: true,
@@ -310,7 +296,7 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
     if (!ensureRetailUser(req, res)) return;
 
     const userId = getUserId(req);
-    const { orderId, processOrderId, newTotal } = req.body;
+    const { orderId, processOrderId, newTotal, isPaid = null } = req.body;
 
     if (!orderId && !processOrderId) {
         return res.status(400).json({
@@ -325,21 +311,32 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
             processOrderId,
             userId,
             newTotal,
+            isPaid,
         });
 
-        // Dispatch confirmed SMS after customer confirms order with live prices (best-effort)
+        // "Order confirmed" SMS: sent ONLY here, right after the customer accepts
+        // (processorders.isConfirmed = 1 has just been committed). Best-effort.
         (async () => {
             try {
-                const { invNo, userId: resolvedUserId } = await orderSmsService.resolveOrderDetails(
-                    processOrderId || orderId,
-                    userId
-                );
-                if (invNo) {
-                    await orderSmsService.sendOrderConfirmedSms({
-                        userId: resolvedUserId,
-                        invNo,
-                    });
+                // Use the exact invoice that was confirmed (returned by the DAO)
+                let invNo = result.invNo;
+
+                // Fallback lookup only if the DAO did not return it
+                if (!invNo) {
+                    const resolved = await orderSmsService.resolveOrderDetails(
+                        result.processOrderId || processOrderId || orderId,
+                        userId
+                    );
+                    invNo = resolved.invNo;
                 }
+
+                if (!invNo) {
+                    console.warn("[confirmOrderWithLivePrices] No invoice number, SMS skipped");
+                    return;
+                }
+
+                const smsRes = await orderSmsService.sendOrderConfirmedSms({ userId, invNo });
+                console.log(`[confirmOrderWithLivePrices] Confirmed SMS for ${invNo}:`, smsRes);
             } catch (smsErr) {
                 console.warn("[confirmOrderWithLivePrices] Confirmation SMS error:", smsErr.message);
             }
@@ -358,6 +355,7 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
         });
     }
 });
+
 
 exports.cancelOrderBeforeConfirm = asyncHandler(async (req, res) => {
     if (!ensureRetailUser(req, res)) return;

@@ -473,9 +473,12 @@ exports.createOrder = asyncHandler(async (req, res) => {
     const parseScheduleDate = (rawDate) => {
         if (!rawDate) return null;
         if (rawDate instanceof Date) return rawDate;
+
+        const m = String(rawDate).match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+
         const parsed = new Date(rawDate);
-        if (!isNaN(parsed.getTime())) return parsed;
-        return null;
+        return isNaN(parsed.getTime()) ? null : parsed;
     };
 
     // ── 5. Begin transaction ──────────────────────────────────────────────────
@@ -725,7 +728,6 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     // ── ShoutOUT SMS Dispatch (best-effort, after commit) ──
                     (async () => {
                         try {
-                            // 1. Determine Earliest Possible Schedule Date (EPSD)
                             let earliestDeliveryDateObj = null;
                             if (checkoutDetails?.earliestDeliveryDate) {
                                 earliestDeliveryDateObj = parseScheduleDate(checkoutDetails.earliestDeliveryDate);
@@ -738,39 +740,46 @@ exports.createOrder = asyncHandler(async (req, res) => {
                             const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
                             const toDateStr = (d) => {
                                 if (!d) return null;
-                                const dt = (d instanceof Date) ? d : new Date(d);
-                                return isNaN(dt.getTime()) ? null : `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+                                const dt = d instanceof Date ? d : new Date(d);
+                                return isNaN(dt.getTime())
+                                    ? null
+                                    : `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
                             };
 
                             const scheduledDateStr = toDateStr(primaryScheduledDate);
                             const earliestDateStr = toDateStr(earliestDeliveryDateObj);
+                            const isType1 = Boolean(
+                                scheduledDateStr && earliestDateStr && scheduledDateStr <= earliestDateStr
+                            );
 
-                            const isType1 = Boolean(scheduledDateStr && earliestDateStr && scheduledDateStr <= earliestDateStr);
+                            // Only: isFinalizeImdt = 0 AND package order -> no EPSD check
+                            const isPackagePayToConfirmFlow = !Number(isFinalizeImdt) && hasPackages;
 
-                            console.log(`[createOrder SMS] scheduledDate: ${scheduledDateStr}, earliestDate: ${earliestDateStr}, isType1: ${isType1}, paymentMethod: ${paymentMethod}`);
+                            console.log(
+                                `[createOrder SMS] scheduled: ${scheduledDateStr}, earliest: ${earliestDateStr}, isType1: ${isType1}, isFinalizeImdt: ${isFinalizeImdt}, hasPackages: ${hasPackages}, packageFlow: ${isPackagePayToConfirmFlow}`
+                            );
 
-                            if (isType1) {
-                                // Type 1: Deliver Date = E.P.S.D.
-                                // 1. Payment Cash or Cash + Credit
-                                // 2. Payment Direct User to the Pay Now Screen - After Payment Success
-                                // 3. Payment Full Credit
-                                // SMS: “Dear Customer, your order : [INV NO] is confirmed. Thank you for ordering with Polygon!”
+                            if (isPackagePayToConfirmFlow) {
+                                // Shows delivery - 2 (18 -> 16)
+                                await orderSmsService.sendOrderPlacedPayToConfirmSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    deliveryDate: scheduledDateStr,
+                                });
+                            } else if (isType1) {
+                                // Original: delivery on earliest date
                                 await orderSmsService.sendOrderConfirmedSms({
                                     userId,
                                     phone: resolvedPhone1,
                                     invNo: primaryInvNo,
                                 });
                             } else {
-                                // Type 2: Delivery Date After E.P.S.D.
-                                // 1. Cash or Cash+Credit:
-                                //    SMS When the Order is placed: “Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on [Processing Date]. Please confirm your order by 6:00 PM or it will be cancelled.”
-                                // 2. Card:
-                                //    SMS When the Order is placed: “Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on [Processing Date]. Please pay by 6:00 PM to confirm your order, or it will be cancelled.”
+                                // Original: delivery after earliest date (shows delivery - 3, 18 -> 15)
                                 const isCard = String(paymentMethod).toLowerCase() === "card";
                                 await orderSmsService.sendOrderPlacedAfterEpsdSms({
                                     userId,
                                     phone: resolvedPhone1,
-                                    deliveryDate: primaryScheduledDate || scheduledDateStr,
+                                    deliveryDate: scheduledDateStr,
                                     isCardPayment: isCard,
                                 });
                             }
@@ -778,7 +787,6 @@ exports.createOrder = asyncHandler(async (req, res) => {
                             console.error("[createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
                         }
                     })();
-
                     return safeRespond(201, {
                         status: true,
                         message: "Order created successfully",
@@ -893,25 +901,22 @@ exports.getDeliveredOrdersTotal = async (req, res) => {
     }
 };
 
+// Returns YYYY-MM-DD for (today in Sri Lanka + N days)
+const getColomboDatePlus = (days) => {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Colombo" });
+    const d = new Date(`${today}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+};
+
 /**
  * GET /api/order/schedule-orders/:sheduleDate?
- * Fetch orders scheduled for a specific date (or the user's latest scheduled order date).
+ * Default sheduleDate = today + 3 days 
  */
 exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
     const userId = req.user?.id || req.user?.userId;
-    let sheduleDate = req.query.sheduleDate || req.params.sheduleDate;
-
-    if (!sheduleDate) {
-        if (userId) {
-            sheduleDate = await RetailOrderDao.getLatestScheduleDateForUser(userId);
-        }
-
-        if (!sheduleDate) {
-            const d = new Date();
-            d.setDate(d.getDate() + 3);
-            sheduleDate = d.toISOString().slice(0, 10);
-        }
-    }
+    const sheduleDate =
+        req.query.sheduleDate || req.params.sheduleDate || getColomboDatePlus(3);
 
     const result = await RetailOrderDao.getOrdersForSheduleDate(sheduleDate, userId);
 
