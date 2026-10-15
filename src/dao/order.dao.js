@@ -306,6 +306,7 @@ exports.createProcessOrderWithTransactionDao = (
             moneyPaid,
             status,
             sheduleDate,
+            isConfirmed = 0, // <-- NEW: EPSD auto-confirm flag
             isCoupon = 0,
             couponType = null,
             couponValue = 0.0,
@@ -410,12 +411,14 @@ exports.createProcessOrderWithTransactionDao = (
                                 finalMoneyPaid = 0;
                             }
 
+                            // 20 columns, invNo is @new_inv_no => 19 placeholders / 19 values
                             const sql = `
                             INSERT INTO processorders (
                                 orderId, invNo, transactionId, paymentMethod,
                                 isPaid, amount, creditPaid, moneyPaid, status, reportStatus, qrCode, sheduleDate,
+                                isConfirmed,
                                 isCoupon, couponType, couponValue, total, fullTotal, discount, deliveryCharge
-                            ) VALUES (?, @new_inv_no, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ) VALUES (?, @new_inv_no, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         `;
                             const values = [
                                 orderId,
@@ -429,6 +432,7 @@ exports.createProcessOrderWithTransactionDao = (
                                 null,
                                 qrCodeUrl,
                                 sheduleDate ? new Date(sheduleDate) : null,
+                                Number(isConfirmed) === 1 ? 1 : 0, // <-- NEW
                                 isCoupon ? 1 : 0,
                                 isCoupon ? couponType || null : null,
                                 parseFloat(couponValue) || 0,
