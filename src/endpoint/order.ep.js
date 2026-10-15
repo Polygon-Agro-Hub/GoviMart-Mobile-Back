@@ -481,6 +481,42 @@ exports.createOrder = asyncHandler(async (req, res) => {
         return isNaN(parsed.getTime()) ? null : parsed;
     };
 
+    // ── Auto-confirm rule (EPSD) ──────────────────────────────────────────────
+    // processorders.isConfirmed = 1 when:
+    //   (ala carte only  OR  package with isFinalizeImdt = 1)
+    //   AND the schedule date is the Earliest Possible Schedule Date (EPSD)
+    const padN = (n) => (n < 10 ? `0${n}` : `${n}`);
+    const toDateStr = (d) => {
+        if (!d) return null;
+        const dt = d instanceof Date ? d : new Date(d);
+        return isNaN(dt.getTime())
+            ? null
+            : `${dt.getFullYear()}-${padN(dt.getMonth() + 1)}-${padN(dt.getDate())}`;
+    };
+
+    let earliestDateObj = checkoutDetails?.earliestDeliveryDate
+        ? parseScheduleDate(checkoutDetails.earliestDeliveryDate)
+        : null;
+    if (!earliestDateObj) {
+        earliestDateObj = new Date();
+        earliestDateObj.setDate(earliestDateObj.getDate() + 3);
+    }
+    const earliestDateStr = toDateStr(earliestDateObj);
+
+    // ala carte only OR package + isFinalizeImdt = 1
+    const isAutoConfirmType = !hasPackages || Number(isFinalizeImdt) === 1;
+
+    // Mirrors client: no EPSD available / package unavailable on EPSD
+    const isEarliestBlocked =
+        checkoutDetails?.earliestDeliveryDate === null ||
+        Boolean(checkoutDetails?.hasPackageUnavailableOnEarliest);
+
+    const shouldAutoConfirm = (scheduleDate) => {
+        if (!isAutoConfirmType || isEarliestBlocked) return 0;
+        const s = toDateStr(scheduleDate);
+        return s && earliestDateStr && s <= earliestDateStr ? 1 : 0;
+    };
+
     // ── 5. Begin transaction ──────────────────────────────────────────────────
     const db = require("../startup/database");
 
@@ -623,7 +659,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         targetDates.push(...allComputed);
                     }
 
-                    // Create an individual processorders row for each scheduled date (e.g. 8 rows for 4 weeks twice a week)
+                    // Create an individual processorders row for each scheduled date
                     const clientIsPaid = Number(req.body.isPaid) === 1 ? 1 : 0;
 
                     for (let i = 0; i < targetDates.length; i++) {
@@ -645,6 +681,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                             moneyPaid: rowMoneyPaid,
                             status: "Ordered",
                             sheduleDate: sDate,
+                            isConfirmed: shouldAutoConfirm(sDate), // <-- EPSD auto-confirm
                             ...rowFinancials,
                         });
 
@@ -681,6 +718,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         moneyPaid: oneTimeMoneyPaid,
                         status: "Ordered",
                         sheduleDate: targetDate,
+                        isConfirmed: shouldAutoConfirm(targetDate), // <-- EPSD auto-confirm
                         ...firstOrderFinancials,
                     });
                     createdProcessOrders.push(proc);
@@ -728,26 +766,8 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     // ── ShoutOUT SMS Dispatch (best-effort, after commit) ──
                     (async () => {
                         try {
-                            let earliestDeliveryDateObj = null;
-                            if (checkoutDetails?.earliestDeliveryDate) {
-                                earliestDeliveryDateObj = parseScheduleDate(checkoutDetails.earliestDeliveryDate);
-                            }
-                            if (!earliestDeliveryDateObj) {
-                                earliestDeliveryDateObj = new Date();
-                                earliestDeliveryDateObj.setDate(earliestDeliveryDateObj.getDate() + 3);
-                            }
-
-                            const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
-                            const toDateStr = (d) => {
-                                if (!d) return null;
-                                const dt = d instanceof Date ? d : new Date(d);
-                                return isNaN(dt.getTime())
-                                    ? null
-                                    : `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
-                            };
-
+                            // reuses toDateStr + earliestDateStr defined above
                             const scheduledDateStr = toDateStr(primaryScheduledDate);
-                            const earliestDateStr = toDateStr(earliestDeliveryDateObj);
                             const isType1 = Boolean(
                                 scheduledDateStr && earliestDateStr && scheduledDateStr <= earliestDateStr
                             );
@@ -767,14 +787,14 @@ exports.createOrder = asyncHandler(async (req, res) => {
                                     deliveryDate: scheduledDateStr,
                                 });
                             } else if (isType1) {
-                                // Original: delivery on earliest date
+                                // Delivery on earliest date
                                 await orderSmsService.sendOrderConfirmedSms({
                                     userId,
                                     phone: resolvedPhone1,
                                     invNo: primaryInvNo,
                                 });
                             } else {
-                                // Original: delivery after earliest date (shows delivery - 3, 18 -> 15)
+                                // Delivery after earliest date (shows delivery - 3, 18 -> 15)
                                 const isCard = String(paymentMethod).toLowerCase() === "card";
                                 await orderSmsService.sendOrderPlacedAfterEpsdSms({
                                     userId,
@@ -787,6 +807,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                             console.error("[createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
                         }
                     })();
+
                     return safeRespond(201, {
                         status: true,
                         message: "Order created successfully",
