@@ -126,7 +126,9 @@ exports.createOrderWithTransactionDao = (connection, orderData) => {
         // ── orders.total = fullTotal + discount ───────────────────────────────
         const parsedFullTotal = parseFloat(fullTotal) || 0;
         const parsedDiscount = parseFloat(discount) || 0;
-        const orderTotal = parseFloat((parsedFullTotal + parsedDiscount).toFixed(2));
+        const orderTotal = parseFloat(
+            (parsedFullTotal + parsedDiscount).toFixed(2),
+        );
 
         const formatMethod = (m) => {
             if (!m) return m;
@@ -304,6 +306,7 @@ exports.createProcessOrderWithTransactionDao = (
             moneyPaid,
             status,
             sheduleDate,
+            isConfirmed = 0, // <-- NEW: EPSD auto-confirm flag
             isCoupon = 0,
             couponType = null,
             couponValue = 0.0,
@@ -371,8 +374,14 @@ exports.createProcessOrderWithTransactionDao = (
                             let finalMoneyPaid = 0; // only set for full card-only payment
                             let finalCreditPaid = rawCreditPaid;
 
-                            const is100PercentCredit = rawCreditPaid > 0 && rawAmount > 0 && rawCreditPaid >= rawAmount;
-                            const isCardMethod = normalized === "card" || normalized === "payhere" || normalized === "credit";
+                            const is100PercentCredit =
+                                rawCreditPaid > 0 &&
+                                rawAmount > 0 &&
+                                rawCreditPaid >= rawAmount;
+                            const isCardMethod =
+                                normalized === "card" ||
+                                normalized === "payhere" ||
+                                normalized === "credit";
 
                             if (is100PercentCredit) {
                                 finalMethod = "Card";
@@ -402,12 +411,14 @@ exports.createProcessOrderWithTransactionDao = (
                                 finalMoneyPaid = 0;
                             }
 
+                            // 20 columns, invNo is @new_inv_no => 19 placeholders / 19 values
                             const sql = `
                             INSERT INTO processorders (
                                 orderId, invNo, transactionId, paymentMethod,
                                 isPaid, amount, creditPaid, moneyPaid, status, reportStatus, qrCode, sheduleDate,
+                                isConfirmed,
                                 isCoupon, couponType, couponValue, total, fullTotal, discount, deliveryCharge
-                            ) VALUES (?, @new_inv_no, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ) VALUES (?, @new_inv_no, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         `;
                             const values = [
                                 orderId,
@@ -421,6 +432,7 @@ exports.createProcessOrderWithTransactionDao = (
                                 null,
                                 qrCodeUrl,
                                 sheduleDate ? new Date(sheduleDate) : null,
+                                Number(isConfirmed) === 1 ? 1 : 0, // <-- NEW
                                 isCoupon ? 1 : 0,
                                 isCoupon ? couponType || null : null,
                                 parseFloat(couponValue) || 0,
@@ -672,108 +684,63 @@ exports.getRetailOrderHistoryDao = async (userId) => {
             return reject("Invalid userId");
         }
 
+        // One row per processorders record (every invoice) for each order
         const orderQuery = `
-  SELECT 
-    po.id AS orderId,
-    po.sheduleDate AS scheduleDate,
-    o.createdAt AS createdAt,
-    o.sheduleTime AS scheduleTime,
-    o.delivaryMethod AS delivaryMethod,
-    COALESCE(po.discount, 0) AS orderDiscount,
-    COALESCE(po.fullTotal, po.total, 0) AS fullTotal,
-    po.invNo AS invoiceNo,
-    po.status AS processStatus,
-    po.isFinalized
-  FROM orders o
-  LEFT JOIN (
-    SELECT *
-    FROM processorders
-    WHERE id IN (
-      SELECT MAX(id)
-      FROM processorders
-      GROUP BY orderId
-    )
-  ) po ON o.id = po.orderId
-  WHERE o.userId = ?
-  ORDER BY o.createdAt DESC
-`;
+            SELECT 
+                po.id AS orderId,              -- processorders.id (unique per invoice)
+                o.id AS parentOrderId,         -- orders.id
+                po.sheduleDate AS scheduleDate,
+                o.createdAt AS createdAt,
+                o.sheduleTime AS scheduleTime,
+                o.delivaryMethod AS delivaryMethod,
+                COALESCE(po.discount, 0) AS orderDiscount,
+                COALESCE(po.fullTotal, po.total, 0) AS fullTotal,
+                po.invNo AS invoiceNo,
+                po.status AS processStatus,
+                po.isFinalized
+            FROM orders o
+            LEFT JOIN processorders po ON o.id = po.orderId
+            WHERE o.userId = ?
+            ORDER BY o.createdAt DESC, po.id DESC
+        `;
 
-        const familyPackItemsQuery = `
-      SELECT 
-        op.id,
-        mp.productPrice AS amount
-      FROM orderpackage op
-      JOIN marketplacepackages mp ON op.packageId = mp.id
-      WHERE op.orderId = ?
-    `;
-
-        const additionalItemsQuery = `
-      SELECT
-        oai.price AS unitPrice,
-        oai.qty AS quantity,
-        (oai.price * oai.qty) AS amount,
-        oai.discount AS itemDiscount
-      FROM orderadditionalitems oai
-      JOIN marketplaceitems mi ON oai.productId = mi.id
-      WHERE oai.proOrderId = ?
-    `;
-
-        db.collectionofficer.query(orderQuery, [userId], async (err, orders) => {
+        db.collectionofficer.query(orderQuery, [userId], (err, orders) => {
             if (err) {
                 return reject("Error fetching retail order history: " + err);
             }
 
             try {
-                const normalizedOrders = await Promise.all(
-                    orders.map(async (order) => {
-                        // (Optional) Keep the below two fetches in case you want item breakdown later
-                        const familyPackItems = await new Promise((res, rej) => {
-                            db.collectionofficer.query(
-                                familyPackItemsQuery,
-                                [order.orderId],
-                                (err, items) => {
-                                    if (err) return rej("Family pack query error: " + err);
-                                    res(items || []);
-                                },
-                            );
-                        });
+                const normalizedOrders = (orders || []).map((order) => {
+                    const fullTotal = parseFloat(order.fullTotal || 0).toFixed(2);
 
-                        const additionalItems = await new Promise((res, rej) => {
-                            db.collectionofficer.query(
-                                additionalItemsQuery,
-                                [order.orderId],
-                                (err, items) => {
-                                    if (err) return rej("Additional items query error: " + err);
-                                    res(items || []);
-                                },
-                            );
-                        });
-
-                        // ✅ Use fullTotal directly from DB
-                        const fullTotal = parseFloat(order.fullTotal || 0).toFixed(2);
-
-                        return {
-                            orderId: String(order.orderId) || "N/A",
-                            invoiceNo: order.invoiceNo ? String(order.invoiceNo) : "N/A",
-                            scheduleDate: order.scheduleDate || "N/A",
-                            scheduleTime: order.scheduleTime || "N/A",
-                            delivaryMethod: order.delivaryMethod || "N/A",
-                            fullTotal: `Rs. ${fullTotal}`,
-                            createdAt: order.createdAt || "N/A",
-                            processStatus: order.processStatus || "Pending",
-                        };
-                    }),
-                );
+                    return {
+                        // processorders.id (falls back to orders.id if no processorders row yet)
+                        orderId: String(order.orderId ?? order.parentOrderId),
+                        // orders.id
+                        parentOrderId: String(order.parentOrderId),
+                        invoiceNo: order.invoiceNo ? String(order.invoiceNo) : "N/A",
+                        scheduleDate: order.scheduleDate || "N/A",
+                        scheduleTime: order.scheduleTime || "N/A",
+                        delivaryMethod: order.delivaryMethod || "N/A",
+                        fullTotal: `Rs. ${fullTotal}`,
+                        createdAt: order.createdAt || "N/A",
+                        processStatus: order.processStatus || "Pending",
+                    };
+                });
 
                 resolve(normalizedOrders);
-            } catch (err) {
-                reject("Error processing order totals: " + err);
+            } catch (e) {
+                reject("Error processing order history: " + e);
             }
         });
     });
 };
 
-exports.getRetailOrderByIdDao = async (orderId, userId, processOrderId = null) => {
+exports.getRetailOrderByIdDao = async (
+    orderId,
+    userId,
+    processOrderId = null,
+) => {
     return new Promise((resolve, reject) => {
         if (!orderId || !userId) {
             return reject("Invalid orderId or userId");
@@ -992,15 +959,18 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
             ORDER BY (id = ?) DESC, sheduleDate ASC, id ASC 
             LIMIT 1
         `;
-        db.collectionofficer.query(poSql, [orderId, orderId, orderId], (poErr, poRows) => {
-            if (poErr) return reject(new Error("Database error: " + poErr.message));
+        db.collectionofficer.query(
+            poSql,
+            [orderId, orderId, orderId],
+            (poErr, poRows) => {
+                if (poErr) return reject(new Error("Database error: " + poErr.message));
 
-            const processOrderId = poRows?.[0]?.id || orderId;
-            const actualOrderId = poRows?.[0]?.orderId || orderId;
+                const processOrderId = poRows?.[0]?.id || orderId;
+                const actualOrderId = poRows?.[0]?.orderId || orderId;
 
-            // Select the raw fee components separately so we can log/inspect them,
-            // instead of only ever seeing the pre-summed total.
-            const packagesSql = `
+                // Select the raw fee components separately so we can log/inspect them,
+                // instead of only ever seeing the pre-summed total.
+                const packagesSql = `
               SELECT 
                 op.id AS orderPackageId,
                 op.orderId,
@@ -1019,42 +989,42 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
               ORDER BY op.id
             `;
 
-            db.collectionofficer.query(
-                packagesSql,
-                [processOrderId],
-                (err, packRows) => {
-                    if (err) {
-                        return reject(new Error("Database error: " + err.message));
-                    }
-
-                    if (!packRows || packRows.length === 0) {
-                        return resolve([]);
-                    }
-
-                    // Defensive check: flag any package whose price components look
-                    // suspicious (null, zero, or suspiciously uniform) so it shows up
-                    // in server logs instead of silently reaching the client.
-                    packRows.forEach((p) => {
-                        const rawProduct = parseFloat(p.rawProductPrice);
-                        const rawPacking = parseFloat(p.rawPackingFee);
-                        const rawService = parseFloat(p.rawServiceFee);
-                        if (
-                            Number.isNaN(rawProduct) ||
-                            Number.isNaN(rawPacking) ||
-                            Number.isNaN(rawService) ||
-                            (rawProduct === 0 && rawPacking === 0 && rawService === 0)
-                        ) {
-                            console.warn(
-                                `[getOrderPackageDetailsDao] Suspicious fee data for packageId=${p.packageId} ` +
-                                `(orderPackageId=${p.orderPackageId}): productPrice=${p.rawProductPrice}, ` +
-                                `packingFee=${p.rawPackingFee}, serviceFee=${p.rawServiceFee}`,
-                            );
+                db.collectionofficer.query(
+                    packagesSql,
+                    [processOrderId],
+                    (err, packRows) => {
+                        if (err) {
+                            return reject(new Error("Database error: " + err.message));
                         }
-                    });
 
-                    const opIds = packRows.map((p) => p.orderPackageId);
+                        if (!packRows || packRows.length === 0) {
+                            return resolve([]);
+                        }
 
-                    const itemsSql = `
+                        // Defensive check: flag any package whose price components look
+                        // suspicious (null, zero, or suspiciously uniform) so it shows up
+                        // in server logs instead of silently reaching the client.
+                        packRows.forEach((p) => {
+                            const rawProduct = parseFloat(p.rawProductPrice);
+                            const rawPacking = parseFloat(p.rawPackingFee);
+                            const rawService = parseFloat(p.rawServiceFee);
+                            if (
+                                Number.isNaN(rawProduct) ||
+                                Number.isNaN(rawPacking) ||
+                                Number.isNaN(rawService) ||
+                                (rawProduct === 0 && rawPacking === 0 && rawService === 0)
+                            ) {
+                                console.warn(
+                                    `[getOrderPackageDetailsDao] Suspicious fee data for packageId=${p.packageId} ` +
+                                    `(orderPackageId=${p.orderPackageId}): productPrice=${p.rawProductPrice}, ` +
+                                    `packingFee=${p.rawPackingFee}, serviceFee=${p.rawServiceFee}`,
+                                );
+                            }
+                        });
+
+                        const opIds = packRows.map((p) => p.orderPackageId);
+
+                        const itemsSql = `
                   SELECT 
                     opi.id,
                     opi.orderPackageId,
@@ -1075,77 +1045,89 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
                   ORDER BY opi.id ASC, opi.orderPackageId ASC, opi.productType ASC, opi.productId ASC, opi.qty ASC, opi.price ASC, opi.createdAt ASC
                 `;
 
-                    db.collectionofficer.query(itemsSql, [opIds], (itemErr, itemRows) => {
-                        if (itemErr) {
-                            return reject(new Error("Database error: " + itemErr.message));
-                        }
+                        db.collectionofficer.query(
+                            itemsSql,
+                            [opIds],
+                            (itemErr, itemRows) => {
+                                if (itemErr) {
+                                    return reject(
+                                        new Error("Database error: " + itemErr.message),
+                                    );
+                                }
 
-                        const itemsByPackId = {};
-                        (itemRows || []).forEach((item) => {
-                            if (!itemsByPackId[item.orderPackageId]) {
-                                itemsByPackId[item.orderPackageId] = [];
-                            }
-                            const unit = item.unitType ? String(item.unitType).trim() : "kg";
-                            itemsByPackId[item.orderPackageId].push({
-                                itemName: item.itemName || item.typeName || "Item",
-                                quantity: `${parseFloat(item.qty || 1)} ${unit}`,
-                                image:
-                                    item.image ||
-                                    "https://images.unsplash.com/photo-1542838132-92c53300491e?w=200",
-                                price: parseFloat(item.price || 0),
-                            });
-                        });
+                                const itemsByPackId = {};
+                                (itemRows || []).forEach((item) => {
+                                    if (!itemsByPackId[item.orderPackageId]) {
+                                        itemsByPackId[item.orderPackageId] = [];
+                                    }
+                                    const unit = item.unitType
+                                        ? String(item.unitType).trim()
+                                        : "kg";
+                                    itemsByPackId[item.orderPackageId].push({
+                                        itemName: item.itemName || item.typeName || "Item",
+                                        quantity: `${parseFloat(item.qty || 1)} ${unit}`,
+                                        image:
+                                            item.image ||
+                                            "https://images.unsplash.com/photo-1542838132-92c53300491e?w=200",
+                                        price: parseFloat(item.price || 0),
+                                    });
+                                });
 
-                        const fallbackPackIds = packRows
-                            .filter(
-                                (p) =>
-                                    !itemsByPackId[p.orderPackageId] ||
-                                    itemsByPackId[p.orderPackageId].length === 0,
-                            )
-                            .map((p) => p.packageId);
+                                const fallbackPackIds = packRows
+                                    .filter(
+                                        (p) =>
+                                            !itemsByPackId[p.orderPackageId] ||
+                                            itemsByPackId[p.orderPackageId].length === 0,
+                                    )
+                                    .map((p) => p.packageId);
 
-                        if (fallbackPackIds.length > 0) {
-                            const fallbackSql = `
+                                if (fallbackPackIds.length > 0) {
+                                    const fallbackSql = `
                           SELECT pd.packageId, pd.qty AS itemQty, pt.typeName
                           FROM packagedetails pd
                           JOIN producttypes pt ON pd.productTypeId = pt.id
                           WHERE pd.packageId IN (?)
                         `;
-                            db.collectionofficer.query(
-                                fallbackSql,
-                                [fallbackPackIds],
-                                (fbErr, fbRows) => {
-                                    if (!fbErr && fbRows) {
-                                        packRows.forEach((pack) => {
-                                            if (
-                                                !itemsByPackId[pack.orderPackageId] ||
-                                                itemsByPackId[pack.orderPackageId].length === 0
-                                            ) {
-                                                itemsByPackId[pack.orderPackageId] = fbRows
-                                                    .filter((r) => r.packageId === pack.packageId)
-                                                    .map((r) => ({
-                                                        itemName: r.typeName,
-                                                        quantity: `${r.itemQty} units`,
-                                                        image:
-                                                            "https://images.unsplash.com/photo-1542838132-92c53300491e?w=200",
-                                                        price: 0,
-                                                    }));
+                                    db.collectionofficer.query(
+                                        fallbackSql,
+                                        [fallbackPackIds],
+                                        (fbErr, fbRows) => {
+                                            if (!fbErr && fbRows) {
+                                                packRows.forEach((pack) => {
+                                                    if (
+                                                        !itemsByPackId[pack.orderPackageId] ||
+                                                        itemsByPackId[pack.orderPackageId].length === 0
+                                                    ) {
+                                                        itemsByPackId[pack.orderPackageId] = fbRows
+                                                            .filter((r) => r.packageId === pack.packageId)
+                                                            .map((r) => ({
+                                                                itemName: r.typeName,
+                                                                quantity: `${r.itemQty} units`,
+                                                                image:
+                                                                    "https://images.unsplash.com/photo-1542838132-92c53300491e?w=200",
+                                                                price: 0,
+                                                            }));
+                                                    }
+                                                });
                                             }
-                                        });
-                                    }
 
+                                            const packages = buildPackageList(
+                                                packRows,
+                                                itemsByPackId,
+                                            );
+                                            resolve(packages);
+                                        },
+                                    );
+                                } else {
                                     const packages = buildPackageList(packRows, itemsByPackId);
                                     resolve(packages);
-                                },
-                            );
-                        } else {
-                            const packages = buildPackageList(packRows, itemsByPackId);
-                            resolve(packages);
-                        }
-                    });
-                },
-            );
-        });
+                                }
+                            },
+                        );
+                    },
+                );
+            },
+        );
     });
 };
 
@@ -1182,7 +1164,8 @@ exports.getOrderAdditionalItemsDao = async (orderId, processOrderId = null) => {
                 }
 
                 // 1. Check if orderId directly matches orderadditionalitems.proOrderId
-                const directSql = "SELECT proOrderId FROM orderadditionalitems WHERE proOrderId = ? LIMIT 1";
+                const directSql =
+                    "SELECT proOrderId FROM orderadditionalitems WHERE proOrderId = ? LIMIT 1";
                 db.collectionofficer.query(directSql, [orderId], (dErr, dRows) => {
                     if (!dErr && dRows && dRows.length > 0) {
                         return res(orderId);
@@ -1196,12 +1179,16 @@ exports.getOrderAdditionalItemsDao = async (orderId, processOrderId = null) => {
                         ORDER BY (id = ?) DESC, sheduleDate ASC, id ASC 
                         LIMIT 1
                     `;
-                    db.collectionofficer.query(poSql, [orderId, orderId, orderId], (poErr, poRows) => {
-                        if (poErr || !poRows || poRows.length === 0) {
-                            return res(orderId);
-                        }
-                        res(poRows[0].id);
-                    });
+                    db.collectionofficer.query(
+                        poSql,
+                        [orderId, orderId, orderId],
+                        (poErr, poRows) => {
+                            if (poErr || !poRows || poRows.length === 0) {
+                                return res(orderId);
+                            }
+                            res(poRows[0].id);
+                        },
+                    );
                 });
             });
         };
@@ -1405,7 +1392,9 @@ const getPickupInfoDao = (isPickup, centerId) => {
                 return resolve(null);
             }
             if (!rows || rows.length === 0) {
-                console.warn(`[getPickupInfoDao] No distributedcenter row for id=${centerId}`);
+                console.warn(
+                    `[getPickupInfoDao] No distributedcenter row for id=${centerId}`,
+                );
                 return resolve(null);
             }
             const r = rows[0];
@@ -1468,13 +1457,19 @@ const getPackageDetailsForProcessedItemsDao = (processedFamilyPackItems) => {
     });
 };
 
-exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId, options = {}) => {
+exports.getInvoiceByOrderIdDao = (
+    orderIdOrProcessOrderId,
+    userId,
+    options = {},
+) => {
     return new Promise((resolve, reject) => {
         if (!orderIdOrProcessOrderId || !userId) {
             return reject(new Error("Invalid orderId or userId"));
         }
 
-        const optProcessOrderId = options?.processOrderId ? String(options.processOrderId).trim() : null;
+        const optProcessOrderId = options?.processOrderId
+            ? String(options.processOrderId).trim()
+            : null;
         const optInvNo = options?.invNo ? String(options.invNo).trim() : null;
         const idParam = String(orderIdOrProcessOrderId).trim();
         const isInvNoParam = idParam.toUpperCase().startsWith("INV-") ? 1 : 0;
@@ -1523,16 +1518,22 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId, options = {})
         db.collectionofficer.query(
             invoiceQuery,
             [
-                optProcessOrderId, optProcessOrderId,
-                optInvNo, optInvNo,
-                isInvNoParam, idParam,
+                optProcessOrderId,
+                optProcessOrderId,
+                optInvNo,
+                optInvNo,
+                isInvNoParam,
+                idParam,
                 idParam,
                 idParam,
                 userId,
                 // ORDER BY params:
-                optProcessOrderId, optProcessOrderId,
-                optInvNo, optInvNo,
-                isInvNoParam, idParam,
+                optProcessOrderId,
+                optProcessOrderId,
+                optInvNo,
+                optInvNo,
+                isInvNoParam,
+                idParam,
                 idParam,
                 idParam,
             ],
@@ -1557,8 +1558,7 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId, options = {})
                     ((mp.productPrice + mp.packingFee + mp.serviceFee) * op.qty) AS amount
                 FROM orderpackage op
                 JOIN marketplacepackages mp ON op.packageId = mp.id
-                WHERE op.orderId = ? 
-                   OR (op.orderId = ? AND NOT EXISTS (SELECT 1 FROM orderpackage sub WHERE sub.orderId = ?))
+                WHERE op.orderId = ?
             `;
 
                 const additionalItemsQuery = `
@@ -1575,8 +1575,8 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId, options = {})
                 FROM orderadditionalitems oai
                 JOIN marketplaceitems mi ON oai.productId = mi.id
                 LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
-                WHERE oai.proOrderId = ? 
-                   OR (oai.proOrderId = ? AND NOT EXISTS (SELECT 1 FROM orderadditionalitems sub WHERE sub.proOrderId = ?))
+                WHERE oai.proOrderId = ?
+                ORDER BY oai.id ASC
             `;
 
                 const billingQuery = `
@@ -1606,14 +1606,14 @@ exports.getInvoiceByOrderIdDao = (orderIdOrProcessOrderId, userId, options = {})
                     new Promise((res, rej) => {
                         db.collectionofficer.query(
                             familyPackItemsQuery,
-                            [processOrderId, actualOrderId, processOrderId],
+                            [processOrderId],
                             (e, r) => (e ? rej(e) : res(r || [])),
                         );
                     }),
                     new Promise((res, rej) => {
                         db.collectionofficer.query(
                             additionalItemsQuery,
-                            [processOrderId, actualOrderId, processOrderId],
+                            [processOrderId],
                             (e, r) => (e ? rej(e) : res(r || [])),
                         );
                     }),
@@ -1879,7 +1879,7 @@ exports.markOrderPaidDao = async (identifier, transactionId) => {
 async function getOrdersForSheduleDate(sheduleDate, userId = null) {
     const promiseDb = db.collectionofficer.promise();
     let userCondition = "";
-    const params = [sheduleDate, sheduleDate];
+    const params = [sheduleDate];
     if (userId) {
         userCondition = "AND o.userId = ? AND COALESCE(po.isFinalized, 0) = 0";
         params.push(userId);
@@ -1907,26 +1907,25 @@ async function getOrdersForSheduleDate(sheduleDate, userId = null) {
             END AS orderType
         FROM collection_officer.processorders po
         JOIN collection_officer.orders o ON o.id = po.orderId
-        WHERE (DATE_FORMAT(po.sheduleDate, '%Y-%m-%d') = ? OR DATE(po.sheduleDate) = ?)
+        WHERE DATE(po.sheduleDate) = ?
             AND po.status = 'Ordered'
-            -- both types: ala carte OR package + imdt
-            AND (
-                o.isPackage = 0
-                OR (o.isPackage = 1 AND o.isFinalizeImdt = 1)
-            )
-            -- Exclude orders created today
-            AND (DATE(o.createdAt) < CURDATE() OR DATE_FORMAT(o.createdAt, '%Y-%m-%d') < CURDATE())
-            -- Check isConfirmed = 0 (only unconfirmed orders)
             AND COALESCE(po.isConfirmed, 0) = 0
+            AND (
+                (o.isPackage = 1 AND o.isFinalizeImdt = 1)
+                OR (o.isPackage = 0 AND o.isFinalizeImdt = 0)
+            )
             ${userCondition}
         ORDER BY po.id ASC
         `,
         params,
     );
 
-    const resolvedOrderDate = rows.length > 0 && rows[0].createdAt
-        ? new Date(rows[0].createdAt).toISOString().slice(0, 10)
-        : new Date(new Date(sheduleDate).getTime() - 3 * 86400000).toISOString().slice(0, 10);
+    const resolvedOrderDate =
+        rows.length > 0 && rows[0].createdAt
+            ? new Date(rows[0].createdAt).toISOString().slice(0, 10)
+            : new Date(new Date(sheduleDate).getTime() - 3 * 86400000)
+                .toISOString()
+                .slice(0, 10);
 
     return {
         sheduleDate,
@@ -1983,4 +1982,3 @@ async function getLatestScheduleDateForUser(userId) {
 
 exports.getOrdersForSheduleDate = getOrdersForSheduleDate;
 exports.getLatestScheduleDateForUser = getLatestScheduleDateForUser;
-

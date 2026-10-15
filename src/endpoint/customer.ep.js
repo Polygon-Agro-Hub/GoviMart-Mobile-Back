@@ -336,6 +336,21 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
       }
     }
 
+    if (req.body.image !== undefined) {
+      const existingUser = await customerDao.getCustomerProfileDao(userId);
+      const oldImage = existingUser?.[0]?.image;
+      const newImage =
+        req.body.image && typeof req.body.image === "string" ? req.body.image.trim() : null;
+      if (oldImage && oldImage !== newImage) {
+        try {
+          const deleteFromR2 = require("../middlewares/s3delete");
+          await deleteFromR2(oldImage);
+        } catch (delErr) {
+          console.warn("Failed to delete old profile image from R2:", delErr.message);
+        }
+      }
+    }
+
     const result = await customerDao.updateUserDetailsDao(userId, req.body);
 
     if (result.affectedRows === 0) {
@@ -742,6 +757,17 @@ exports.uploadProfileImage = asyncHandler(async (req, res) => {
       req.file.originalname,
       "profile-images"
     );
+
+    try {
+      const existingUser = await customerDao.getCustomerProfileDao(userId);
+      const oldImage = existingUser?.[0]?.image;
+      if (oldImage && oldImage !== imageUrl) {
+        const deleteFromR2 = require("../middlewares/s3delete");
+        await deleteFromR2(oldImage);
+      }
+    } catch (delErr) {
+      console.warn("Failed to delete previous profile image from R2:", delErr.message);
+    }
 
     await customerDao.updateProfileImageDao(userId, imageUrl);
 

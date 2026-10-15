@@ -573,6 +573,7 @@ exports.updateUserDetailsDao = async (userId, userData) => {
     "companyPhone",
     "companyName",
     "buyerType",
+    "image",
   ];
 
   const fieldsToUpdate = [];
@@ -581,7 +582,11 @@ exports.updateUserDetailsDao = async (userId, userData) => {
   for (const key of allowedKeys) {
     if (userData[key] !== undefined) {
       fieldsToUpdate.push(`${key} = ?`);
-      values.push(userData[key]);
+      let val = userData[key];
+      if (key === "image") {
+        val = val && typeof val === "string" && val.trim() !== "" ? val.trim() : null;
+      }
+      values.push(val);
     }
   }
 
