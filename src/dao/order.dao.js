@@ -1848,15 +1848,19 @@ exports.getDeliveredOrdersTotal = async (userId) => {
  * Marks processorders record as paid via PayHere webhook or direct card settlement.
  * Accepts invNo, orderId, or processorders.id as identifier.
  */
-exports.markOrderPaidDao = async (identifier, transactionId) => {
+exports.markOrderPaidDao = async (identifier, transactionId, amount = null) => {
     let connection;
     try {
         connection = await db.collectionofficer.promise().getConnection();
         const [result] = await connection.query(
             `UPDATE processorders 
-             SET isPaid = 1, paymentMethod = 'Card', transactionId = COALESCE(?, transactionId)
+             SET isPaid = 1, 
+                 paymentMethod = 'Card', 
+                 transactionId = COALESCE(?, transactionId),
+                 moneyPaid = CASE WHEN moneyPaid > 0 THEN moneyPaid ELSE COALESCE(?, fullTotal, amount) END,
+                 amount = CASE WHEN amount > 0 THEN amount ELSE COALESCE(?, fullTotal, amount) END
              WHERE invNo = ? OR orderId = ? OR id = ?`,
-            [transactionId || null, identifier, identifier, identifier],
+            [transactionId || null, amount, amount, identifier, identifier, identifier],
         );
         return result.affectedRows > 0;
     } catch (err) {

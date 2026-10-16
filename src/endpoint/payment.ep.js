@@ -506,6 +506,18 @@ exports.syncCheckout = asyncHandler(async (req, res) => {
         );
         await customerDao.updateCreditBalanceDao(userId, parseFloat(amountInLkr));
       }
+    } else if (isCompleted || payment.status === "succeeded") {
+      const orderIdentifier = checkout?.orderId || checkout?.metadata?.orderId || payment?.orderId;
+      if (orderIdentifier) {
+        console.log(
+          `[Sync Checkout] Auto-marking order paid for ${orderIdentifier} by Rs. ${amountInLkr}`
+        );
+        try {
+          await orderDao.markOrderPaidDao(orderIdentifier, payment.id || checkoutId, parseFloat(amountInLkr));
+        } catch (markErr) {
+          console.warn("[Sync Checkout] markOrderPaidDao error:", markErr.message);
+        }
+      }
     }
 
     return res.status(200).json({
@@ -595,6 +607,15 @@ exports.chargeSavedCard = asyncHandler(async (req, res) => {
         `[Charge Saved Card] Auto-clearing credit balance for user ${userId} by Rs. ${amount}`
       );
       await customerDao.updateCreditBalanceDao(userId, parseFloat(amount));
+    } else if (result.success && orderId) {
+      console.log(
+        `[Charge Saved Card] Auto-marking order paid for ${orderId} by Rs. ${amount}`
+      );
+      try {
+        await orderDao.markOrderPaidDao(orderId, result.paymentId || result.id, parseFloat(amount));
+      } catch (markErr) {
+        console.warn("[Charge Saved Card] markOrderPaidDao error:", markErr.message);
+      }
     }
 
     return res.status(200).json({

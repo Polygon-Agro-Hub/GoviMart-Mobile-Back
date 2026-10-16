@@ -1820,6 +1820,23 @@ exports.confirmOrderWithLivePricesDao = ({
 
                     // Prevents double credit adjustments on a second tap / retry
                     if (Number(matchedOrder.isConfirmed) === 1) {
+                        if (Number(isPaid) === 1 || isPaid === true) {
+                            const payAmount = newTotal != null ? Number(newTotal) : Number(matchedOrder.oldOrderFullTotal || matchedOrder.amount || 0);
+                            const payMoneyPaid = round2(Math.max(0, payAmount - Number(matchedOrder.creditPaid || 0)));
+                            await q(
+                                `UPDATE processorders
+                                 SET amount = ?, moneyPaid = ?, isPaid = 1, paymentMethod = 'Card'
+                                 WHERE id = ?`,
+                                [payAmount, payMoneyPaid, realProcessOrderId],
+                            );
+                            await connection.commit();
+                            connection.release();
+                            return resolve({
+                                message: "Order payment completed successfully.",
+                                processOrderId: realProcessOrderId,
+                                invNo: matchedOrder.invNo,
+                            });
+                        }
                         throw new Error("This order has already been confirmed.");
                     }
 

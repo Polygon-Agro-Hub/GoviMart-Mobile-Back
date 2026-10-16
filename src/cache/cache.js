@@ -1,7 +1,7 @@
 const NodeCache = require("node-cache");
 
 /**
- * Shared in-memory cache instance for Polygon (GoviMart) Mobile API.
+ * Shared in-memory cache instance for Polygon Mobile API.
  *
  * stdTTL: 0       => No automatic expiration. Data persists until explicitly updated or invalidated.
  * checkperiod: 0  => No background timer cleanup.
