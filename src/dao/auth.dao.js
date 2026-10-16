@@ -217,50 +217,69 @@ exports.getUserByEmailDao = async (email) => {
   }
 };
 
-// Get User By Phone across phoneNumber, phoneNumber2, and companyPhone
+
 exports.getUserByPhoneDao = async (phoneCode, phoneNumber) => {
   try {
     const raw = String(phoneNumber || "").trim();
     if (!raw) return null;
+
     const cleanNum = raw.replace(/[^0-9]/g, "");
+    if (!cleanNum) return null;
+
+
+    const codeDigits = String(phoneCode || "").replace(/[^0-9]/g, "");
+    const isSriLanka = codeDigits === "94";
+
     const candidates = new Set([raw, cleanNum]);
 
-    if (phoneCode === "+94" || cleanNum.startsWith("7") || cleanNum.startsWith("07") || cleanNum.startsWith("947")) {
-      if (cleanNum.length === 9 && cleanNum.startsWith("7")) {
-        candidates.add(cleanNum);
-        candidates.add("0" + cleanNum);
-        candidates.add("+94" + cleanNum);
-        candidates.add("94" + cleanNum);
-      } else if (cleanNum.length === 10 && cleanNum.startsWith("07")) {
-        const suffix = cleanNum.substring(1);
-        candidates.add(suffix);
-        candidates.add(cleanNum);
-        candidates.add("+94" + suffix);
-        candidates.add("94" + suffix);
-      } else if (cleanNum.length === 11 && cleanNum.startsWith("947")) {
-        const suffix = cleanNum.substring(2);
-        candidates.add(suffix);
-        candidates.add("0" + suffix);
-        candidates.add("+" + cleanNum);
-        candidates.add(cleanNum);
+    // Strip leading zeros for any country (e.g. 0771234567 -> 771234567)
+    const noZeros = cleanNum.replace(/^0+/, "");
+    if (noZeros) candidates.add(noZeros);
+
+    // Sri Lankan formatting variants only for +94
+    if (isSriLanka && noZeros) {
+      const local = noZeros.startsWith("94") && noZeros.length === 11
+        ? noZeros.substring(2)
+        : noZeros;
+      if (local.length === 9 && local.startsWith("7")) {
+        candidates.add(local);
+        candidates.add("0" + local);
+        candidates.add("94" + local);
+        candidates.add("+94" + local);
       }
     }
 
     const phoneList = Array.from(candidates).filter(Boolean);
     if (phoneList.length === 0) return null;
-    const placeholders = phoneList.map(() => "?").join(", ");
+
+    const numPlaceholders = phoneList.map(() => "?").join(", ");
+
+    // Stored code may be "+94" or "94"; legacy rows may have NULL/empty code
+    // (treated as a possible match to stay safe).
+    const codeCond = (col) =>
+      codeDigits
+        ? `REPLACE(TRIM(COALESCE(${col}, '')), '+', '') IN ('', ?)`
+        : `1 = 1`;
+
+    const group = (codeCol, numCol) => ({
+      sql: `(${codeCond(codeCol)} AND ${numCol} IN (${numPlaceholders}))`,
+      params: codeDigits ? [codeDigits, ...phoneList] : [...phoneList],
+    });
+
+    const groups = [
+      group("phoneCode", "phoneNumber"),
+      group("phoneCode2", "phoneNumber2"),
+      group("companyPhoneCode", "companyPhone"),
+    ];
+
     const sql = `
-      SELECT * FROM marketplaceusers 
-      WHERE phoneNumber IN (${placeholders}) 
-         OR phoneNumber2 IN (${placeholders}) 
-         OR companyPhone IN (${placeholders}) 
+      SELECT * FROM marketplaceusers
+      WHERE ${groups.map((g) => g.sql).join("\n         OR ")}
       LIMIT 1
     `;
-    const [results] = await db.collectionofficer.promise().query(sql, [
-      ...phoneList,
-      ...phoneList,
-      ...phoneList,
-    ]);
+    const params = groups.flatMap((g) => g.params);
+
+    const [results] = await db.collectionofficer.promise().query(sql, params);
     return results[0] || null;
   } catch (err) {
     console.error("Database error in getUserByPhoneDao:", err);
