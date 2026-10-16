@@ -1,5 +1,5 @@
 /**
- * Service to notify Polygon Customer Mobile App (GoviMart Mobile)
+ * Service to notify Polygon Customer Mobile App (Polygon Mobile)
  * Delivers real-time Socket.IO and Background Push Notification (FCM / Expo) to Customer.
  */
 

@@ -202,7 +202,7 @@ exports.getProductsByProductType = async (req, res) => {
 /**
  * POST /polygon/api/product/notify-update
  * Webhook called by Admin Panel when packages or products are created, updated, or status-changed.
- * Broadcasts real-time 'packages_updated' and 'catalog_updated' WebSocket events to all connected Polygon/GoviMart mobile apps.
+ * Broadcasts real-time 'packages_updated' and 'catalog_updated' WebSocket events to all connected Polygon mobile apps.
  */
 exports.notifyPackageUpdate = async (req, res) => {
   try {

@@ -114,7 +114,7 @@ exports.savePushToken = asyncHandler(async (req, res) => {
 
 /**
  * POST /polygon/api/notification/trigger
- * External Webhook to trigger real-time notifications to GoviMart Customers
+ * External Webhook to trigger real-time notifications to Polygon Customers
  * from Admin Panel, Govi Transport, PayHere, or internal background services.
  *
  * Delivers via WebSocket (0 polling) and Firebase/Expo Push.
