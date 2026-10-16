@@ -153,7 +153,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
         creditToAdd = 0,
         replacements = [],
         additionalItems = [],
-        updatedAdditionalItems = [], // NEW: edited EXISTING rows (by orderadditionalitems.id)
+        updatedAdditionalItems = [],
         deletedAdditionalItemIds = [],
         packages = [],
     } = req.body;
@@ -209,7 +209,30 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
 
         console.log("[confirmPackageReview Endpoint] Success response:", result);
 
+        // "Order confirmed" SMS after the review is committed. Best-effort:
+        // runs in the background and can never fail the review response.
+        (async () => {
+            try {
+                const resolved = await orderSmsService.resolveOrderDetails(
+                    processOrderId || orderId,
+                    userId,
+                );
+                const invNo = resolved.invNo;
 
+                if (!invNo) {
+                    console.warn("[confirmPackageReview] No invoice number, SMS skipped");
+                    return;
+                }
+
+                const smsRes = await orderSmsService.sendOrderConfirmedSms({
+                    userId,
+                    invNo,
+                });
+                console.log(`[confirmPackageReview] Confirmed SMS for ${invNo}:`, smsRes);
+            } catch (smsErr) {
+                console.warn("[confirmPackageReview] Confirmation SMS error:", smsErr.message);
+            }
+        })();
 
         return res.status(200).json({
             status: true,
@@ -296,7 +319,7 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
     if (!ensureRetailUser(req, res)) return;
 
     const userId = getUserId(req);
-    const { orderId, processOrderId, newTotal, isPaid = null } = req.body;
+    const { orderId, processOrderId, newTotal, isPaid = null, amount = null, moneyPaid = null } = req.body;
 
     if (!orderId && !processOrderId) {
         return res.status(400).json({
@@ -310,7 +333,7 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
             orderId,
             processOrderId,
             userId,
-            newTotal,
+            newTotal: amount || moneyPaid || newTotal,
             isPaid,
         });
 

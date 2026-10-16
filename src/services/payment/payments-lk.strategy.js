@@ -73,7 +73,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
         ? `Clear Credit Balance (User #${userId})`
         : paymentType === "save_card"
         ? `Link Payment Card (User #${userId})`
-        : `GoviMart Order #${orderId}`);
+        : `Polygon Order #${orderId}`);
 
     // Format phone to valid Sri Lankan mobile number (e.g. 07XXXXXXXX) only if provided
     let validPhone;
@@ -93,7 +93,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
     const customerPayload = {
       name:
         `${customer.firstName || ""} ${customer.lastName || ""}`.trim() ||
-        "GoviMart Customer",
+        "Polygon Customer",
       email: customer.email || "customer@govimart.lk",
     };
     if (validPhone) {

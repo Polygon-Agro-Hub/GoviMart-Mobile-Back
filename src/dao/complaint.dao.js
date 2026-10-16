@@ -1,6 +1,6 @@
 const db = require("../startup/database");
 
-// Get All Complain Categories for appName = 'GoViMart'
+// Get All Complain Categories for appName = 'Polygon'
 exports.getComplainCategoriesDao = async () => {
   try {
     const sql = `

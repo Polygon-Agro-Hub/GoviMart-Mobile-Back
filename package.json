@@ -10,7 +10,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "GoviMart Mobile API backend service",
+  "description": "Polygon Mobile API backend service",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.955.0",
     "bcrypt": "^6.0.0",
