@@ -454,7 +454,7 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
     }
 
     const normalizedPhone = String(phoneNumber).replace(/[^0-9]/g, "");
-    if (normalizedPhone.length < 9 || normalizedPhone.length > 10) {
+    if (normalizedPhone.length < 8 || normalizedPhone.length > 10) {
       return res
         .status(400)
         .json({ status: false, message: "Invalid phone number." });
@@ -465,7 +465,7 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
     if (taken) {
       return res.status(400).json({
         status: false,
-        message: "This phone number is already in use by another account.",
+        message: "This phone number is already registered to another account.",
       });
     }
 
