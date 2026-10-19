@@ -7,24 +7,39 @@ exports.loginUser = async (identifier, password) => {
     let phone1 = identifier;
     let phone2 = identifier;
     let phone3 = identifier;
+    let phone4 = identifier;
 
-    // Normalise Sri Lankan mobile numbers
+    // Normalise mobile numbers for all supported countries
+    // (Cambodia +855, Vietnam +84, Bangladesh +880, India +91, Netherlands +31, Sri Lanka +94)
     if (/^[0-9+]+$/.test(identifier)) {
       const cleanNum = identifier.replace(/[^0-9]/g, ""); // Keep only numbers
-      if (cleanNum.length === 9 && cleanNum.startsWith("7")) {
-        phone1 = cleanNum;
-        phone2 = "0" + cleanNum;
-        phone3 = "+94" + cleanNum;
-      } else if (cleanNum.length === 10 && cleanNum.startsWith("07")) {
+
+      const prefixes = ["880", "855", "94", "84", "91", "31"];
+      let matchedPrefix = null;
+      for (const p of prefixes) {
+        if (cleanNum.startsWith(p) && cleanNum.length > p.length + 6) {
+          matchedPrefix = p;
+          break;
+        }
+      }
+
+      if (matchedPrefix) {
+        const localNum = cleanNum.substring(matchedPrefix.length);
+        phone1 = localNum;
+        phone2 = "0" + localNum;
+        phone3 = "+" + matchedPrefix + localNum;
+        phone4 = matchedPrefix + localNum;
+      } else if (cleanNum.startsWith("0")) {
         const suffix = cleanNum.substring(1);
         phone1 = suffix;
         phone2 = cleanNum;
         phone3 = "+94" + suffix;
-      } else if (cleanNum.length === 11 && cleanNum.startsWith("947")) {
-        const suffix = cleanNum.substring(2);
-        phone1 = suffix;
-        phone2 = "0" + suffix;
-        phone3 = "+" + cleanNum;
+        phone4 = "94" + suffix;
+      } else {
+        phone1 = cleanNum;
+        phone2 = "0" + cleanNum;
+        phone3 = "+94" + cleanNum;
+        phone4 = "94" + cleanNum;
       }
     }
 
@@ -49,15 +64,21 @@ exports.loginUser = async (identifier, password) => {
       WHERE (email = ? 
         OR phoneNumber = ? 
         OR phoneNumber = ? 
-        OR phoneNumber = ?)
+        OR phoneNumber = ?
+        OR phoneNumber = ?
+        OR CONCAT(phoneCode, phoneNumber) = ?
+        OR CONCAT(REPLACE(phoneCode, '+', ''), phoneNumber) = ?)
         AND (isMarketPlaceUser = 1 OR isDashUser = 1)
     `;
 
     const [results] = await db.collectionofficer.promise().query(sql, [
       identifier, // email
-      phone1,     // phone normalized 1
-      phone2,     // phone normalized 2
-      phone3      // phone normalized 3
+      phone1,     // phone normalized 1 (local)
+      phone2,     // phone normalized 2 (with 0)
+      phone3,     // phone normalized 3 (with +prefix)
+      phone4,     // phone normalized 4 (with prefix without +)
+      phone3,     // CONCAT(phoneCode, phoneNumber)
+      phone4      // CONCAT(REPLACE(phoneCode, '+', ''), phoneNumber)
     ]);
 
     if (results.length === 0) {
@@ -233,14 +254,38 @@ exports.getUserByPhoneDao = async (phoneCode, phoneNumber) => {
     const candidates = new Set([raw, cleanNum]);
 
     // Strip leading zeros for any country (e.g. 0771234567 -> 771234567)
-    const noZeros = cleanNum.replace(/^0+/, "");
-    if (noZeros) candidates.add(noZeros);
+    const localNum = cleanNum.replace(/^0+/, "");
+    const localWithZero = "0" + localNum;
+
+    if (localNum) {
+      candidates.add(localNum);
+      candidates.add(localWithZero);
+      if (codeDigits) {
+        candidates.add(`+${codeDigits}${localNum}`);
+        candidates.add(`${codeDigits}${localNum}`);
+        candidates.add(`+${codeDigits}${localWithZero}`);
+        candidates.add(`${codeDigits}${localWithZero}`);
+      }
+    }
+
+    // Normalise if number contains country code prefix for supported countries
+    const prefixes = ["880", "855", "94", "84", "91", "31"];
+    for (const p of prefixes) {
+      if (cleanNum.startsWith(p) && cleanNum.length > p.length + 6) {
+        const subLocal = cleanNum.substring(p.length).replace(/^0+/, "");
+        candidates.add(subLocal);
+        candidates.add("0" + subLocal);
+        candidates.add("+" + p + subLocal);
+        candidates.add(p + subLocal);
+        break;
+      }
+    }
 
     // Sri Lankan formatting variants only for +94
-    if (isSriLanka && noZeros) {
-      const local = noZeros.startsWith("94") && noZeros.length === 11
-        ? noZeros.substring(2)
-        : noZeros;
+    if (isSriLanka && localNum) {
+      const local = localNum.startsWith("94") && localNum.length === 11
+        ? localNum.substring(2)
+        : localNum;
       if (local.length === 9 && local.startsWith("7")) {
         candidates.add(local);
         candidates.add("0" + local);
@@ -275,9 +320,15 @@ exports.getUserByPhoneDao = async (phoneCode, phoneNumber) => {
     const sql = `
       SELECT * FROM marketplaceusers
       WHERE ${groups.map((g) => g.sql).join("\n         OR ")}
+         OR CONCAT(phoneCode, phoneNumber) IN (${numPlaceholders})
+         OR CONCAT(REPLACE(phoneCode, '+', ''), phoneNumber) IN (${numPlaceholders})
       LIMIT 1
     `;
-    const params = groups.flatMap((g) => g.params);
+    const params = [
+      ...groups.flatMap((g) => g.params),
+      ...phoneList,
+      ...phoneList,
+    ];
 
     const [results] = await db.collectionofficer.promise().query(sql, params);
     return results[0] || null;
