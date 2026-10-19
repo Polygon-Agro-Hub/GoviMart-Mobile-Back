@@ -1114,10 +1114,11 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
         });
       }
 
-      if (phoneCode !== "+94") {
+      const supportedPhoneCodes = ["+94", "+84", "+855", "+880", "+91", "+31"];
+      if (!supportedPhoneCodes.includes(phoneCode)) {
         return res.status(400).json({
           status: false,
-          message: "SMS OTP is only available for Sri Lankan mobile numbers (+94). Please use the email option.",
+          message: "SMS OTP is only available for supported countries (+94, +84, +855, +880, +91, +31). Please use the email option.",
         });
       }
 
