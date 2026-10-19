@@ -347,6 +347,26 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 2. Verify cart ownership ──────────────────────────────────────────────
     const cartBelongsToUser = await RetailOrderDao.validateCartDao(effectiveCartId, userId);
     if (!cartBelongsToUser) {
+        // High-latency safety: Check if this user's cart was already converted to an order recently (e.g. earlier in-flight request succeeded and cleared cart)
+        try {
+            const recentOrder = await RetailOrderDao.getRecentOrderByUserDao(userId, 15);
+            if (recentOrder) {
+                console.log("[createOrder] Cart was already converted to an order recently. Returning existing order:", recentOrder.orderId);
+                return safeRespond(200, {
+                    status: true,
+                    message: "Order was already placed successfully",
+                    data: {
+                        orderId: recentOrder.orderId,
+                        processOrderId: recentOrder.processOrderId,
+                        invoiceNumber: recentOrder.invoiceNumber,
+                        total: recentOrder.total,
+                    },
+                });
+            }
+        } catch (recentErr) {
+            console.warn("[createOrder] Error checking recent order fallback:", recentErr.message);
+        }
+
         return safeRespond(403, {
             status: false,
             message: "Cart does not belong to the current user",

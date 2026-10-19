@@ -2,12 +2,14 @@ const Joi = require("joi");
 
 // Login Schema
 const loginSchema = Joi.object({
-  identifier: Joi.string().trim().required().messages({
+  identifier: Joi.string().trim().pattern(/^\S+$/).required().messages({
     "string.empty": "Mobile number or email is required",
+    "string.pattern.base": "Mobile number or email cannot contain spaces",
     "any.required": "Mobile number or email is required",
   }),
-  password: Joi.string().trim().required().messages({
+  password: Joi.string().pattern(/^\S+$/).required().messages({
     "string.empty": "Password is required",
+    "string.pattern.base": "Password cannot contain spaces",
     "any.required": "Password is required",
   }),
 });
@@ -18,17 +20,24 @@ const signupSchema = Joi.object({
   firstName: Joi.string().trim().pattern(/^\S+$/).required().messages({
     "string.pattern.base": "First name cannot contain spaces",
   }),
-  lastName: Joi.string().trim().pattern(/^\S+$/).required().messages({
-    "string.pattern.base": "Last name cannot contain spaces",
+  lastName: Joi.string().trim().required().messages({
+    "string.empty": "Last name is required",
+    "any.required": "Last name is required",
   }),
   phoneCode: Joi.string().trim().required(),
   phoneNumber: Joi.string().trim().pattern(/^\S+$/).required().messages({
     "string.pattern.base": "Mobile number cannot contain spaces",
   }),
   buyerType: Joi.string().valid("Retail", "Wholesale").required(),
-  email: Joi.string().email().trim().pattern(/^\S+$/).required().messages({
-    "string.pattern.base": "Email cannot contain spaces",
-  }),
+  email: Joi.string()
+    .trim()
+    .pattern(/^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/)
+    .required()
+    .messages({
+      "string.empty": "Email is required",
+      "string.pattern.base": "Invalid email address format",
+      "any.required": "Email is required",
+    }),
   nic: Joi.string().trim().pattern(/^(?:\d{9}[vVxX]|\d{12})$/).required().messages({
     "string.empty": "NIC number is required",
     "string.pattern.base": "Invalid NIC number format",

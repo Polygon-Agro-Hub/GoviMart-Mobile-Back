@@ -16,6 +16,36 @@ exports.validateCartDao = (cartId, userId) => {
 };
 
 /**
+ * Look up the most recent order placed by this user within maxAgeMinutes.
+ * Used for network retry reconciliation when cart has already been cleared.
+ */
+exports.getRecentOrderByUserDao = (userId, maxAgeMinutes = 15) => {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT 
+                o.id AS orderId,
+                po.id AS processOrderId,
+                po.invNo AS invoiceNumber,
+                COALESCE(po.fullTotal, po.total, 0) AS total,
+                o.createdAt
+            FROM orders o
+            LEFT JOIN processorders po ON o.id = po.orderId
+            WHERE o.userId = ? 
+              AND (
+                o.createdAt >= NOW() - INTERVAL ? MINUTE
+                OR TIMESTAMPDIFF(MINUTE, o.createdAt, NOW()) <= ?
+              )
+            ORDER BY o.id DESC, po.id ASC
+            LIMIT 1
+        `;
+        db.collectionofficer.query(sql, [userId, maxAgeMinutes, maxAgeMinutes], (err, results) => {
+            if (err) return reject(err);
+            resolve(results.length > 0 ? results[0] : null);
+        });
+    });
+};
+
+/**
  * Check if any cart items (products or packages) are no longer available.
  */
 exports.checkCartItemsAvailabilityDao = (cartId) => {

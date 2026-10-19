@@ -928,7 +928,7 @@ exports.updatePassword = asyncHandler(async (req, res) => {
   if (currentPassword === newPassword) {
     return res.status(400).json({
       status: false,
-      message: "New password cannot be the same as your current password.",
+      message: "New password cannot be the same as your current password. Please choose a different password.",
     });
   }
 
@@ -959,7 +959,7 @@ exports.updatePassword = asyncHandler(async (req, res) => {
     if (user.password && bcrypt.compareSync(newPassword, user.password)) {
       return res.status(400).json({
         status: false,
-        message: "New password cannot be the same as your current password.",
+        message: "New password cannot be the same as your current password. Please choose a different password.",
       });
     }
 
@@ -1089,6 +1089,14 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
         return res.status(400).json({
           status: false,
           message: "Email address is required.",
+        });
+      }
+      const emailRegex =
+        /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
+      if (!emailRegex.test(email.trim())) {
+        return res.status(400).json({
+          status: false,
+          message: "Invalid email address format.",
         });
       }
       user = await userDao.getUserByEmailDao(email.trim());

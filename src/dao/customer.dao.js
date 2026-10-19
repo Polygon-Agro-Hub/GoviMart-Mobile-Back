@@ -794,6 +794,19 @@ exports.isNicTakenDao = async (userId, nic) => {
   return results.length > 0;
 };
 
+// Check if an email already belongs to another user
+exports.isEmailTakenDao = async (userId, email) => {
+  if (!email) return false;
+  const rawEmail = String(email).trim().toLowerCase();
+  const query = `
+    SELECT id FROM marketplaceusers
+    WHERE LOWER(TRIM(email)) = ? AND id != ?
+    LIMIT 1
+  `;
+  const [results] = await db.collectionofficer.promise().query(query, [rawEmail, userId]);
+  return results.length > 0;
+};
+
 // Update only the user's phone number (after OTP verification)
 exports.updateUserPhoneDao = async (userId, phoneCode, phoneNumber) => {
   const query = `
