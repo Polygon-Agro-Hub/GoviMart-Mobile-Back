@@ -83,7 +83,7 @@ exports.createComplain = asyncHandler(async (req, res) => {
   const userId = req.user.id;
 
   try {
-    // Generate next ref id: [CUS_ID]000, [CUS_ID]001, [CUS_ID]002, etc.
+    // Generate next ref id: [CUS_ID]001, [CUS_ID]002, [CUS_ID]003, etc.
     let cusId = await complainDao.getUserCusIdDao(userId);
     if (!cusId) {
       cusId = `CUS-${userId}`;
@@ -96,12 +96,12 @@ exports.createComplain = asyncHandler(async (req, res) => {
 
     let nextRefId;
     if (!lastRefId) {
-      nextRefId = `${cusId}000`;
+      nextRefId = `${cusId}001`;
     } else {
       const suffix = lastRefId.substring(cusId.length);
       const numericPart = parseInt(suffix, 10);
       if (isNaN(numericPart)) {
-        nextRefId = `${cusId}000`;
+        nextRefId = `${cusId}001`;
       } else {
         nextRefId = `${cusId}${(numericPart + 1).toString().padStart(3, "0")}`;
       }
