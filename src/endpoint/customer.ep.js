@@ -336,6 +336,26 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
       }
     }
 
+    if (req.body.email) {
+      const cleanEmail = String(req.body.email).trim();
+      const emailRegex =
+        /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
+      if (
+        cleanEmail.includes(" ") ||
+        cleanEmail.includes("..") ||
+        cleanEmail.startsWith(".") ||
+        cleanEmail.endsWith(".") ||
+        !emailRegex.test(cleanEmail)
+      ) {
+        return res.status(400).json({ status: false, message: "Invalid email address" });
+      }
+
+      const isEmailTaken = await customerDao.isEmailTakenDao(userId, cleanEmail);
+      if (isEmailTaken) {
+        return res.status(400).json({ status: false, message: "Email already exists" });
+      }
+    }
+
     if (req.body.image !== undefined) {
       const existingUser = await customerDao.getCustomerProfileDao(userId);
       const oldImage = existingUser?.[0]?.image;
@@ -434,7 +454,7 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
     }
 
     const normalizedPhone = String(phoneNumber).replace(/[^0-9]/g, "");
-    if (normalizedPhone.length < 9 || normalizedPhone.length > 10) {
+    if (normalizedPhone.length < 8 || normalizedPhone.length > 10) {
       return res
         .status(400)
         .json({ status: false, message: "Invalid phone number." });
@@ -445,8 +465,28 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
     if (taken) {
       return res.status(400).json({
         status: false,
-        message: "This phone number is already in use by another account.",
+        message: "This phone number is already registered to another account.",
       });
+    }
+
+    if (req.body.email) {
+      const cleanEmail = String(req.body.email).trim();
+      const emailRegex =
+        /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
+      if (
+        cleanEmail.includes(" ") ||
+        cleanEmail.includes("..") ||
+        cleanEmail.startsWith(".") ||
+        cleanEmail.endsWith(".") ||
+        !emailRegex.test(cleanEmail)
+      ) {
+        return res.status(400).json({ status: false, message: "Invalid email address" });
+      }
+
+      const isEmailTaken = await customerDao.isEmailTakenDao(userId, cleanEmail);
+      if (isEmailTaken) {
+        return res.status(400).json({ status: false, message: "Email already exists" });
+      }
     }
 
     const lockoutKeys = userAuthEp.getSignupLockoutKeys(
@@ -603,6 +643,24 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
     // Apply the rest of the edited account details (name, email, company, etc.)
     if (accountDetails && typeof accountDetails === "object") {
       accountDetails.title = accountDetails.title || "Mr";
+      if (accountDetails.email) {
+        const cleanEmail = String(accountDetails.email).trim();
+        const emailRegex =
+          /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
+        if (
+          cleanEmail.includes(" ") ||
+          cleanEmail.includes("..") ||
+          cleanEmail.startsWith(".") ||
+          cleanEmail.endsWith(".") ||
+          !emailRegex.test(cleanEmail)
+        ) {
+          return res.status(400).json({ status: false, message: "Invalid email address" });
+        }
+        const isEmailTaken = await customerDao.isEmailTakenDao(userId, cleanEmail);
+        if (isEmailTaken) {
+          return res.status(400).json({ status: false, message: "Email already exists" });
+        }
+      }
       await customerDao.updateUserDetailsDao(userId, accountDetails);
     }
 

@@ -928,7 +928,7 @@ exports.updatePassword = asyncHandler(async (req, res) => {
   if (currentPassword === newPassword) {
     return res.status(400).json({
       status: false,
-      message: "New password cannot be the same as your current password.",
+      message: "New password cannot be the same as your current password. Please choose a different password.",
     });
   }
 
@@ -959,7 +959,7 @@ exports.updatePassword = asyncHandler(async (req, res) => {
     if (user.password && bcrypt.compareSync(newPassword, user.password)) {
       return res.status(400).json({
         status: false,
-        message: "New password cannot be the same as your current password.",
+        message: "New password cannot be the same as your current password. Please choose a different password.",
       });
     }
 
@@ -1091,6 +1091,14 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
           message: "Email address is required.",
         });
       }
+      const emailRegex =
+        /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
+      if (!emailRegex.test(email.trim())) {
+        return res.status(400).json({
+          status: false,
+          message: "Invalid email address format.",
+        });
+      }
       user = await userDao.getUserByEmailDao(email.trim());
       if (!user) {
         return res.status(404).json({
@@ -1106,10 +1114,11 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
         });
       }
 
-      if (phoneCode !== "+94") {
+      const supportedPhoneCodes = ["+94", "+84", "+855", "+880", "+91", "+31"];
+      if (!supportedPhoneCodes.includes(phoneCode)) {
         return res.status(400).json({
           status: false,
-          message: "SMS OTP is only available for Sri Lankan mobile numbers (+94). Please use the email option.",
+          message: "SMS OTP is only available for supported countries (+94, +84, +855, +880, +91, +31). Please use the email option.",
         });
       }
 
