@@ -87,7 +87,7 @@ async function saveUserPushToken(userId, pushToken, arg3 = "android", arg4) {
 function removeToken(pushToken) {
   const sql = "DELETE FROM notificationpushtoken WHERE pushToken = ?";
   collectionofficer.query(sql, [pushToken], (err) => {
-    if (err) console.error("Error removing expired push token:", err);
+    if (err) console.error("❌ Error removing expired push token:", err);
     else console.log("Removed expired/unregistered push token:", pushToken);
   });
 }

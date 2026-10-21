@@ -22,7 +22,7 @@ const resolveCustomerUserId = async (orderId) => {
       return { userId: rows[0].userId, invNo: rows[0].invNo };
     }
   } catch (err) {
-    console.warn("[Polygon Notification] DB resolveCustomerUserId error:", err.message);
+    console.warn("⚠️ [Polygon Notification] DB resolveCustomerUserId error:", err.message);
   }
   return { userId: null, invNo: null };
 };
@@ -52,7 +52,7 @@ const triggerPolygonNotification = async ({
     }
 
     if (!targetUserId) {
-      console.warn(`[Polygon Notification] Cannot dispatch notification: target userId not found for order ${orderId}`);
+      console.warn(`⚠️ [Polygon Notification] Cannot dispatch notification: target userId not found for order ${orderId}`);
       return false;
     }
 

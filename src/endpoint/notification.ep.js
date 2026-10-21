@@ -145,7 +145,7 @@ exports.triggerNotification = asyncHandler(async (req, res) => {
     resolvedDetails = await notificationDao.resolveOrderCustomerDetailsDao(orderId);
     if (resolvedDetails) {
       if (targetUserId && Number(resolvedDetails.userId) !== Number(targetUserId)) {
-        console.warn(`[Notification Trigger] Provided orderId ${orderId} belongs to user ${resolvedDetails.userId}, but target is user ${targetUserId}. Discarding mismatched orderId.`);
+        console.warn(` ⚠️ [Notification Trigger] Provided orderId ${orderId} belongs to user ${resolvedDetails.userId}, but target is user ${targetUserId}. Discarding mismatched orderId.`);
         resolvedDetails = null;
         effectiveProcessOrderId = null;
       } else {

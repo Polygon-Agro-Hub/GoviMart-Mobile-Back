@@ -71,7 +71,7 @@ const resolveCustomerPhone = async (userId, fallbackPhone = null) => {
         return `${phoneCode}${phoneNumber}`;
       }
     } catch (err) {
-      console.warn("[Order SMS] Error resolving customer phone from marketplaceusers:", err.message);
+      console.warn("⚠️ [Order SMS] Error resolving customer phone from marketplaceusers:", err.message);
     }
   }
   return fallbackPhone || null;
@@ -104,7 +104,7 @@ const resolveOrderDetails = async (orderIdOrProcessOrderId, fallbackUserId = nul
       };
     }
   } catch (err) {
-    console.warn("[Order SMS] Failed to resolve order details:", err.message);
+    console.warn("⚠️ [Order SMS] Failed to resolve order details:", err.message);
   }
   return { invNo: null, userId: fallbackUserId };
 };
@@ -150,7 +150,7 @@ const calculateConfirmationRequestDate = (deliveryDate) => {
 const sendOrderConfirmedSms = async ({ userId, phone, invNo }) => {
   try {
     if (!invNo) {
-      console.warn("[Order SMS] sendOrderConfirmedSms skipped: invNo is required.");
+      console.warn("⚠️ [Order SMS] sendOrderConfirmedSms skipped: invNo is required.");
       return { success: false, error: "Missing invoice number" };
     }
 
@@ -161,14 +161,14 @@ const sendOrderConfirmedSms = async ({ userId, phone, invNo }) => {
 
     const resolvedPhone = await resolveCustomerPhone(userId, phone);
     if (!resolvedPhone) {
-      console.warn(`[Order SMS] Could not resolve phone number for userId: ${userId}`);
+      console.warn(`⚠️ [Order SMS] Could not resolve phone number for userId: ${userId}`);
       return { success: false, error: "Missing phone number" };
     }
 
     const message = `Dear Customer, your order : ${invNo} is confirmed. Thank you for ordering with Polygon!`;
     return await sendSms(resolvedPhone, message);
   } catch (err) {
-    console.error("[Order SMS] Error in sendOrderConfirmedSms:", err.message);
+    console.error("❌ [Order SMS] Error in sendOrderConfirmedSms:", err.message);
     return { success: false, error: err.message };
   }
 };
@@ -195,7 +195,7 @@ const sendOrderPlacedAfterEpsdSms = async ({ userId, phone, deliveryDate, isCard
     const resolvedPhone = await resolveCustomerPhone(userId, phone);
 
     if (!resolvedPhone) {
-      console.warn(`[Order SMS] Could not resolve phone number for userId: ${userId}`);
+      console.warn(`⚠️ [Order SMS] Could not resolve phone number for userId: ${userId}`);
       return { success: false, error: "Missing phone number" };
     }
 
@@ -208,7 +208,7 @@ const sendOrderPlacedAfterEpsdSms = async ({ userId, phone, deliveryDate, isCard
 
     return await sendSms(resolvedPhone, message);
   } catch (err) {
-    console.error("[Order SMS] Error in sendOrderPlacedAfterEpsdSms:", err.message);
+    console.error("❌ [Order SMS] Error in sendOrderPlacedAfterEpsdSms:", err.message);
     return { success: false, error: err.message };
   }
 };
@@ -231,14 +231,14 @@ const sendOrderPlacedPayToConfirmSms = async ({ userId, phone, deliveryDate }) =
     const resolvedPhone = await resolveCustomerPhone(userId, phone);
 
     if (!resolvedPhone) {
-      console.warn(`[Order SMS] Could not resolve phone number for userId: ${userId}`);
+      console.warn(`⚠️ [Order SMS] Could not resolve phone number for userId: ${userId}`);
       return { success: false, error: "Missing phone number" };
     }
 
     const message = `Dear Customer, You’ll receive an order review request via the Polygon Platform by 8:00 AM on ${confirmDateStr}. Please review and accept your order by 6:00 PM or it will be canceled.`;
     return await sendSms(resolvedPhone, message);
   } catch (err) {
-    console.error("[Order SMS] Error in sendOrderPlacedPayToConfirmSms:", err.message);
+    console.error("❌ [Order SMS] Error in sendOrderPlacedPayToConfirmSms:", err.message);
     return { success: false, error: err.message };
   }
 };

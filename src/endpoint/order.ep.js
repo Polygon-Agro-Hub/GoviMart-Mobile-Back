@@ -23,7 +23,7 @@ exports.getRetailOrderHistory = async (req, res) => {
             orderHistory,
         });
     } catch (err) {
-        console.error("Error fetching order history:", err);
+        console.error("❌ Error fetching order history:", err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch order history.",
@@ -47,7 +47,7 @@ exports.getRetailOrderById = async (req, res) => {
             order,
         });
     } catch (err) {
-        console.error("Error fetching order for orderId:", req.params.orderId, err);
+        console.error("❌ Error fetching order for orderId:", req.params.orderId, err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch order.",
@@ -67,7 +67,7 @@ exports.getOrderPackages = async (req, res) => {
             data: packages
         });
     } catch (error) {
-        console.error('Error in getPackagesByOrderId:', error);
+        console.error('❌ Error in getPackagesByOrderId:', error);
         res.status(500).json({
             status: false,
             message: error?.toString() || 'Unknown server error'
@@ -91,7 +91,7 @@ exports.getOrderAdditionalItems = async (req, res) => {
         console.log("getOrderAdditionalItems executed for orderId:", orderId);
         console.log("Additional items:", additionalItems);
     } catch (error) {
-        console.error('Error in getOrderAdditionalItems:', error);
+        console.error('❌ Error in getOrderAdditionalItems:', error);
         res.status(500).json({
             status: false,
             message: error?.toString() || 'Unknown server error'
@@ -234,7 +234,7 @@ exports.checkCouponAvalability = async (req, res) => {
             code: couponData.code,
         });
     } catch (err) {
-        console.error("Error validating coupon:", err);
+        console.error("❌ Error validating coupon:", err);
         res.status(500).json({
             status: false,
             message: err?.message || "Invalid coupon code",
@@ -251,7 +251,7 @@ exports.getAvailableCoupons = async (req, res) => {
             data: coupons,
         });
     } catch (err) {
-        console.error("Error fetching available coupons:", err);
+        console.error("❌ Error fetching available coupons:", err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch available coupons.",
@@ -271,7 +271,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 1. Validate request payload ──────────────────────────────────────────
     const { error, value } = createOrderSchema.validate(req.body, { abortEarly: false });
     if (error) {
-        console.error("[createOrder] Validation error:", error.details.map((d) => d.message));
+        console.error("❌ [createOrder] Validation error:", error.details.map((d) => d.message));
         return res.status(400).json({
             status: false,
             message: "Validation failed: " + error.details.map((d) => d.message).join("; "),
@@ -338,7 +338,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
             resolvedPhone1 = resolvedPhone1 || userProfile.phoneNumber || req.user.phoneNumber || "";
         }
     } catch (e) {
-        console.warn("[createOrder] Profile lookup fallback failed:", e.message);
+        console.warn(" ⚠️ [createOrder] Profile lookup fallback failed:", e.message);
     }
     resolvedTitle = resolvedTitle || "Mr";
     resolvedFullName = resolvedFullName || "Customer";
@@ -364,7 +364,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 });
             }
         } catch (recentErr) {
-            console.warn("[createOrder] Error checking recent order fallback:", recentErr.message);
+            console.warn(" ⚠️ [createOrder] Error checking recent order fallback:", recentErr.message);
         }
 
         return safeRespond(403, {
@@ -459,7 +459,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
     // Verify grandTotal from client against server-calculated grandTotal
     if (!isMatch) {
-        console.warn(`[createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Expected Discounted: ${expectedDiscountedGrandTotal}, Expected Normal-Discount: ${expectedNormalMinusDiscountGrandTotal}`);
+        console.warn(`⚠️ [createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Expected Discounted: ${expectedDiscountedGrandTotal}, Expected Normal-Discount: ${expectedNormalMinusDiscountGrandTotal}`);
         return safeRespond(400, {
             status: false,
             message: `Order total mismatch. Expected Rs. ${expectedDiscountedGrandTotal.toFixed(2)}, but received Rs. ${Number(grandTotal).toFixed(2)}.`,
@@ -775,12 +775,12 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                     // ── Clear cart (best-effort, after commit) ────────────
                     RetailOrderDao.clearCartAfterOrderDao(effectiveCartId).catch((clearErr) => {
-                        console.error("[createOrder] Cart clear failed (non-fatal):", clearErr);
+                        console.error("❌ [createOrder] Cart clear failed (non-fatal):", clearErr);
                     });
 
                     // ── Refresh marketplaceusers.creditLimit (best-effort, after commit) ──
                     RetailOrderDao.recalculateAndPersistCreditLimitDao(userId).catch((limitErr) => {
-                        console.error("[createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
+                        console.error("❌ [createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
                     });
 
                     // ── ShoutOUT SMS Dispatch (best-effort, after commit) ──
@@ -824,7 +824,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                                 });
                             }
                         } catch (smsErr) {
-                            console.error("[createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
+                            console.error("❌ [createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
                         }
                     })();
 
@@ -854,7 +854,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     });
                 }
 
-                console.error("[createOrder] Transaction error:", err);
+                console.error("❌ [createOrder] Transaction error:", err);
                 return safeRespond(500, {
                     status: false,
                     message: "Order creation failed. Please try again.",
@@ -933,7 +933,7 @@ exports.getDeliveredOrdersTotal = async (req, res) => {
         const result = await RetailOrderDao.getDeliveredOrdersTotal(userId);
         return res.status(200).json({ success: true, data: result });
     } catch (error) {
-        console.error("Error in getDeliveredOrdersTotal:", error);
+        console.error("❌ Error in getDeliveredOrdersTotal:", error);
         return res.status(500).json({
             success: false,
             message: "Failed to fetch delivered orders total",

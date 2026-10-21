@@ -763,7 +763,7 @@ exports.confirmPackageReviewDao = ({
         db.collectionofficer.getConnection((connErr, connection) => {
             if (connErr) {
                 console.error(
-                    "[confirmPackageReviewDao] DB Connection Error:",
+                    "❌ [confirmPackageReviewDao] DB Connection Error:",
                     connErr,
                 );
                 return reject(connErr);
@@ -1386,7 +1386,7 @@ exports.confirmPackageReviewDao = ({
                     });
                 } catch (err) {
                     console.error(
-                        "[confirmPackageReviewDao] Execution Error (Rolling back):",
+                        "❌ [confirmPackageReviewDao] Execution Error (Rolling back):",
                         err,
                     );
                     connection.rollback(() => {
@@ -1467,7 +1467,7 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 confirmOrders: targetInfo.confirmOrders,
             });
         } catch (err) {
-            console.error("[getPackingSlotAvailabilityDao] Error:", err);
+            console.error("❌ [getPackingSlotAvailabilityDao] Error:", err);
             resolve({
                 targetLimit: 50,
                 acceptedOrdersCount: 0,
@@ -1637,7 +1637,7 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
                 [pOrderId, notifMsg],
             );
         } catch (notifErr) {
-            console.error("Error inserting ordernotfication on cancel:", notifErr);
+            console.error("❌ Error inserting ordernotfication on cancel:", notifErr);
         }
 
         try {
@@ -1658,7 +1658,7 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
                 );
             }
         } catch (dashErr) {
-            console.error("Error updating dashnotification on cancel:", dashErr);
+            console.error("❌ Error updating dashnotification on cancel:", dashErr);
         }
 
         await commit(connection);
@@ -1993,7 +1993,7 @@ exports.confirmOrderWithLivePricesDao = ({
                         Math.abs(parseFloat(newTotal) - finalFullTotal) > 0.01
                     ) {
                         console.warn(
-                            `[confirmOrderWithLivePrices] app total ${newTotal} != server total ${finalFullTotal}; server value used`,
+                            ` ⚠️ [confirmOrderWithLivePrices] app total ${newTotal} != server total ${finalFullTotal}; server value used`,
                         );
                     }
 
@@ -2263,7 +2263,7 @@ exports.cancelOrderBeforeConfirmDao = async ({
                 [pOrderId, notifMsg],
             );
         } catch (notifErr) {
-            console.error("Error inserting ordernotfication on cancel:", notifErr);
+            console.error("❌ Error inserting ordernotfication on cancel:", notifErr);
         }
 
         try {
@@ -2284,7 +2284,7 @@ exports.cancelOrderBeforeConfirmDao = async ({
                 );
             }
         } catch (dashErr) {
-            console.error("Error updating dashnotification on cancel:", dashErr);
+            console.error("❌ Error updating dashnotification on cancel:", dashErr);
         }
 
         await commit(connection);

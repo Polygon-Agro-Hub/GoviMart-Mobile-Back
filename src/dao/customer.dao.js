@@ -722,7 +722,7 @@ exports.deleteUserAccountDao = async (userId) => {
       try {
         await connection.rollback();
       } catch (rollbackErr) {
-        console.error("Error during rollback in deleteUserAccountDao:", rollbackErr);
+        console.error("❌ Error during rollback in deleteUserAccountDao:", rollbackErr);
       }
     }
     throw err;

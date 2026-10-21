@@ -368,7 +368,7 @@ exports.createProcessOrderWithTransactionDao = (
 
                 return qrCodeUrl;
             } catch (error) {
-                console.error("Error generating or uploading QR code:", error);
+                console.error("❌ Error generating or uploading QR code:", error);
                 return null;
             }
         };
@@ -1045,7 +1045,7 @@ exports.getOrderPackageDetailsDao = async (orderId) => {
                                 (rawProduct === 0 && rawPacking === 0 && rawService === 0)
                             ) {
                                 console.warn(
-                                    `[getOrderPackageDetailsDao] Suspicious fee data for packageId=${p.packageId} ` +
+                                    ` ⚠️ [getOrderPackageDetailsDao] Suspicious fee data for packageId=${p.packageId} ` +
                                     `(orderPackageId=${p.orderPackageId}): productPrice=${p.rawProductPrice}, ` +
                                     `packingFee=${p.rawPackingFee}, serviceFee=${p.rawServiceFee}`,
                                 );
@@ -1418,12 +1418,12 @@ const getPickupInfoDao = (isPickup, centerId) => {
         const sql = `SELECT * FROM distributedcenter WHERE id = ? LIMIT 1`;
         db.collectionofficer.query(sql, [centerId], (err, rows) => {
             if (err) {
-                console.error("[getPickupInfoDao] query error:", err.message);
+                console.error("❌ [getPickupInfoDao] query error:", err.message);
                 return resolve(null);
             }
             if (!rows || rows.length === 0) {
                 console.warn(
-                    `[getPickupInfoDao] No distributedcenter row for id=${centerId}`,
+                    ` ⚠️ [getPickupInfoDao] No distributedcenter row for id=${centerId}`,
                 );
                 return resolve(null);
             }
@@ -1851,7 +1851,7 @@ exports.recalculateAndPersistCreditLimitDao = async (userId) => {
             creditLimitBonusTier: finalTierValue,
         };
     } catch (err) {
-        console.error("Error in recalculateAndPersistCreditLimitDao:", err);
+        console.error("❌ Error in recalculateAndPersistCreditLimitDao:", err);
         throw err;
     } finally {
         if (connection) connection.release();
@@ -1869,7 +1869,7 @@ exports.getDeliveredOrdersTotal = async (userId) => {
             creditLimit,
         };
     } catch (err) {
-        console.error("Error in getDeliveredOrdersTotal:", err);
+        console.error("❌ Error in getDeliveredOrdersTotal:", err);
         throw err;
     }
 };
@@ -1894,7 +1894,7 @@ exports.markOrderPaidDao = async (identifier, transactionId, amount = null) => {
         );
         return result.affectedRows > 0;
     } catch (err) {
-        console.error("Error in markOrderPaidDao:", err);
+        console.error("❌ Error in markOrderPaidDao:", err);
         throw err;
     } finally {
         if (connection) connection.release();

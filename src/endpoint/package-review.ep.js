@@ -84,7 +84,7 @@ exports.replacePackageItem = asyncHandler(async (req, res) => {
             data: result,
         });
     } catch (err) {
-        console.error("Replace package item error:", err);
+        console.error("❌ Replace package item error:", err);
         return res.status(400).json({
             status: false,
             message: err.message || "Failed to replace package item",
@@ -122,7 +122,7 @@ exports.resetPackageItem = asyncHandler(async (req, res) => {
             message: result.message,
         });
     } catch (err) {
-        console.error("Reset package item error:", err);
+        console.error("❌ Reset package item error:", err);
         return res.status(400).json({
             status: false,
             message: err.message || "Failed to reset package item",
@@ -186,7 +186,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
                 });
             }
         } catch (valErr) {
-            console.warn("[confirmPackageReview Endpoint] Slot validation check error:", valErr.message);
+            console.warn("⚠️ [confirmPackageReview Endpoint] Slot validation check error:", valErr.message);
         }
 
         const result = await packageReviewDao.confirmPackageReviewDao({
@@ -220,7 +220,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
                 const invNo = resolved.invNo;
 
                 if (!invNo) {
-                    console.warn("[confirmPackageReview] No invoice number, SMS skipped");
+                    console.warn("⚠️ [confirmPackageReview] No invoice number, SMS skipped");
                     return;
                 }
 
@@ -230,7 +230,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
                 });
                 console.log(`[confirmPackageReview] Confirmed SMS for ${invNo}:`, smsRes);
             } catch (smsErr) {
-                console.warn("[confirmPackageReview] Confirmation SMS error:", smsErr.message);
+                console.warn("⚠️ [confirmPackageReview] Confirmation SMS error:", smsErr.message);
             }
         })();
 
@@ -239,7 +239,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
             message: result.message,
         });
     } catch (err) {
-        console.error("[confirmPackageReview Endpoint] Error finalize package review:", err);
+        console.error("❌ [confirmPackageReview Endpoint] Error finalize package review:", err);
         return res.status(500).json({
             status: false,
             message: err.message || "Failed to finalize package review",
@@ -302,7 +302,7 @@ exports.cancelPackageOrder = asyncHandler(async (req, res) => {
             data: result,
         });
     } catch (error) {
-        console.error("[cancelPackageOrder] Error:", error);
+        console.error("❌ [cancelPackageOrder] Error:", error);
         return res.status(400).json({
             status: false,
             message: error.message || "Failed to cancel order",
@@ -354,14 +354,14 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
                 }
 
                 if (!invNo) {
-                    console.warn("[confirmOrderWithLivePrices] No invoice number, SMS skipped");
+                    console.warn("⚠️ [confirmOrderWithLivePrices] No invoice number, SMS skipped");
                     return;
                 }
 
                 const smsRes = await orderSmsService.sendOrderConfirmedSms({ userId, invNo });
                 console.log(`[confirmOrderWithLivePrices] Confirmed SMS for ${invNo}:`, smsRes);
             } catch (smsErr) {
-                console.warn("[confirmOrderWithLivePrices] Confirmation SMS error:", smsErr.message);
+                console.warn("⚠️ [confirmOrderWithLivePrices] Confirmation SMS error:", smsErr.message);
             }
         })();
 
@@ -371,7 +371,7 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
             data: result,
         });
     } catch (error) {
-        console.error("[confirmOrderWithLivePrices] Error:", error);
+        console.error("❌ [confirmOrderWithLivePrices] Error:", error);
         return res.status(400).json({
             status: false,
             message: error.message || "Failed to confirm order with live prices",
@@ -413,7 +413,7 @@ exports.cancelOrderBeforeConfirm = asyncHandler(async (req, res) => {
             data: result,
         });
     } catch (error) {
-        console.error("[cancelOrderBeforeConfirm] Error:", error);
+        console.error("❌ [cancelOrderBeforeConfirm] Error:", error);
         return res.status(400).json({
             status: false,
             message: error.message || "Failed to cancel order",

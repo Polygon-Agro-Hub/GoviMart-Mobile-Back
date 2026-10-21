@@ -51,7 +51,7 @@ class SavedCardService {
    */
   async saveCard(userId, cardData, rawEvent = null) {
     if (!userId) {
-      console.warn("[SavedCardService] Cannot save card without userId");
+      console.warn("⚠️ [SavedCardService] Cannot save card without userId");
       return null;
     }
 
@@ -119,7 +119,7 @@ class SavedCardService {
           }
         }
       } catch (err) {
-        console.warn(`[SavedCardService] Error during Payments.lk card deletion:`, err.message);
+        console.warn(`⚠️ [SavedCardService] Error during Payments.lk card deletion:`, err.message);
       }
     }
 

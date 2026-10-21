@@ -38,13 +38,13 @@ const sendSms = async (destinationPhone, message) => {
   try {
     const formattedPhone = formatPhoneNumber(destinationPhone);
     if (!formattedPhone) {
-      console.warn("[SMS Service] Cannot send SMS: destination phone is invalid or empty.", destinationPhone);
+      console.warn("⚠️ [SMS Service] Cannot send SMS: destination phone is invalid or empty.", destinationPhone);
       return { success: false, error: "Invalid phone number" };
     }
 
     const apiKey = process.env.SHOUTOUT_API_KEY;
     if (!apiKey) {
-      console.warn("[SMS Service] SHOUTOUT_API_KEY is missing from environment. Skipping SMS.");
+      console.warn("⚠️ [SMS Service] SHOUTOUT_API_KEY is missing from environment. Skipping SMS.");
       return { success: false, error: "Missing SHOUTOUT_API_KEY" };
     }
 
@@ -71,7 +71,7 @@ const sendSms = async (destinationPhone, message) => {
     const data = await response.json();
     if (!response.ok || (!data.referenceId && !data.reference_id)) {
       const errMsg = data.message || `HTTP status ${response.status}`;
-      console.error(`[SMS Service] Failed to send SMS via ShoutOUT: ${errMsg}`);
+      console.error(`❌ [SMS Service] Failed to send SMS via ShoutOUT: ${errMsg}`);
       return { success: false, error: errMsg };
     }
 
@@ -79,7 +79,7 @@ const sendSms = async (destinationPhone, message) => {
     console.log(`[SMS Service] SMS successfully sent to ${formattedPhone}. Ref: ${referenceId}`);
     return { success: true, referenceId };
   } catch (error) {
-    console.error("[SMS Service] Exception sending SMS via ShoutOUT:", error.message);
+    console.error("❌ [SMS Service] Exception sending SMS via ShoutOUT:", error.message);
     return { success: false, error: error.message };
   }
 };

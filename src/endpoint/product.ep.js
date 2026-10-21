@@ -34,7 +34,7 @@ exports.getAllProduct = async (req, res) => {
       product: productData,
     });
   } catch (err) {
-    console.error("Error during get product:", err);
+    console.error("❌ Error during get product:", err);
     res.status(500).json({ error: "An error occurred during retrieval." });
   }
 };
@@ -76,7 +76,7 @@ exports.getProductsByCategory = async (req, res) => {
       products: products,
     });
   } catch (err) {
-    console.error("Error fetching products by category:", err);
+    console.error("❌ Error fetching products by category:", err);
     res.status(500).json({
       status: false,
       error: "An error occurred while fetching products.",
@@ -120,7 +120,7 @@ exports.getPackageDetails = async (req, res) => {
       endDate: packageInfo?.endDate || null,
     });
   } catch (err) {
-    console.error("Error during get product:", err);
+    console.error("❌ Error during get product:", err);
     res.status(500).json({ error: "An error occurred during signup." });
   }
 };
@@ -134,7 +134,7 @@ exports.getAllSlides = async (req, res) => {
       slides,
     });
   } catch (err) {
-    console.error("Error fetching slides:", err);
+    console.error("❌ Error fetching slides:", err);
     res.status(500).json({ status: false, error: "Failed to fetch slides" });
   }
 };
@@ -163,7 +163,7 @@ exports.checkAvailability = async (req, res) => {
       packages: result.packages,
     });
   } catch (err) {
-    console.error("Error checking availability:", err);
+    console.error("❌ Error checking availability:", err);
     res.status(500).json({ status: false, error: "Failed to check availability" });
   }
 };
@@ -191,7 +191,7 @@ exports.getProductsByProductType = async (req, res) => {
       products: products || [],
     });
   } catch (err) {
-    console.error("Error fetching products by product type:", err);
+    console.error("❌ Error fetching products by product type:", err);
     return res.status(500).json({
       status: false,
       error: "An error occurred while fetching products by product type.",
@@ -232,7 +232,7 @@ exports.notifyPackageUpdate = async (req, res) => {
       data: payload,
     });
   } catch (error) {
-    console.error("Error broadcasting package update:", error);
+    console.error("❌ Error broadcasting package update:", error);
     return res.status(500).json({
       status: false,
       message: "Failed to broadcast package update",
