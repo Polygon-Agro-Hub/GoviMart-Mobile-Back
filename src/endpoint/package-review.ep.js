@@ -158,12 +158,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
         packages = [],
     } = req.body;
 
-    console.log(
-        "[confirmPackageReview Endpoint] Received request by userId:",
-        userId,
-        "body:",
-        JSON.stringify(req.body, null, 2),
-    );
+
 
     if (!orderId && !processOrderId) {
         return res.status(400).json({
@@ -207,7 +202,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
             packages,
         });
 
-        console.log("[confirmPackageReview Endpoint] Success response:", result);
+
 
         // "Order confirmed" SMS after the review is committed. Best-effort:
         // runs in the background and can never fail the review response.

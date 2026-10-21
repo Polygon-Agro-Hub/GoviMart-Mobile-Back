@@ -43,8 +43,6 @@ exports.getProductsByCategory = async (req, res) => {
   const { category, search, buyerType, userType } = req.query;
   const effectiveBuyerType = buyerType || userType || "Retail";
 
-  console.log("category", category, "search", search, "buyerType", effectiveBuyerType);
-
   // Only require category if no search parameter is provided
   if (!category && (!search || search.trim() === "")) {
     return res.status(400).json({
@@ -91,12 +89,6 @@ exports.getPackageDetails = async (req, res) => {
   try {
     const { packageId } =
       await ProductValidate.packageDetailsSchema.validateAsync(req.params);
-
-    console.log("pkg Id", packageId);
-
-    // const {packageId} = req.params
-    // const packageIdNum = parseInt(packageId, 10);
-    // console.log(packageIdNum);
 
     const [packageItemData, packageInfo] = await Promise.all([
       ProductDao.getAllPackageItemsDao(packageId),
@@ -155,7 +147,10 @@ exports.checkAvailability = async (req, res) => {
       });
     }
 
-    const result = await ProductDao.checkAvailabilityDao(productIds, packageIds);
+    const result = await ProductDao.checkAvailabilityDao(
+      productIds,
+      packageIds,
+    );
 
     return res.status(200).json({
       status: true,
@@ -164,7 +159,9 @@ exports.checkAvailability = async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Error checking availability:", err);
-    res.status(500).json({ status: false, error: "Failed to check availability" });
+    res
+      .status(500)
+      .json({ status: false, error: "Failed to check availability" });
   }
 };
 
@@ -182,7 +179,7 @@ exports.getProductsByProductType = async (req, res) => {
   try {
     const products = await ProductDao.getProductsByProductTypeDao(
       productTypeId,
-      buyerType
+      buyerType,
     );
 
     return res.status(200).json({
@@ -208,7 +205,6 @@ exports.notifyPackageUpdate = async (req, res) => {
   try {
     const payload = req.body || {};
     const { action, packageId, extra } = payload;
-    console.log(`📦 [ProductService] Received package notify-update: action=${action}, packageId=${packageId}`);
 
     // Refresh or clear in-memory package cache
     try {
@@ -240,4 +236,3 @@ exports.notifyPackageUpdate = async (req, res) => {
     });
   }
 };
-

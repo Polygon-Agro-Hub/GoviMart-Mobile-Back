@@ -58,9 +58,7 @@ const applyCreditChange = async (q, userId, change) => {
             "SELECT creditBalance FROM marketplaceusers WHERE id = ? LIMIT 1",
             [userId],
         );
-        console.log(
-            `[creditBalance] user ${userId}: ${applied > 0 ? "+" : ""}${applied} -> new balance ${balRows[0]?.creditBalance}`,
-        );
+
     }
     return shortfall;
 };
@@ -2197,11 +2195,7 @@ exports.cancelOrderBeforeConfirmDao = async ({
         const rawCreditPaid = parseFloat(order.creditPaid) || 0;
         const refundCreditAmount = rawCreditPaid;
 
-        console.log(
-            `[cancelOrderBeforeConfirm] order ${pOrderId} user ${userId} | method="${order.paymentMethod}" ` +
-            `isPaid=${order.isPaid} isConfirmed=${order.isConfirmed} amount=${rawAmount} ` +
-            `moneyPaid=${order.moneyPaid} creditPaid=${rawCreditPaid} -> refundCreditAmount=${refundCreditAmount}`,
-        );
+
 
         // 3. Mark as Cancelled AND reset the payment columns
         const cancelResult = await run(
@@ -2245,10 +2239,7 @@ exports.cancelOrderBeforeConfirmDao = async ({
             if (creditRows && creditRows.length > 0) {
                 newCreditBalance = parseFloat(creditRows[0].creditBalance || 0);
             }
-            console.log(
-                `[cancelOrderBeforeConfirm] order ${pOrderId}: creditPaid ${rawCreditPaid} -> 0, ` +
-                `+${refundCreditAmount} to user ${userId} creditBalance (now ${newCreditBalance})`,
-            );
+
         }
 
         // 5. Notifications (failures are logged but don't block the cancel)

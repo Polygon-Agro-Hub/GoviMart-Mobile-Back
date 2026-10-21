@@ -37,7 +37,7 @@ exports.getRetailOrderById = async (req, res) => {
         const processOrderId = req.query?.processOrderId;
         const { userId } = req.user;
         const targetId = processOrderId || orderId;
-        console.log("Received orderId:", orderId, "processOrderId:", processOrderId, "for userId:", userId); // Debug log
+
 
         const order = await RetailOrderDao.getRetailOrderByIdDao(targetId, userId, processOrderId);
 
@@ -88,8 +88,7 @@ exports.getOrderAdditionalItems = async (req, res) => {
             data: additionalItems
         });
 
-        console.log("getOrderAdditionalItems executed for orderId:", orderId);
-        console.log("Additional items:", additionalItems);
+
     } catch (error) {
         console.error('❌ Error in getOrderAdditionalItems:', error);
         res.status(500).json({
@@ -104,7 +103,7 @@ exports.checkCouponAvalability = async (req, res) => {
         const { userId } = req.user;
         const { coupon, deliveryMethod } = await couponValidationSchema.validateAsync(req.body);
 
-        console.log('coupon detailsss', req.body);
+
 
         const currentDate = new Date();
         let discount = 0;
@@ -118,7 +117,7 @@ exports.checkCouponAvalability = async (req, res) => {
         };
 
         const couponData = await RetailOrderDao.getCouponDetailsDao(coupon);
-        console.log("Coupon data:", couponData);
+
 
         if (!couponData || couponData === null) {
             return res.status(404).json({
@@ -150,7 +149,7 @@ exports.checkCouponAvalability = async (req, res) => {
         const startDate = couponData.startDate ? new Date(couponData.startDate) : null;
         const endDate = couponData.endDate ? new Date(couponData.endDate) : null;
 
-        console.log(currentDate, startDate);
+
 
         if (startDate && !isNaN(startDate.getTime()) && currentDate < startDate) {
             return res.status(400).json({
@@ -351,7 +350,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
         try {
             const recentOrder = await RetailOrderDao.getRecentOrderByUserDao(userId, 15);
             if (recentOrder) {
-                console.log("[createOrder] Cart was already converted to an order recently. Returning existing order:", recentOrder.orderId);
+
                 return safeRespond(200, {
                     status: true,
                     message: "Order was already placed successfully",
@@ -759,7 +758,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         userId,
                         requestedCredit
                     );
-                    console.log(`[createOrder] Deducted Rs. ${requestedCredit} credit from marketplaceusers for userId: ${userId}`);
+
                 }
 
                 // ── 5f. Commit ────────────────────────────────────────────────

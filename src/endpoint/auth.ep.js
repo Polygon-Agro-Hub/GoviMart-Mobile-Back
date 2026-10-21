@@ -1011,7 +1011,7 @@ exports.logout = asyncHandler(async (req, res) => {
       console.error("❌ Error decoding token on logout:", e);
     }
     blacklistedTokens.set(token, expiresAt);
-    console.log(`🔒 Token successfully blacklisted until: ${new Date(expiresAt).toISOString()}`);
+
   }
 
   res.clearCookie("authToken", {

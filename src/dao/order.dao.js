@@ -38,10 +38,14 @@ exports.getRecentOrderByUserDao = (userId, maxAgeMinutes = 15) => {
             ORDER BY o.id DESC, po.id ASC
             LIMIT 1
         `;
-        db.collectionofficer.query(sql, [userId, maxAgeMinutes, maxAgeMinutes], (err, results) => {
-            if (err) return reject(err);
-            resolve(results.length > 0 ? results[0] : null);
-        });
+        db.collectionofficer.query(
+            sql,
+            [userId, maxAgeMinutes, maxAgeMinutes],
+            (err, results) => {
+                if (err) return reject(err);
+                resolve(results.length > 0 ? results[0] : null);
+            },
+        );
     });
 };
 
@@ -955,11 +959,7 @@ exports.getRetailOrderByIdDao = async (
                                             ? `+${order.userPhoneCode || ""} ${order.userPhoneNumber}`
                                             : "N/A", // Use retailorder phone, fallback to marketplaceusers
                                 };
-                                // Debug log to check deliveryInfo
-                                console.log(
-                                    "deliveryInfo at 03:40 PM +0530, May 27, 2025:",
-                                    order.deliveryInfo,
-                                );
+
                                 // Remove the old deliveryAddress field to avoid redundancy
                                 delete order.deliveryAddress;
                                 resolveWithHolds(order);
@@ -1428,7 +1428,7 @@ const getPickupInfoDao = (isPickup, centerId) => {
                 return resolve(null);
             }
             const r = rows[0];
-            console.log("[getPickupInfoDao] row columns:", Object.keys(r));
+
             resolve({
                 centerId: String(r.id),
                 centerName: r.centerName || r.name || null,
@@ -1676,7 +1676,6 @@ exports.getInvoiceByOrderIdDao = (
                             isPickup,
                             invoice.centerId,
                         );
-                        console.log("[getPickupInfoDao] result:", pickupInfo);
 
                         const processedFamilyPackItems = [];
                         if (Array.isArray(familyPackItems)) {
@@ -1890,7 +1889,14 @@ exports.markOrderPaidDao = async (identifier, transactionId, amount = null) => {
                  moneyPaid = CASE WHEN moneyPaid > 0 THEN moneyPaid ELSE COALESCE(?, fullTotal, amount) END,
                  amount = CASE WHEN amount > 0 THEN amount ELSE COALESCE(?, fullTotal, amount) END
              WHERE invNo = ? OR orderId = ? OR id = ?`,
-            [transactionId || null, amount, amount, identifier, identifier, identifier],
+            [
+                transactionId || null,
+                amount,
+                amount,
+                identifier,
+                identifier,
+                identifier,
+            ],
         );
         return result.affectedRows > 0;
     } catch (err) {
