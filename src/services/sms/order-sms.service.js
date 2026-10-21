@@ -215,7 +215,7 @@ const sendOrderPlacedAfterEpsdSms = async ({ userId, phone, deliveryDate, isCard
 
 /**
  * SMS for: isFinalizeImdt = 0 AND isPackage = 1 (no E.P.S.D. check):
- * "Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on [Processing Date + 1]. Please pay by 6:00 PM to confirm your order, or it will be canceled."
+ * "Dear Customer, You’ll receive an order review request via the Polygon Platform by 8:00 AM on [Processing Date + 1]. Please review and accept your order by 6:00 PM or it will be canceled."
  *
  * Date shown = delivery date - 2 (18 -> 16)
  *
@@ -235,7 +235,7 @@ const sendOrderPlacedPayToConfirmSms = async ({ userId, phone, deliveryDate }) =
       return { success: false, error: "Missing phone number" };
     }
 
-    const message = `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${confirmDateStr}. Please pay by 6:00 PM to confirm your order, or it will be Cancelled.`;
+    const message = `Dear Customer, You’ll receive an order review request via the Polygon Platform by 8:00 AM on ${confirmDateStr}. Please review and accept your order by 6:00 PM or it will be canceled.`;
     return await sendSms(resolvedPhone, message);
   } catch (err) {
     console.error("[Order SMS] Error in sendOrderPlacedPayToConfirmSms:", err.message);
