@@ -735,10 +735,17 @@ exports.resetPackageItemDao = ({
  *  2. Delete removed ala carte rows
  *  2b. UPDATE edited EXISTING ala carte rows by id
  *  3. Insert / merge newly added ala carte items
+ *  3c. Refresh all ala carte rows with live prices
  *  4. Lock packages
- *  5. Schedule date
+ *  5. Schedule date (shifted by the number of "Package Finalization Review" reminders)
+ *       1 notification row  -> no change
+ *       2 notification rows -> sheduleDate + 1 day
+ *       3 notification rows -> sheduleDate + 2 days
  *  6. Totals on processorders (fullTotal, total, discount, + amount/moneyPaid for card)
  *  7. Credit balance (card orders): creditBalance += oldFullTotal - newFullTotal (capped at 0)
+ *
+ * Relies on helpers defined elsewhere in this DAO file: db, round2,
+ * settleCredit, applyCreditChange.
  */
 exports.confirmPackageReviewDao = ({
     orderId,
@@ -1247,11 +1254,34 @@ exports.confirmPackageReviewDao = ({
                     );
 
                     // 5. Schedule date
+                    // Count the "Package Finalization Review" reminders for this order:
+                    //   1 row  -> keep date
+                    //   2 rows -> +1 day  (2nd notification: Delivery Date + 1 Day)
+                    //   3 rows -> +2 days (3rd notification: Delivery Date + 2 Days)
+                    // NOTE: ordernotfication.orderId is matched with the process order id,
+                    // the same as getPackingSlotAvailabilityDao. If your rows store
+                    // orders.id instead, pass realOrderId here.
+                    const reminderRows = await q(
+                        `SELECT COUNT(*) AS cnt
+                         FROM ordernotfication
+                         WHERE orderId = ? AND Title = 'Package Finalization Review'`,
+                        [realProcessOrderId],
+                    );
+                    const reminderCount = parseInt(reminderRows[0]?.cnt, 10) || 0;
+                    const extraDays = Math.min(Math.max(reminderCount - 1, 0), 2);
+
                     if (newScheduleDate) {
-                        await q("UPDATE processorders SET sheduleDate = ? WHERE id = ?", [
-                            new Date(newScheduleDate),
-                            realProcessOrderId,
-                        ]);
+                        // App sent an explicit date: use it, then add the reminder shift
+                        await q(
+                            "UPDATE processorders SET sheduleDate = DATE_ADD(?, INTERVAL ? DAY) WHERE id = ?",
+                            [new Date(newScheduleDate), extraDays, realProcessOrderId],
+                        );
+                    } else if (extraDays > 0) {
+                        // No explicit date: shift the date currently stored in the DB
+                        await q(
+                            "UPDATE processorders SET sheduleDate = DATE_ADD(sheduleDate, INTERVAL ? DAY) WHERE id = ?",
+                            [extraDays, realProcessOrderId],
+                        );
                     }
 
                     // 6. Totals (processorders only)
