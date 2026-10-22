@@ -114,7 +114,7 @@ exports.savePushToken = asyncHandler(async (req, res) => {
 
 /**
  * POST /polygon/api/notification/trigger
- * External Webhook to trigger real-time notifications to GoviMart Customers
+ * External Webhook to trigger real-time notifications to Polygon Customers
  * from Admin Panel, Govi Transport, PayHere, or internal background services.
  *
  * Delivers via WebSocket (0 polling) and Firebase/Expo Push.
@@ -145,7 +145,7 @@ exports.triggerNotification = asyncHandler(async (req, res) => {
     resolvedDetails = await notificationDao.resolveOrderCustomerDetailsDao(orderId);
     if (resolvedDetails) {
       if (targetUserId && Number(resolvedDetails.userId) !== Number(targetUserId)) {
-        console.warn(`[Notification Trigger] Provided orderId ${orderId} belongs to user ${resolvedDetails.userId}, but target is user ${targetUserId}. Discarding mismatched orderId.`);
+        console.warn(` ⚠️ [Notification Trigger] Provided orderId ${orderId} belongs to user ${resolvedDetails.userId}, but target is user ${targetUserId}. Discarding mismatched orderId.`);
         resolvedDetails = null;
         effectiveProcessOrderId = null;
       } else {

@@ -1,6 +1,6 @@
-# GoviMart Mobile API — Backend Service
+# Polygon Mobile API — Backend Service
 
-Node.js / Express 5 backend API service for **GoviMart / Polygon**, handling marketplace user authentication, customer management, produce products & packages, order histories, complaints, and Cloudflare R2 media storage.
+Node.js / Express 5 backend API service for **Polygon**, handling marketplace user authentication, customer management, produce products & packages, order histories, complaints, and Cloudflare R2 media storage.
 
 ---
 
@@ -23,7 +23,7 @@ Node.js / Express 5 backend API service for **GoviMart / Polygon**, handling mar
 ### 1. Prerequisites
 
 - Node.js (v18+)
-- MySQL Server (with required GoviMart schemas)
+- MySQL Server (with required Polygon schemas)
 
 ### 2. Environment Setup
 
@@ -57,7 +57,7 @@ Health Check: `GET /polygon/health`
 ## 📂 Project Structure
 
 ```
-GoviMart-Mobile-API/
+Polygon-Mobile-API/
 ├── server.js                   # Main Express application entry & route mounts
 ├── api/
 │   └── index.js                # Serverless entry point for Vercel deployment

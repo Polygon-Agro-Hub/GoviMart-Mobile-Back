@@ -56,7 +56,7 @@ exports.getComplainCategories = asyncHandler(async (req, res) => {
       data: categories,
     });
   } catch (err) {
-    console.error("Error in getComplainCategories:", err.message);
+    console.error("❌ Error in getComplainCategories:", err.message);
     return res.status(500).json({
       status: false,
       message: "Failed to fetch complain categories",
@@ -83,7 +83,7 @@ exports.createComplain = asyncHandler(async (req, res) => {
   const userId = req.user.id;
 
   try {
-    // Generate next ref id: [CUS_ID]000, [CUS_ID]001, [CUS_ID]002, etc.
+    // Generate next ref id: [CUS_ID]001, [CUS_ID]002, [CUS_ID]003, etc.
     let cusId = await complainDao.getUserCusIdDao(userId);
     if (!cusId) {
       cusId = `CUS-${userId}`;
@@ -96,12 +96,12 @@ exports.createComplain = asyncHandler(async (req, res) => {
 
     let nextRefId;
     if (!lastRefId) {
-      nextRefId = `${cusId}000`;
+      nextRefId = `${cusId}001`;
     } else {
       const suffix = lastRefId.substring(cusId.length);
       const numericPart = parseInt(suffix, 10);
       if (isNaN(numericPart)) {
-        nextRefId = `${cusId}000`;
+        nextRefId = `${cusId}001`;
       } else {
         nextRefId = `${cusId}${(numericPart + 1).toString().padStart(3, "0")}`;
       }
@@ -134,7 +134,7 @@ exports.createComplain = asyncHandler(async (req, res) => {
         } catch (uploadErr) {
           failedImages++;
           console.error(
-            `Failed to process/upload complaint image (${file.originalname}):`,
+            `❌ Failed to process/upload complaint image (${file.originalname}):`,
             uploadErr.message,
           );
           // continue with remaining images even if one fails
@@ -153,7 +153,7 @@ exports.createComplain = asyncHandler(async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Error creating complain:", err.message);
+    console.error("❌ Error creating complain:", err.message);
     return res.status(500).json({
       status: false,
       message: "Failed to submit complaint",
@@ -173,7 +173,7 @@ exports.getUserComplains = asyncHandler(async (req, res) => {
       data: complains,
     });
   } catch (err) {
-    console.error("Error in getUserComplains:", err.message);
+    console.error("❌ Error in getUserComplains:", err.message);
     return res.status(500).json({
       status: false,
       message: "Failed to fetch complaints",
@@ -217,7 +217,7 @@ exports.getComplainDetails = asyncHandler(async (req, res) => {
       data: complain,
     });
   } catch (err) {
-    console.error("Error in getComplainDetails:", err.message);
+    console.error("❌ Error in getComplainDetails:", err.message);
     return res.status(500).json({
       status: false,
       message: "Failed to fetch complaint details",

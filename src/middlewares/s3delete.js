@@ -28,7 +28,7 @@ const deleteFromR2 = async (imageUrl) => {
     const command = new DeleteObjectCommand(deleteParams);
     await r2Client.send(command);
   } catch (error) {
-    console.error("Error deleting file from R2:", error);
+    console.error("❌ Error deleting file from R2:", error);
     throw new Error("Failed to delete file from R2");
   }
 };

@@ -34,7 +34,7 @@ exports.getAllProduct = async (req, res) => {
       product: productData,
     });
   } catch (err) {
-    console.error("Error during get product:", err);
+    console.error("❌ Error during get product:", err);
     res.status(500).json({ error: "An error occurred during retrieval." });
   }
 };
@@ -42,8 +42,6 @@ exports.getAllProduct = async (req, res) => {
 exports.getProductsByCategory = async (req, res) => {
   const { category, search, buyerType, userType } = req.query;
   const effectiveBuyerType = buyerType || userType || "Retail";
-
-  console.log("category", category, "search", search, "buyerType", effectiveBuyerType);
 
   // Only require category if no search parameter is provided
   if (!category && (!search || search.trim() === "")) {
@@ -76,7 +74,7 @@ exports.getProductsByCategory = async (req, res) => {
       products: products,
     });
   } catch (err) {
-    console.error("Error fetching products by category:", err);
+    console.error("❌ Error fetching products by category:", err);
     res.status(500).json({
       status: false,
       error: "An error occurred while fetching products.",
@@ -91,12 +89,6 @@ exports.getPackageDetails = async (req, res) => {
   try {
     const { packageId } =
       await ProductValidate.packageDetailsSchema.validateAsync(req.params);
-
-    console.log("pkg Id", packageId);
-
-    // const {packageId} = req.params
-    // const packageIdNum = parseInt(packageId, 10);
-    // console.log(packageIdNum);
 
     const [packageItemData, packageInfo] = await Promise.all([
       ProductDao.getAllPackageItemsDao(packageId),
@@ -120,7 +112,7 @@ exports.getPackageDetails = async (req, res) => {
       endDate: packageInfo?.endDate || null,
     });
   } catch (err) {
-    console.error("Error during get product:", err);
+    console.error("❌ Error during get product:", err);
     res.status(500).json({ error: "An error occurred during signup." });
   }
 };
@@ -134,7 +126,7 @@ exports.getAllSlides = async (req, res) => {
       slides,
     });
   } catch (err) {
-    console.error("Error fetching slides:", err);
+    console.error("❌ Error fetching slides:", err);
     res.status(500).json({ status: false, error: "Failed to fetch slides" });
   }
 };
@@ -155,7 +147,10 @@ exports.checkAvailability = async (req, res) => {
       });
     }
 
-    const result = await ProductDao.checkAvailabilityDao(productIds, packageIds);
+    const result = await ProductDao.checkAvailabilityDao(
+      productIds,
+      packageIds,
+    );
 
     return res.status(200).json({
       status: true,
@@ -163,8 +158,10 @@ exports.checkAvailability = async (req, res) => {
       packages: result.packages,
     });
   } catch (err) {
-    console.error("Error checking availability:", err);
-    res.status(500).json({ status: false, error: "Failed to check availability" });
+    console.error("❌ Error checking availability:", err);
+    res
+      .status(500)
+      .json({ status: false, error: "Failed to check availability" });
   }
 };
 
@@ -182,7 +179,7 @@ exports.getProductsByProductType = async (req, res) => {
   try {
     const products = await ProductDao.getProductsByProductTypeDao(
       productTypeId,
-      buyerType
+      buyerType,
     );
 
     return res.status(200).json({
@@ -191,7 +188,7 @@ exports.getProductsByProductType = async (req, res) => {
       products: products || [],
     });
   } catch (err) {
-    console.error("Error fetching products by product type:", err);
+    console.error("❌ Error fetching products by product type:", err);
     return res.status(500).json({
       status: false,
       error: "An error occurred while fetching products by product type.",
@@ -202,13 +199,12 @@ exports.getProductsByProductType = async (req, res) => {
 /**
  * POST /polygon/api/product/notify-update
  * Webhook called by Admin Panel when packages or products are created, updated, or status-changed.
- * Broadcasts real-time 'packages_updated' and 'catalog_updated' WebSocket events to all connected Polygon/GoviMart mobile apps.
+ * Broadcasts real-time 'packages_updated' and 'catalog_updated' WebSocket events to all connected Polygon mobile apps.
  */
 exports.notifyPackageUpdate = async (req, res) => {
   try {
     const payload = req.body || {};
     const { action, packageId, extra } = payload;
-    console.log(`📦 [ProductService] Received package notify-update: action=${action}, packageId=${packageId}`);
 
     // Refresh or clear in-memory package cache
     try {
@@ -232,7 +228,7 @@ exports.notifyPackageUpdate = async (req, res) => {
       data: payload,
     });
   } catch (error) {
-    console.error("Error broadcasting package update:", error);
+    console.error("❌ Error broadcasting package update:", error);
     return res.status(500).json({
       status: false,
       message: "Failed to broadcast package update",
@@ -240,4 +236,3 @@ exports.notifyPackageUpdate = async (req, res) => {
     });
   }
 };
-

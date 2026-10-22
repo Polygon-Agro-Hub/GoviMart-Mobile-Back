@@ -23,7 +23,7 @@ exports.getRetailOrderHistory = async (req, res) => {
             orderHistory,
         });
     } catch (err) {
-        console.error("Error fetching order history:", err);
+        console.error("❌ Error fetching order history:", err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch order history.",
@@ -37,7 +37,7 @@ exports.getRetailOrderById = async (req, res) => {
         const processOrderId = req.query?.processOrderId;
         const { userId } = req.user;
         const targetId = processOrderId || orderId;
-        console.log("Received orderId:", orderId, "processOrderId:", processOrderId, "for userId:", userId); // Debug log
+
 
         const order = await RetailOrderDao.getRetailOrderByIdDao(targetId, userId, processOrderId);
 
@@ -47,7 +47,7 @@ exports.getRetailOrderById = async (req, res) => {
             order,
         });
     } catch (err) {
-        console.error("Error fetching order for orderId:", req.params.orderId, err);
+        console.error("❌ Error fetching order for orderId:", req.params.orderId, err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch order.",
@@ -67,7 +67,7 @@ exports.getOrderPackages = async (req, res) => {
             data: packages
         });
     } catch (error) {
-        console.error('Error in getPackagesByOrderId:', error);
+        console.error('❌ Error in getPackagesByOrderId:', error);
         res.status(500).json({
             status: false,
             message: error?.toString() || 'Unknown server error'
@@ -88,10 +88,9 @@ exports.getOrderAdditionalItems = async (req, res) => {
             data: additionalItems
         });
 
-        console.log("getOrderAdditionalItems executed for orderId:", orderId);
-        console.log("Additional items:", additionalItems);
+
     } catch (error) {
-        console.error('Error in getOrderAdditionalItems:', error);
+        console.error('❌ Error in getOrderAdditionalItems:', error);
         res.status(500).json({
             status: false,
             message: error?.toString() || 'Unknown server error'
@@ -104,7 +103,7 @@ exports.checkCouponAvalability = async (req, res) => {
         const { userId } = req.user;
         const { coupon, deliveryMethod } = await couponValidationSchema.validateAsync(req.body);
 
-        console.log('coupon detailsss', req.body);
+
 
         const currentDate = new Date();
         let discount = 0;
@@ -118,7 +117,7 @@ exports.checkCouponAvalability = async (req, res) => {
         };
 
         const couponData = await RetailOrderDao.getCouponDetailsDao(coupon);
-        console.log("Coupon data:", couponData);
+
 
         if (!couponData || couponData === null) {
             return res.status(404).json({
@@ -150,7 +149,7 @@ exports.checkCouponAvalability = async (req, res) => {
         const startDate = couponData.startDate ? new Date(couponData.startDate) : null;
         const endDate = couponData.endDate ? new Date(couponData.endDate) : null;
 
-        console.log(currentDate, startDate);
+
 
         if (startDate && !isNaN(startDate.getTime()) && currentDate < startDate) {
             return res.status(400).json({
@@ -234,7 +233,7 @@ exports.checkCouponAvalability = async (req, res) => {
             code: couponData.code,
         });
     } catch (err) {
-        console.error("Error validating coupon:", err);
+        console.error("❌ Error validating coupon:", err);
         res.status(500).json({
             status: false,
             message: err?.message || "Invalid coupon code",
@@ -251,7 +250,7 @@ exports.getAvailableCoupons = async (req, res) => {
             data: coupons,
         });
     } catch (err) {
-        console.error("Error fetching available coupons:", err);
+        console.error("❌ Error fetching available coupons:", err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch available coupons.",
@@ -271,7 +270,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 1. Validate request payload ──────────────────────────────────────────
     const { error, value } = createOrderSchema.validate(req.body, { abortEarly: false });
     if (error) {
-        console.error("[createOrder] Validation error:", error.details.map((d) => d.message));
+        console.error("❌ [createOrder] Validation error:", error.details.map((d) => d.message));
         return res.status(400).json({
             status: false,
             message: "Validation failed: " + error.details.map((d) => d.message).join("; "),
@@ -338,7 +337,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
             resolvedPhone1 = resolvedPhone1 || userProfile.phoneNumber || req.user.phoneNumber || "";
         }
     } catch (e) {
-        console.warn("[createOrder] Profile lookup fallback failed:", e.message);
+        console.warn(" ⚠️ [createOrder] Profile lookup fallback failed:", e.message);
     }
     resolvedTitle = resolvedTitle || "Mr";
     resolvedFullName = resolvedFullName || "Customer";
@@ -347,6 +346,26 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 2. Verify cart ownership ──────────────────────────────────────────────
     const cartBelongsToUser = await RetailOrderDao.validateCartDao(effectiveCartId, userId);
     if (!cartBelongsToUser) {
+        // High-latency safety: Check if this user's cart was already converted to an order recently (e.g. earlier in-flight request succeeded and cleared cart)
+        try {
+            const recentOrder = await RetailOrderDao.getRecentOrderByUserDao(userId, 15);
+            if (recentOrder) {
+
+                return safeRespond(200, {
+                    status: true,
+                    message: "Order was already placed successfully",
+                    data: {
+                        orderId: recentOrder.orderId,
+                        processOrderId: recentOrder.processOrderId,
+                        invoiceNumber: recentOrder.invoiceNumber,
+                        total: recentOrder.total,
+                    },
+                });
+            }
+        } catch (recentErr) {
+            console.warn(" ⚠️ [createOrder] Error checking recent order fallback:", recentErr.message);
+        }
+
         return safeRespond(403, {
             status: false,
             message: "Cart does not belong to the current user",
@@ -440,7 +459,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
     // Verify grandTotal from client against server-calculated grandTotal
     if (!isMatch) {
-        console.warn(`[createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Expected Discounted: ${expectedDiscountedGrandTotal}, Expected Normal-Discount: ${expectedNormalMinusDiscountGrandTotal}`);
+        console.warn(`⚠️ [createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Expected Discounted: ${expectedDiscountedGrandTotal}, Expected Normal-Discount: ${expectedNormalMinusDiscountGrandTotal}`);
         return safeRespond(400, {
             status: false,
             code: "ORDER_TOTAL_MISMATCH",
@@ -477,9 +496,48 @@ exports.createOrder = asyncHandler(async (req, res) => {
     const parseScheduleDate = (rawDate) => {
         if (!rawDate) return null;
         if (rawDate instanceof Date) return rawDate;
+
+        const m = String(rawDate).match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+
         const parsed = new Date(rawDate);
-        if (!isNaN(parsed.getTime())) return parsed;
-        return null;
+        return isNaN(parsed.getTime()) ? null : parsed;
+    };
+
+    // ── Auto-confirm rule (EPSD) ──────────────────────────────────────────────
+    // processorders.isConfirmed = 1 when:
+    //   (ala carte only  OR  package with isFinalizeImdt = 1)
+    //   AND the schedule date is the Earliest Possible Schedule Date (EPSD)
+    const padN = (n) => (n < 10 ? `0${n}` : `${n}`);
+    const toDateStr = (d) => {
+        if (!d) return null;
+        const dt = d instanceof Date ? d : new Date(d);
+        return isNaN(dt.getTime())
+            ? null
+            : `${dt.getFullYear()}-${padN(dt.getMonth() + 1)}-${padN(dt.getDate())}`;
+    };
+
+    let earliestDateObj = checkoutDetails?.earliestDeliveryDate
+        ? parseScheduleDate(checkoutDetails.earliestDeliveryDate)
+        : null;
+    if (!earliestDateObj) {
+        earliestDateObj = new Date();
+        earliestDateObj.setDate(earliestDateObj.getDate() + 3);
+    }
+    const earliestDateStr = toDateStr(earliestDateObj);
+
+    // ala carte only OR package + isFinalizeImdt = 1
+    const isAutoConfirmType = !hasPackages || Number(isFinalizeImdt) === 1;
+
+    // Mirrors client: no EPSD available / package unavailable on EPSD
+    const isEarliestBlocked =
+        checkoutDetails?.earliestDeliveryDate === null ||
+        Boolean(checkoutDetails?.hasPackageUnavailableOnEarliest);
+
+    const shouldAutoConfirm = (scheduleDate) => {
+        if (!isAutoConfirmType || isEarliestBlocked) return 0;
+        const s = toDateStr(scheduleDate);
+        return s && earliestDateStr && s <= earliestDateStr ? 1 : 0;
     };
 
     // ── 5. Begin transaction ──────────────────────────────────────────────────
@@ -624,7 +682,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         targetDates.push(...allComputed);
                     }
 
-                    // Create an individual processorders row for each scheduled date (e.g. 8 rows for 4 weeks twice a week)
+                    // Create an individual processorders row for each scheduled date
                     const clientIsPaid = Number(req.body.isPaid) === 1 ? 1 : 0;
 
                     for (let i = 0; i < targetDates.length; i++) {
@@ -646,6 +704,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                             moneyPaid: rowMoneyPaid,
                             status: "Ordered",
                             sheduleDate: sDate,
+                            isConfirmed: shouldAutoConfirm(sDate), // <-- EPSD auto-confirm
                             ...rowFinancials,
                         });
 
@@ -682,6 +741,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         moneyPaid: oneTimeMoneyPaid,
                         status: "Ordered",
                         sheduleDate: targetDate,
+                        isConfirmed: shouldAutoConfirm(targetDate), // <-- EPSD auto-confirm
                         ...firstOrderFinancials,
                     });
                     createdProcessOrders.push(proc);
@@ -702,7 +762,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         userId,
                         requestedCredit
                     );
-                    console.log(`[createOrder] Deducted Rs. ${requestedCredit} credit from marketplaceusers for userId: ${userId}`);
+
                 }
 
                 // ── 5f. Commit ────────────────────────────────────────────────
@@ -718,68 +778,56 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                     // ── Clear cart (best-effort, after commit) ────────────
                     RetailOrderDao.clearCartAfterOrderDao(effectiveCartId).catch((clearErr) => {
-                        console.error("[createOrder] Cart clear failed (non-fatal):", clearErr);
+                        console.error("❌ [createOrder] Cart clear failed (non-fatal):", clearErr);
                     });
 
                     // ── Refresh marketplaceusers.creditLimit (best-effort, after commit) ──
                     RetailOrderDao.recalculateAndPersistCreditLimitDao(userId).catch((limitErr) => {
-                        console.error("[createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
+                        console.error("❌ [createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
                     });
 
                     // ── ShoutOUT SMS Dispatch (best-effort, after commit) ──
                     (async () => {
                         try {
-                            // 1. Determine Earliest Possible Schedule Date (EPSD)
-                            let earliestDeliveryDateObj = null;
-                            if (checkoutDetails?.earliestDeliveryDate) {
-                                earliestDeliveryDateObj = parseScheduleDate(checkoutDetails.earliestDeliveryDate);
-                            }
-                            if (!earliestDeliveryDateObj) {
-                                earliestDeliveryDateObj = new Date();
-                                earliestDeliveryDateObj.setDate(earliestDeliveryDateObj.getDate() + 3);
-                            }
-
-                            const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
-                            const toDateStr = (d) => {
-                                if (!d) return null;
-                                const dt = (d instanceof Date) ? d : new Date(d);
-                                return isNaN(dt.getTime()) ? null : `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
-                            };
-
+                            // reuses toDateStr + earliestDateStr defined above
                             const scheduledDateStr = toDateStr(primaryScheduledDate);
-                            const earliestDateStr = toDateStr(earliestDeliveryDateObj);
+                            const isType1 = Boolean(
+                                scheduledDateStr && earliestDateStr && scheduledDateStr <= earliestDateStr
+                            );
 
-                            const isType1 = Boolean(scheduledDateStr && earliestDateStr && scheduledDateStr <= earliestDateStr);
+                            // Only: isFinalizeImdt = 0 AND package order -> no EPSD check
+                            const isPackagePayToConfirmFlow = !Number(isFinalizeImdt) && hasPackages;
 
-                            console.log(`[createOrder SMS] scheduledDate: ${scheduledDateStr}, earliestDate: ${earliestDateStr}, isType1: ${isType1}, paymentMethod: ${paymentMethod}`);
+                            console.log(
+                                `[createOrder SMS] scheduled: ${scheduledDateStr}, earliest: ${earliestDateStr}, isType1: ${isType1}, isFinalizeImdt: ${isFinalizeImdt}, hasPackages: ${hasPackages}, packageFlow: ${isPackagePayToConfirmFlow}`
+                            );
 
-                            if (isType1) {
-                                // Type 1: Deliver Date = E.P.S.D.
-                                // 1. Payment Cash or Cash + Credit
-                                // 2. Payment Direct User to the Pay Now Screen - After Payment Success
-                                // 3. Payment Full Credit
-                                // SMS: “Dear Customer, your order : [INV NO] is confirmed. Thank you for ordering with Polygon!”
+                            if (isPackagePayToConfirmFlow) {
+                                // Shows delivery - 2 (18 -> 16)
+                                await orderSmsService.sendOrderPlacedPayToConfirmSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    deliveryDate: scheduledDateStr,
+                                });
+                            } else if (isType1) {
+                                // Delivery on earliest date
                                 await orderSmsService.sendOrderConfirmedSms({
                                     userId,
                                     phone: resolvedPhone1,
                                     invNo: primaryInvNo,
                                 });
                             } else {
-                                // Type 2: Delivery Date After E.P.S.D.
-                                // 1. Cash or Cash+Credit:
-                                //    SMS When the Order is placed: “Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on [Processing Date]. Please confirm your order by 6:00 PM or it will be cancelled.”
-                                // 2. Card:
-                                //    SMS When the Order is placed: “Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on [Processing Date]. Please pay by 6:00 PM to confirm your order, or it will be cancelled.”
+                                // Delivery after earliest date (shows delivery - 3, 18 -> 15)
                                 const isCard = String(paymentMethod).toLowerCase() === "card";
                                 await orderSmsService.sendOrderPlacedAfterEpsdSms({
                                     userId,
                                     phone: resolvedPhone1,
-                                    deliveryDate: primaryScheduledDate || scheduledDateStr,
+                                    deliveryDate: scheduledDateStr,
                                     isCardPayment: isCard,
                                 });
                             }
                         } catch (smsErr) {
-                            console.error("[createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
+                            console.error("❌ [createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
                         }
                     })();
 
@@ -809,7 +857,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     });
                 }
 
-                console.error("[createOrder] Transaction error:", err);
+                console.error("❌ [createOrder] Transaction error:", err);
                 return safeRespond(500, {
                     status: false,
                     message: "Order creation failed. Please try again.",
@@ -888,7 +936,7 @@ exports.getDeliveredOrdersTotal = async (req, res) => {
         const result = await RetailOrderDao.getDeliveredOrdersTotal(userId);
         return res.status(200).json({ success: true, data: result });
     } catch (error) {
-        console.error("Error in getDeliveredOrdersTotal:", error);
+        console.error("❌ Error in getDeliveredOrdersTotal:", error);
         return res.status(500).json({
             success: false,
             message: "Failed to fetch delivered orders total",
@@ -897,25 +945,22 @@ exports.getDeliveredOrdersTotal = async (req, res) => {
     }
 };
 
+// Returns YYYY-MM-DD for (today in Sri Lanka + N days)
+const getColomboDatePlus = (days) => {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Colombo" });
+    const d = new Date(`${today}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+};
+
 /**
  * GET /api/order/schedule-orders/:sheduleDate?
- * Fetch orders scheduled for a specific date (or the user's latest scheduled order date).
+ * Default sheduleDate = today + 3 days 
  */
 exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
     const userId = req.user?.id || req.user?.userId;
-    let sheduleDate = req.query.sheduleDate || req.params.sheduleDate;
-
-    if (!sheduleDate) {
-        if (userId) {
-            sheduleDate = await RetailOrderDao.getLatestScheduleDateForUser(userId);
-        }
-
-        if (!sheduleDate) {
-            const d = new Date();
-            d.setDate(d.getDate() + 3);
-            sheduleDate = d.toISOString().slice(0, 10);
-        }
-    }
+    const sheduleDate =
+        req.query.sheduleDate || req.params.sheduleDate || getColomboDatePlus(3);
 
     const result = await RetailOrderDao.getOrdersForSheduleDate(sheduleDate, userId);
 

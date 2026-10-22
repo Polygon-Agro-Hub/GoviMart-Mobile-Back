@@ -75,7 +75,7 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0, buyerType = "
 
     db.collectionofficer.query(sql, [userId, Number(limit), Number(offset)], (err, results) => {
       if (err) {
-        console.error("Error fetching user notifications:", err);
+        console.error("❌ Error fetching user notifications:", err);
         return reject(err);
       }
 
@@ -118,7 +118,7 @@ exports.getUnreadCountDao = (userId, buyerType = "Retail") => {
 
     db.collectionofficer.query(sql, [userId], (err, results) => {
       if (err) {
-        console.error("Error fetching unread count:", err);
+        console.error("❌ Error fetching unread count:", err);
         return reject(err);
       }
       resolve(results[0]?.unreadCount || 0);
@@ -141,7 +141,7 @@ exports.markAsReadDao = (notificationId, userId) => {
 
     db.collectionofficer.query(sql, [notificationId, userId], async (err, result) => {
       if (err) {
-        console.error("Error marking notification as read:", err);
+        console.error("❌ Error marking notification as read:", err);
         return reject(err);
       }
 
@@ -170,7 +170,7 @@ exports.markAllAsReadDao = (userId) => {
 
     db.collectionofficer.query(sql, [userId], (err, result) => {
       if (err) {
-        console.error("Error marking all notifications as read:", err);
+        console.error("❌ Error marking all notifications as read:", err);
         return reject(err);
       }
 
@@ -203,7 +203,7 @@ exports.createNotificationDao = (arg1, arg2, arg3) => {
 
     db.collectionofficer.query(insertSql, [orderId, title, message], (err, result) => {
       if (err) {
-        console.error("Error creating notification:", err);
+        console.error("❌ Error creating notification:", err);
         return reject(err);
       }
 

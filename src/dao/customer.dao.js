@@ -573,6 +573,7 @@ exports.updateUserDetailsDao = async (userId, userData) => {
     "companyPhone",
     "companyName",
     "buyerType",
+    "image",
   ];
 
   const fieldsToUpdate = [];
@@ -581,7 +582,11 @@ exports.updateUserDetailsDao = async (userId, userData) => {
   for (const key of allowedKeys) {
     if (userData[key] !== undefined) {
       fieldsToUpdate.push(`${key} = ?`);
-      values.push(userData[key]);
+      let val = userData[key];
+      if (key === "image") {
+        val = val && typeof val === "string" && val.trim() !== "" ? val.trim() : null;
+      }
+      values.push(val);
     }
   }
 
@@ -717,7 +722,7 @@ exports.deleteUserAccountDao = async (userId) => {
       try {
         await connection.rollback();
       } catch (rollbackErr) {
-        console.error("Error during rollback in deleteUserAccountDao:", rollbackErr);
+        console.error("❌ Error during rollback in deleteUserAccountDao:", rollbackErr);
       }
     }
     throw err;
@@ -786,6 +791,19 @@ exports.isNicTakenDao = async (userId, nic) => {
     LIMIT 1
   `;
   const [results] = await db.collectionofficer.promise().query(query, [...candidates, userId]);
+  return results.length > 0;
+};
+
+// Check if an email already belongs to another user
+exports.isEmailTakenDao = async (userId, email) => {
+  if (!email) return false;
+  const rawEmail = String(email).trim().toLowerCase();
+  const query = `
+    SELECT id FROM marketplaceusers
+    WHERE LOWER(TRIM(email)) = ? AND id != ?
+    LIMIT 1
+  `;
+  const [results] = await db.collectionofficer.promise().query(query, [rawEmail, userId]);
   return results.length > 0;
 };
 

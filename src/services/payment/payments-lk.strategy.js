@@ -54,8 +54,8 @@ class PaymentsLkStrategy extends PaymentStrategy {
       paymentType === "clear_balance"
         ? "CB"
         : paymentType === "save_card"
-        ? "SC"
-        : "ORD";
+          ? "SC"
+          : "ORD";
     const orderId =
       clientOrderId || `${prefix}_${userId}_${Date.now()}`;
 
@@ -72,8 +72,8 @@ class PaymentsLkStrategy extends PaymentStrategy {
       (paymentType === "clear_balance"
         ? `Clear Credit Balance (User #${userId})`
         : paymentType === "save_card"
-        ? `Link Payment Card (User #${userId})`
-        : `GoviMart Order #${orderId}`);
+          ? `Link Payment Card (User #${userId})`
+          : `Polygon Order #${orderId}`);
 
     // Format phone to valid Sri Lankan mobile number (e.g. 07XXXXXXXX) only if provided
     let validPhone;
@@ -93,7 +93,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
     const customerPayload = {
       name:
         `${customer.firstName || ""} ${customer.lastName || ""}`.trim() ||
-        "GoviMart Customer",
+        "Polygon Customer",
       email: customer.email || "customer@govimart.lk",
     };
     if (validPhone) {
@@ -129,7 +129,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
         responseData?.message ||
         responseData?.reason ||
         `Payments.lk API Error: ${response.status} ${response.statusText}`;
-      console.error("[Payments.lk API Error]", responseData);
+      console.error("❌ [Payments.lk API Error]", responseData);
       throw new Error(errMsg);
     }
 
@@ -166,7 +166,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
     if (!response.ok) {
       throw new Error(
         checkoutData?.message ||
-          `Failed to retrieve checkout from Payments.lk: ${response.status}`
+        `Failed to retrieve checkout from Payments.lk: ${response.status}`
       );
     }
 
@@ -218,7 +218,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
             }
           }
         } catch (err) {
-          console.warn("[Payments.lk] Could not query cards list for sync attempt", attempt, err.message);
+          console.warn("⚠️ [Payments.lk] Could not query cards list for sync attempt", attempt, err.message);
         }
       }
     }
@@ -240,7 +240,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
           if (savedCardObj.scheme) scheme = String(savedCardObj.scheme).toLowerCase();
         }
       } catch (err) {
-        console.warn("[Payments.lk] Could not fetch saved card by ID:", err.message);
+        console.warn("⚠️ [Payments.lk] Could not fetch saved card by ID:", err.message);
       }
     }
 
@@ -306,13 +306,13 @@ class PaymentsLkStrategy extends PaymentStrategy {
     const secret = this.webhookSecret;
     if (!secret) {
       console.warn(
-        "[Payments.lk Webhook] PAYMENTS_LK_WEBHOOK_SECRET is not configured. Skipping signature check."
+        "⚠️ [Payments.lk Webhook] PAYMENTS_LK_WEBHOOK_SECRET is not configured. Skipping signature check."
       );
       return true;
     }
 
     if (!signatureHeader || !rawBody) {
-      console.warn("[Payments.lk Webhook] Missing signature header or raw body.");
+      console.warn("⚠️ [Payments.lk Webhook] Missing signature header or raw body.");
       return false;
     }
 
@@ -331,7 +331,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
     }
 
     if (t === undefined) {
-      console.warn("[Payments.lk Webhook] Timestamp 't' missing from signature header.");
+      console.warn("⚠️ [Payments.lk Webhook] Timestamp 't' missing from signature header.");
       return false;
     }
 
@@ -339,7 +339,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
     const currentTimestamp = Math.floor(Date.now() / 1000);
     if (Math.abs(currentTimestamp - t) > toleranceSeconds) {
       console.warn(
-        `[Payments.lk Webhook] Webhook timestamp outside tolerance (${t} vs ${currentTimestamp})`
+        `⚠️ [Payments.lk Webhook] Webhook timestamp outside tolerance (${t} vs ${currentTimestamp})`
       );
       return false;
     }
@@ -348,8 +348,8 @@ class PaymentsLkStrategy extends PaymentStrategy {
       typeof rawBody === "string"
         ? rawBody
         : Buffer.isBuffer(rawBody)
-        ? rawBody.toString("utf8")
-        : JSON.stringify(rawBody);
+          ? rawBody.toString("utf8")
+          : JSON.stringify(rawBody);
 
     const expectedSignature = crypto
       .createHmac("sha256", secret)
@@ -369,7 +369,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
     });
 
     if (!isValid) {
-      console.error("[Payments.lk Webhook] HMAC SHA-256 signature verification mismatch.");
+      console.error("❌ [Payments.lk Webhook] HMAC SHA-256 signature verification mismatch.");
     }
 
     return isValid;
@@ -421,8 +421,8 @@ class PaymentsLkStrategy extends PaymentStrategy {
       if (!response.ok) {
         throw new Error(
           responseData?.message ||
-            responseData?.reason ||
-            `Charge failed: ${response.status}`
+          responseData?.reason ||
+          `Charge failed: ${response.status}`
         );
       }
 
@@ -437,7 +437,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
       };
     } catch (err) {
       console.error(
-        `[Payments.lk Charge] API call failed: ${err.message}`
+        `❌ [Payments.lk Charge] API call failed: ${err.message}`
       );
       throw new Error(err.message || "Card charge failed");
     }
@@ -507,12 +507,12 @@ class PaymentsLkStrategy extends PaymentStrategy {
 
       const errText = await response.text().catch(() => "");
       console.warn(
-        `[Payments.lk] Delete card returned HTTP ${response.status}:`,
+        `⚠️ [Payments.lk] Delete card returned HTTP ${response.status}:`,
         errText
       );
       return false;
     } catch (err) {
-      console.error(`[Payments.lk Delete Card Error]:`, err.message);
+      console.error(`❌ [Payments.lk Delete Card Error]:`, err.message);
       return false;
     }
   }

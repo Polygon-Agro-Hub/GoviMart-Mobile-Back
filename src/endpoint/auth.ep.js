@@ -203,7 +203,7 @@ exports.login = asyncHandler(async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Login failed:", err.message);
+    console.error("❌ Login failed:", err.message);
     return res.status(401).json({ success: false, message: err.message });
   }
 });
@@ -225,7 +225,7 @@ exports.getCities = asyncHandler(async (req, res) => {
       data: cities,
     });
   } catch (err) {
-    console.error("Error in getCities:", err.message);
+    console.error("❌ Error in getCities:", err.message);
     return res.status(500).json({
       status: false,
       message: "Failed to fetch cities",
@@ -258,7 +258,7 @@ exports.updateCityAvailability = asyncHandler(async (req, res) => {
       data: updatedCities,
     });
   } catch (err) {
-    console.error("Error updating city availability:", err.message);
+    console.error("❌ Error updating city availability:", err.message);
     return res.status(500).json({
       status: false,
       message: "Failed to update city availability",
@@ -269,7 +269,7 @@ exports.updateCityAvailability = asyncHandler(async (req, res) => {
 
 const sendEmailOtp = async (email, otp, options = {}) => {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    console.error("Email SMTP credentials not configured in env");
+    console.error("❌ Email SMTP credentials not configured in env");
     throw new Error("Email service not configured.");
   }
 
@@ -533,7 +533,7 @@ exports.userSignup = asyncHandler(async (req, res) => {
         const smsReference = await sendShoutoutSms(fullPhone, otp);
         console.log(`[SMS] OTP successfully sent to ${fullPhone} with ref ${smsReference}`);
       } catch (smsErr) {
-        console.error("Failed to send Shoutout SMS:", smsErr.message);
+        console.error("❌ Failed to send Shoutout SMS:", smsErr.message);
 
       }
     } else {
@@ -542,7 +542,7 @@ exports.userSignup = asyncHandler(async (req, res) => {
         await sendEmailOtp(email, otp);
         console.log(`[Email] OTP successfully sent to ${email}`);
       } catch (emailErr) {
-        console.error("Failed to send verification email:", emailErr.message);
+        console.error("❌ Failed to send verification email:", emailErr.message);
       }
     }
 
@@ -558,7 +558,7 @@ exports.userSignup = asyncHandler(async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Error during signup:", err);
+    console.error("❌ Error during signup:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred during signup.",
@@ -765,7 +765,7 @@ exports.verifySignup = asyncHandler(async (req, res) => {
     }
 
   } catch (err) {
-    console.error("Error during signup verification:", err);
+    console.error("❌ Error during signup verification:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred during signup verification.",
@@ -850,13 +850,13 @@ exports.resendSignupOtp = asyncHandler(async (req, res) => {
         const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
         await sendShoutoutSms(fullPhone, otp);
       } catch (smsErr) {
-        console.error("Failed to send Shoutout SMS on resend:", smsErr.message);
+        console.error("❌ Failed to send Shoutout SMS on resend:", smsErr.message);
       }
     } else {
       try {
         await sendEmailOtp(email, otp);
       } catch (emailErr) {
-        console.error("Failed to send verification email on resend:", emailErr.message);
+        console.error("❌ Failed to send verification email on resend:", emailErr.message);
       }
     }
 
@@ -870,7 +870,7 @@ exports.resendSignupOtp = asyncHandler(async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Error during resend:", err);
+    console.error("❌ Error during resend:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred during resend.",
@@ -928,7 +928,7 @@ exports.updatePassword = asyncHandler(async (req, res) => {
   if (currentPassword === newPassword) {
     return res.status(400).json({
       status: false,
-      message: "New password cannot be the same as your current password.",
+      message: "New password cannot be the same as your current password. Please choose a different password.",
     });
   }
 
@@ -959,7 +959,7 @@ exports.updatePassword = asyncHandler(async (req, res) => {
     if (user.password && bcrypt.compareSync(newPassword, user.password)) {
       return res.status(400).json({
         status: false,
-        message: "New password cannot be the same as your current password.",
+        message: "New password cannot be the same as your current password. Please choose a different password.",
       });
     }
 
@@ -980,7 +980,7 @@ exports.updatePassword = asyncHandler(async (req, res) => {
       });
     }
   } catch (err) {
-    console.error("Error updating password:", err);
+    console.error("❌ Error updating password:", err);
     return res.status(500).json({
       status: false,
       message: "An error occurred while updating the password.",
@@ -1008,10 +1008,10 @@ exports.logout = asyncHandler(async (req, res) => {
         expiresAt = decoded.exp * 1000;
       }
     } catch (e) {
-      console.error("Error decoding token on logout:", e);
+      console.error("❌ Error decoding token on logout:", e);
     }
     blacklistedTokens.set(token, expiresAt);
-    console.log(`🔒 Token successfully blacklisted until: ${new Date(expiresAt).toISOString()}`);
+
   }
 
   res.clearCookie("authToken", {
@@ -1060,7 +1060,7 @@ exports.refreshToken = asyncHandler(async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Token refresh failed:", err.message);
+    console.error("❌ Token refresh failed:", err.message);
     return res.status(401).json({
       success: false,
       message: "Invalid or expired refresh token.",
@@ -1091,6 +1091,14 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
           message: "Email address is required.",
         });
       }
+      const emailRegex =
+        /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
+      if (!emailRegex.test(email.trim())) {
+        return res.status(400).json({
+          status: false,
+          message: "Invalid email address format.",
+        });
+      }
       user = await userDao.getUserByEmailDao(email.trim());
       if (!user) {
         return res.status(404).json({
@@ -1106,10 +1114,11 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
         });
       }
 
-      if (phoneCode !== "+94") {
+      const supportedPhoneCodes = ["+94", "+84", "+855", "+880", "+91", "+31"];
+      if (!supportedPhoneCodes.includes(phoneCode)) {
         return res.status(400).json({
           status: false,
-          message: "SMS OTP is only available for Sri Lankan mobile numbers (+94). Please use the email option.",
+          message: "SMS OTP is only available for supported countries (+94, +84, +855, +880, +91, +31). Please use the email option.",
         });
       }
 
@@ -1192,7 +1201,7 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
         });
         console.log(`[Forgot Password] Email OTP sent to ${user.email}`);
       } catch (mailErr) {
-        console.error("Failed to send password reset email:", mailErr.message);
+        console.error("❌ Failed to send password reset email:", mailErr.message);
       }
     } else {
       try {
@@ -1200,7 +1209,7 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
         await sendShoutoutSms(fullPhone, otp);
         console.log(`[Forgot Password] SMS OTP sent to ${fullPhone}`);
       } catch (smsErr) {
-        console.error("Failed to send password reset SMS:", smsErr.message);
+        console.error("❌ Failed to send password reset SMS:", smsErr.message);
       }
     }
 
@@ -1215,7 +1224,7 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
         : "Verification code has been sent to your mobile number.",
     });
   } catch (err) {
-    console.error("Error in forgotPasswordRequestOtp:", err);
+    console.error("❌ Error in forgotPasswordRequestOtp:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred while requesting verification code.",
@@ -1301,14 +1310,14 @@ exports.forgotPasswordResendOtp = asyncHandler(async (req, res) => {
           instructionText: "Enter this OTP on the verification page to reset your password.",
         });
       } catch (mailErr) {
-        console.error("Failed to resend password reset email:", mailErr.message);
+        console.error("❌ Failed to resend password reset email:", mailErr.message);
       }
     } else {
       try {
         const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
         await sendShoutoutSms(fullPhone, otp);
       } catch (smsErr) {
-        console.error("Failed to resend password reset SMS:", smsErr.message);
+        console.error("❌ Failed to resend password reset SMS:", smsErr.message);
       }
     }
 
@@ -1321,7 +1330,7 @@ exports.forgotPasswordResendOtp = asyncHandler(async (req, res) => {
         : "Verification code has been resent to your mobile number.",
     });
   } catch (err) {
-    console.error("Error in forgotPasswordResendOtp:", err);
+    console.error("❌ Error in forgotPasswordResendOtp:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred while resending verification code.",
@@ -1452,7 +1461,7 @@ exports.forgotPasswordVerifyOtp = asyncHandler(async (req, res) => {
       verifiedResetToken: verifiedResetToken,
     });
   } catch (err) {
-    console.error("Error in forgotPasswordVerifyOtp:", err);
+    console.error("❌ Error in forgotPasswordVerifyOtp:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred during OTP verification.",
@@ -1550,7 +1559,7 @@ exports.forgotPasswordReset = asyncHandler(async (req, res) => {
       });
     }
   } catch (err) {
-    console.error("Error in forgotPasswordReset:", err);
+    console.error("❌ Error in forgotPasswordReset:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred while resetting the password.",
