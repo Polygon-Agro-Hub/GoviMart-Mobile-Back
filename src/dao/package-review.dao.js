@@ -1429,7 +1429,16 @@ exports.confirmPackageReviewDao = ({
 
 /**
  * Fetch latest packing target limit, count accepted orders for the date,
- * and check unread reminder history for an order.
+ * and check reminder history for an order.
+ *
+ * Returns:
+ *  - unreadReminderDays : unread notification rows (max 3)   -> used for the "3 reminders used" screen
+ *  - reminderCount      : TOTAL "Package Finalization Review" rows (read + unread, 1..3)
+ *                         -> used for the schedule date shift
+ *                            1 row  = date unchanged
+ *                            2 rows = date + 1 day
+ *                            3 rows = date + 2 days
+ *
  * Never rejects: resolves safe defaults on error.
  */
 exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
@@ -1453,6 +1462,9 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
 
             // Unread reminder notification count
             let unreadReminderDays = 1;
+            // Total "Package Finalization Review" reminders (read or unread)
+            let reminderCount = 1;
+
             if (processOrderId) {
                 const notifSql = `
                     SELECT COUNT(*) AS unreadCount 
@@ -1475,6 +1487,23 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                         parseInt(notifRows[0].unreadCount, 10) || 1,
                     );
                 }
+
+                const countRows = await new Promise((res) => {
+                    db.collectionofficer.query(
+                        `SELECT COUNT(*) AS cnt
+                         FROM ordernotfication
+                         WHERE orderId = ? AND Title = 'Package Finalization Review'`,
+                        [processOrderId],
+                        (err, rows) => {
+                            if (err) return res([]);
+                            res(rows || []);
+                        },
+                    );
+                });
+                reminderCount = Math.min(
+                    3,
+                    Math.max(1, parseInt(countRows[0]?.cnt, 10) || 1),
+                );
             }
 
             const remaining = targetInfo.remaining;
@@ -1488,6 +1517,7 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 remaining,
                 isLimitReached,
                 unreadReminderDays,
+                reminderCount,
                 scheduleDate: targetInfo.sheduleDate,
                 additionalItems: targetInfo.additionalItems,
                 packageFinalizeImdt: targetInfo.packageFinalizeImdt,
@@ -1503,6 +1533,7 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 remaining: 50,
                 isLimitReached: false,
                 unreadReminderDays: 1,
+                reminderCount: 1,
                 scheduleDate: targetDate || new Date().toISOString().split("T")[0],
             });
         }
