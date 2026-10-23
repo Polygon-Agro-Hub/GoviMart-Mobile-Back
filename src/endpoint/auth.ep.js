@@ -284,6 +284,14 @@ const sendEmailOtp = async (email, otp, options = {}) => {
   const logoPath = path.join(__dirname, "..", "assets", "polygon-logo.png");
   const logoExists = fs.existsSync(logoPath);
 
+  let logoHtml = `<h2 style="margin: 0; color: #FF7F00; font-size: 26px; font-weight: 700;">Polygon</h2>`;
+  let attachLogo = false;
+
+  if (logoExists) {
+    logoHtml = `<img src="cid:polygon_logo" alt="Polygon" width="180" style="display: block; width: 180px; max-width: 180px; height: auto; margin: 0 auto; border: 0; outline: none; text-decoration: none;" />`;
+    attachLogo = true;
+  }
+
   const transporter = nodemailer.createTransport({
     host: process.env.EMAIL_HOST || "smtp.gmail.com",
     port: parseInt(process.env.EMAIL_PORT) || 587,
@@ -304,10 +312,6 @@ const sendEmailOtp = async (email, otp, options = {}) => {
   if (fs.existsSync(templatePath)) {
     htmlContent = fs.readFileSync(templatePath, "utf8");
 
-    const logoHtml = logoExists
-      ? `<img src="cid:polygon_logo" alt="Polygon" style="max-width: 180px; height: auto;" />`
-      : `<h2 style="margin:0; color:#FF7F00;">Polygon</h2>`;
-
     htmlContent = htmlContent
       .replace("{{logo_placeholder}}", logoHtml)
       .replace(/{{title}}/g, title)
@@ -319,7 +323,10 @@ const sendEmailOtp = async (email, otp, options = {}) => {
   } else {
     // Fallback if template doesn't exist
     htmlContent = `
-      <div style="font-family: Arial, sans-serif; padding: 20px;">
+      <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          ${logoHtml}
+        </div>
         <h2>${title}</h2>
         ${introSectionHtml}
         <p>${actionText}</p>
@@ -343,12 +350,13 @@ const sendEmailOtp = async (email, otp, options = {}) => {
     text: `Hello,\n\n${introText ? introText + '\n\n' : ''}${actionText}\n\n${otp}\n\nThis code is valid for 4 minutes.\n${instructionText}`,
   };
 
-  if (logoExists) {
+  if (attachLogo) {
     mailOptions.attachments = [
       {
-        filename: "polygon-logo.png",
+        filename: false,
         path: logoPath,
         cid: "polygon_logo",
+        contentDisposition: "inline",
       },
     ];
   }
@@ -659,7 +667,7 @@ exports.verifySignup = asyncHandler(async (req, res) => {
       const remainingAttempts = MAX_SIGNUP_ATTEMPTS - currentAttempts;
       return res.status(400).json({
         status: false,
-        message: `Incorrect verification code. ${remainingAttempts} attempts remaining.`,
+        message: `Incorrect verification code. ${remainingAttempts} ${remainingAttempts === 1 ? "attempt" : "attempts"} remaining.`,
       });
     }
 
@@ -1431,7 +1439,7 @@ exports.forgotPasswordVerifyOtp = asyncHandler(async (req, res) => {
       const remainingAttempts = MAX_FORGOT_PWD_ATTEMPTS - currentAttempts;
       return res.status(400).json({
         status: false,
-        message: `Incorrect verification code. ${remainingAttempts} attempts remaining.`,
+        message: `Incorrect verification code. ${remainingAttempts} ${remainingAttempts === 1 ? "attempt" : "attempts"} remaining.`,
       });
     }
 

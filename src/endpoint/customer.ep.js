@@ -469,10 +469,23 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
       });
     }
 
+    const emailRegex =
+      /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
+
+    // Resolve target email from body, req.user, or database
+    let targetEmail = (req.body.email && String(req.body.email).trim().toLowerCase()) || null;
+    if (!targetEmail && req.user?.email) {
+      targetEmail = String(req.user.email).trim().toLowerCase();
+    }
+    if (!targetEmail) {
+      const profile = await customerDao.getCustomerProfileDao(userId);
+      if (profile && profile.length > 0 && profile[0].email) {
+        targetEmail = String(profile[0].email).trim().toLowerCase();
+      }
+    }
+
     if (req.body.email) {
       const cleanEmail = String(req.body.email).trim();
-      const emailRegex =
-        /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
       if (
         cleanEmail.includes(" ") ||
         cleanEmail.includes("..") ||
@@ -489,8 +502,20 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
       }
     }
 
+    // Determine method: SMS for Sri Lanka (+94), email for all other countries
+    const method = phoneCode === "+94" ? "sms" : "email";
+
+    if (method === "email") {
+      if (!targetEmail || !emailRegex.test(targetEmail)) {
+        return res.status(400).json({
+          status: false,
+          message: "A valid email address is required to receive verification code for overseas numbers.",
+        });
+      }
+    }
+
     const lockoutKeys = userAuthEp.getSignupLockoutKeys(
-      req.user.email,
+      targetEmail || req.user?.email,
       phoneCode,
       normalizedPhone
     );
@@ -510,17 +535,14 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
     phoneOtpAttempts.delete(referenceId);
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes
 
-    await authDao.saveOtpDao(referenceId, req.user.email || null, otp, expiresAt);
+    await authDao.saveOtpDao(referenceId, targetEmail || req.user?.email || null, otp, expiresAt);
 
-    // Stateless session token carrying the intended new phone
+    // Stateless session token carrying the intended new phone and email
     const phoneChangeToken = jwt.sign(
-      { userId, phoneCode, phoneNumber: normalizedPhone },
+      { userId, phoneCode, phoneNumber: normalizedPhone, email: targetEmail },
       process.env.JWT_SECRET,
       { expiresIn: "15m" }
     );
-
-    // Determine method: SMS for Sri Lanka (+94), email for all other countries
-    const method = phoneCode === "+94" ? "sms" : "email";
 
     if (method === "sms") {
       try {
@@ -531,16 +553,27 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
         console.log(`[SMS] Phone change OTP sent to ${fullPhone}`);
       } catch (smsErr) {
         console.error("❌ Failed to send Shoutout SMS for phone change:", smsErr.message);
+        return res.status(500).json({
+          status: false,
+          message: "Failed to send SMS verification code. Please try again later.",
+        });
       }
     } else {
       try {
-        const userEmail = req.user.email;
-        if (userEmail) {
-          await userAuthEp.sendEmailOtp(userEmail, otp);
-          console.log(`[Email] Phone change OTP sent to ${userEmail}`);
-        }
+        await userAuthEp.sendEmailOtp(targetEmail, otp, {
+          title: "Verify Your Mobile Number",
+          subject: "Polygon Mobile Number Update Verification",
+          introText: "You recently requested to update your mobile number for your Polygon account.",
+          actionText: "To verify and complete this mobile number update, please use the following One-Time Password (OTP):",
+          instructionText: "Enter this OTP in the Polygon app to verify and update your mobile number.",
+        });
+        console.log(`[Email] Phone change OTP sent to ${targetEmail}`);
       } catch (emailErr) {
         console.error("❌ Failed to send email OTP for phone change:", emailErr.message);
+        return res.status(500).json({
+          status: false,
+          message: "Failed to send verification email. Please try again later.",
+        });
       }
     }
 
@@ -581,9 +614,9 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
       });
     }
 
-    const { userId, phoneCode, phoneNumber } = decoded;
+    const { userId, phoneCode, phoneNumber, email: tokenEmail } = decoded;
     const lockoutKeys = userAuthEp.getSignupLockoutKeys(
-      req.user?.email,
+      tokenEmail || req.user?.email,
       phoneCode,
       phoneNumber
     );
@@ -622,9 +655,10 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
         });
       }
 
+      const remainingAttempts = 5 - attempts;
       return res.status(400).json({
         status: false,
-        message: `Incorrect verification code. ${5 - attempts} attempts remaining.`,
+        message: `Incorrect verification code. ${remainingAttempts} ${remainingAttempts === 1 ? "attempt" : "attempts"} remaining.`,
       });
     }
 
@@ -695,9 +729,18 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
       });
     }
 
-    const { userId, phoneCode, phoneNumber } = decoded;
+    const { userId, phoneCode, phoneNumber, email: tokenEmail } = decoded;
+
+    let targetEmail = tokenEmail || (req.user?.email ? String(req.user.email).trim().toLowerCase() : null);
+    if (!targetEmail) {
+      const profile = await customerDao.getCustomerProfileDao(userId);
+      if (profile && profile.length > 0 && profile[0].email) {
+        targetEmail = String(profile[0].email).trim().toLowerCase();
+      }
+    }
+
     const lockoutKeys = userAuthEp.getSignupLockoutKeys(
-      req.user?.email,
+      targetEmail || req.user?.email,
       phoneCode,
       phoneNumber
     );
@@ -712,20 +755,27 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
       });
     }
 
+    const method = phoneCode === "+94" ? "sms" : "email";
+
+    if (method === "email" && !targetEmail) {
+      return res.status(400).json({
+        status: false,
+        message: "A valid email address is required to receive verification code for overseas numbers.",
+      });
+    }
+
     const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
     phoneOtpAttempts.delete(referenceId);
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000);
 
-    await authDao.saveOtpDao(referenceId, req.user?.email || null, otp, expiresAt);
+    await authDao.saveOtpDao(referenceId, targetEmail || req.user?.email || null, otp, expiresAt);
 
     const newSignupToken = jwt.sign(
-      { userId, phoneCode, phoneNumber },
+      { userId, phoneCode, phoneNumber, email: targetEmail },
       process.env.JWT_SECRET,
       { expiresIn: "15m" }
     );
-
-    const method = phoneCode === "+94" ? "sms" : "email";
 
     if (method === "sms") {
       try {
@@ -736,16 +786,27 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
         console.log(`[SMS] Phone change OTP resent to ${fullPhone}`);
       } catch (smsErr) {
         console.error("❌ Failed to send Shoutout SMS on phone change resend:", smsErr.message);
+        return res.status(500).json({
+          status: false,
+          message: "Failed to resend SMS verification code. Please try again later.",
+        });
       }
     } else {
       try {
-        const userEmail = req.user?.email;
-        if (userEmail) {
-          await userAuthEp.sendEmailOtp(userEmail, otp);
-          console.log(`[Email] Phone change OTP resent to ${userEmail}`);
-        }
+        await userAuthEp.sendEmailOtp(targetEmail, otp, {
+          title: "Verify Your Mobile Number",
+          subject: "Polygon Mobile Number Update Verification",
+          introText: "You recently requested to update your mobile number for your Polygon account.",
+          actionText: "To verify and complete this mobile number update, please use the following One-Time Password (OTP):",
+          instructionText: "Enter this OTP in the Polygon app to verify and update your mobile number.",
+        });
+        console.log(`[Email] Phone change OTP resent to ${targetEmail}`);
       } catch (emailErr) {
         console.error("❌ Failed to send email OTP on phone change resend:", emailErr.message);
+        return res.status(500).json({
+          status: false,
+          message: "Failed to resend verification email. Please try again later.",
+        });
       }
     }
 

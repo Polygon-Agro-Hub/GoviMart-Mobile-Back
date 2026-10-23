@@ -412,14 +412,15 @@ exports.createOrder = asyncHandler(async (req, res) => {
             : normPrice;
         const pUnit = (p.unit || p.unitType || "g").toLowerCase();
         const weightMultiplier = pUnit === "kg" ? pQty : pQty / 1000;
-        calculatedNormalItemsTotal += normPrice * weightMultiplier;
-        calculatedDiscountedItemsTotal += discPrice * weightMultiplier;
+        calculatedNormalItemsTotal += Math.round(normPrice * weightMultiplier * 100) / 100;
+        calculatedDiscountedItemsTotal += Math.round(discPrice * weightMultiplier * 100) / 100;
     }
     for (const pkg of cartPackages) {
         const pkgQty = parseFloat(pkg.quantity) || 0;
         const pkgPrice = parseFloat(pkg.price) || 0;
-        calculatedNormalItemsTotal += pkgPrice * pkgQty;
-        calculatedDiscountedItemsTotal += pkgPrice * pkgQty;
+        const pkgSubtotal = Math.round(pkgPrice * pkgQty * 100) / 100;
+        calculatedNormalItemsTotal += pkgSubtotal;
+        calculatedDiscountedItemsTotal += pkgSubtotal;
     }
 
     const isFreeDeliveryCoupon = Boolean(
@@ -461,7 +462,10 @@ exports.createOrder = asyncHandler(async (req, res) => {
         console.warn(`⚠️ [createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Expected Discounted: ${expectedDiscountedGrandTotal}, Expected Normal-Discount: ${expectedNormalMinusDiscountGrandTotal}`);
         return safeRespond(400, {
             status: false,
+            code: "ORDER_TOTAL_MISMATCH",
             message: `Order total mismatch. Expected Rs. ${expectedDiscountedGrandTotal.toFixed(2)}, but received Rs. ${Number(grandTotal).toFixed(2)}.`,
+            expectedTotal: expectedDiscountedGrandTotal,
+            clientTotal: Number(grandTotal),
         });
     }
 
