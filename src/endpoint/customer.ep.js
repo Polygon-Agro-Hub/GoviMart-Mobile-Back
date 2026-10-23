@@ -541,7 +541,7 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
     const phoneChangeToken = jwt.sign(
       { userId, phoneCode, phoneNumber: normalizedPhone, email: targetEmail },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
 
     if (method === "sms") {
@@ -774,7 +774,7 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
     const newSignupToken = jwt.sign(
       { userId, phoneCode, phoneNumber, email: targetEmail },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
 
     if (method === "sms") {
