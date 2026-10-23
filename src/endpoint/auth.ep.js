@@ -349,6 +349,17 @@ const sendEmailOtp = async (email, otp, options = {}) => {
 };
 
 const sendShoutoutSms = async (phoneNumber, code) => {
+  let cleanDigits = String(phoneNumber || "").trim().replace(/[^0-9]/g, "");
+  if (cleanDigits.startsWith("940")) {
+    cleanDigits = "94" + cleanDigits.slice(3);
+  } else if (cleanDigits.startsWith("0")) {
+    cleanDigits = "94" + cleanDigits.replace(/^0+/, "");
+  } else if (!cleanDigits.startsWith("94") && cleanDigits.length === 9) {
+    cleanDigits = "94" + cleanDigits;
+  }
+
+  const formattedPhone = `+${cleanDigits}`;
+
   const message = `Your OTP for verification is: ${code}`;
   const apiUrl = "https://api.getshoutout.com/coreservice/messages";
   const headers = {
@@ -359,7 +370,7 @@ const sendShoutoutSms = async (phoneNumber, code) => {
     source: "Polygon",
     transports: ["sms"],
     content: { sms: message },
-    destinations: [phoneNumber],
+    destinations: [formattedPhone],
   };
 
   const response = await fetch(apiUrl, {
@@ -369,10 +380,24 @@ const sendShoutoutSms = async (phoneNumber, code) => {
   });
 
   const data = await response.json();
-  if (!response.ok || (!data.referenceId && !data.reference_id)) {
-    throw new Error(data.message || "Failed to send SMS OTP via Shoutout.");
+  const refId =
+    data.referenceId ||
+    data.reference_id ||
+    (Array.isArray(data.responses) && (data.responses[0]?.reference_id || data.responses[0]?.referenceId));
+
+  const isSuccess =
+    response.ok &&
+    (refId || data.status === "1001" || data.status === 1001 || data.description === "submit success");
+
+  if (!isSuccess) {
+    const errorMsg =
+      data.message ||
+      data.error ||
+      data.description ||
+      `Failed to send SMS OTP via Shoutout (HTTP ${response.status}).`;
+    throw new Error(errorMsg);
   }
-  return data.referenceId || data.reference_id;
+  return refId || "SUCCESS";
 };
 
 // Register User
@@ -1522,6 +1547,30 @@ exports.forgotPasswordReset = asyncHandler(async (req, res) => {
       return res.status(400).json({
         status: false,
         message: "Invalid password reset authorization.",
+      });
+    }
+
+    const user = await userDao.getUserPasswordByIdDao(decoded.userId);
+    if (!user) {
+      return res.status(404).json({
+        status: false,
+        message: "User not found.",
+      });
+    }
+
+    let isSamePassword = false;
+    if (user.password) {
+      isSamePassword = bcrypt.compareSync(newPassword, user.password);
+      if (!isSamePassword && /^[0-9]{9}[vVxX]$/.test(newPassword)) {
+        isSamePassword = bcrypt.compareSync(newPassword.toUpperCase(), user.password);
+      }
+    }
+
+    if (isSamePassword) {
+      return res.status(400).json({
+        status: false,
+        code: "SAME_PASSWORD",
+        message: "New password cannot be the same as your current password. Please choose a different password.",
       });
     }
 

@@ -546,9 +546,9 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
 
     if (method === "sms") {
       try {
-        const fullPhone = `${phoneCode}${normalizedPhone}`
-          .replace(/\+/g, "")
-          .replace(/\s+/g, "");
+        const cleanDigits = String(normalizedPhone).replace(/^0+/, "");
+        const fullPhone = `+${phoneCode.replace(/\+/g, "")}${cleanDigits}`;
+        console.log(`[Phone Change OTP] Generated OTP for user ${userId} (${fullPhone}): ${otp}`);
         await userAuthEp.sendShoutoutSms(fullPhone, otp);
         console.log(`[SMS] Phone change OTP sent to ${fullPhone}`);
       } catch (smsErr) {
@@ -779,9 +779,9 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
 
     if (method === "sms") {
       try {
-        const fullPhone = `${phoneCode}${phoneNumber}`
-          .replace(/\+/g, "")
-          .replace(/\s+/g, "");
+        const cleanDigits = String(phoneNumber).replace(/[^0-9]/g, "").replace(/^0+/, "");
+        const fullPhone = `+${phoneCode.replace(/\+/g, "")}${cleanDigits}`;
+        console.log(`[Phone Change OTP Resend] Generated OTP for user ${userId} (${fullPhone}): ${otp}`);
         await userAuthEp.sendShoutoutSms(fullPhone, otp);
         console.log(`[SMS] Phone change OTP resent to ${fullPhone}`);
       } catch (smsErr) {
