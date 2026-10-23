@@ -281,16 +281,11 @@ const sendEmailOtp = async (email, otp, options = {}) => {
     ? "Enter this OTP on the verification page to reset your password."
     : "Enter this OTP on the verification page to activate your account.");
 
-  const logoPath = path.join(__dirname, "..", "assets", "polygon-logo.png");
-  const logoExists = fs.existsSync(logoPath);
+  const logoUrl =
+    (process.env.R2_ENDPOINT ? `${process.env.R2_ENDPOINT}/assets/polygon-logo.png` : null) ||
+    "https://pub-c6c0c1ff8b3448d7a26dde3ec91eb3a5.r2.dev/assets/polygon-logo.png";
 
-  let logoHtml = `<h2 style="margin: 0; color: #FF7F00; font-size: 26px; font-weight: 700;">Polygon</h2>`;
-  let attachLogo = false;
-
-  if (logoExists) {
-    logoHtml = `<img src="cid:polygon_logo" alt="Polygon" width="180" style="display: block; width: 180px; max-width: 180px; height: auto; margin: 0 auto; border: 0; outline: none; text-decoration: none;" />`;
-    attachLogo = true;
-  }
+  const logoHtml = `<img src="${logoUrl}" alt="Polygon" width="180" style="display: block; width: 180px; max-width: 180px; height: auto; margin: 0 auto; border: 0; outline: none; text-decoration: none;" />`;
 
   const transporter = nodemailer.createTransport({
     host: process.env.EMAIL_HOST || "smtp.gmail.com",
@@ -349,17 +344,6 @@ const sendEmailOtp = async (email, otp, options = {}) => {
     html: htmlContent,
     text: `Hello,\n\n${introText ? introText + '\n\n' : ''}${actionText}\n\n${otp}\n\nThis code is valid for 4 minutes.\n${instructionText}`,
   };
-
-  if (attachLogo) {
-    mailOptions.attachments = [
-      {
-        filename: false,
-        path: logoPath,
-        cid: "polygon_logo",
-        contentDisposition: "inline",
-      },
-    ];
-  }
 
   await transporter.sendMail(mailOptions);
 };
@@ -528,7 +512,7 @@ exports.userSignup = asyncHandler(async (req, res) => {
     const signupToken = jwt.sign(
       { signupData: req.body },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
 
     // Determine verification method based on country code
@@ -848,7 +832,7 @@ exports.resendSignupOtp = asyncHandler(async (req, res) => {
     const newSignupToken = jwt.sign(
       { signupData },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
 
     const method = phoneCode === "+94" ? "sms" : "email";
@@ -1195,7 +1179,7 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
         type: type,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
 
     if (type === "email") {
@@ -1305,7 +1289,7 @@ exports.forgotPasswordResendOtp = asyncHandler(async (req, res) => {
     const newResetToken = jwt.sign(
       { userId, email, phoneCode, phoneNumber, type },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
 
     if (type === "email") {
