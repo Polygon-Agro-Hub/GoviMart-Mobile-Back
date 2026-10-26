@@ -21,7 +21,7 @@ exports.getComplainCategoriesDao = async () => {
     const [results] = await db.admin.promise().query(sql);
     return results;
   } catch (err) {
-    console.error("Database error in getComplainCategoriesDao:", err);
+    console.error("❌ Database error in getComplainCategoriesDao:", err);
     throw new Error(
       "Database error while fetching complain categories: " + err.message,
     );
@@ -40,7 +40,7 @@ exports.getUserCusIdDao = async (userId) => {
     const [results] = await db.collectionofficer.promise().query(sql, [userId]);
     return results[0] && results[0].cusId ? results[0].cusId : null;
   } catch (err) {
-    console.error("Database error in getUserCusIdDao:", err);
+    console.error("❌ Database error in getUserCusIdDao:", err);
     throw err;
   }
 };
@@ -60,7 +60,7 @@ exports.getLastComplainRefIdByUserDao = async (userId, cusId) => {
       .query(sql, [userId, `${cusId}%`]);
     return results[0] ? results[0].refId : null;
   } catch (err) {
-    console.error("Database error in getLastComplainRefIdByUserDao:", err);
+    console.error("❌ Database error in getLastComplainRefIdByUserDao:", err);
     throw err;
   }
 };
@@ -78,7 +78,7 @@ exports.getLastComplainRefIdDao = async () => {
     const [results] = await db.collectionofficer.promise().query(sql);
     return results[0] ? results[0].refId : null;
   } catch (err) {
-    console.error("Database error in getLastComplainRefIdDao:", err);
+    console.error("❌ Database error in getLastComplainRefIdDao:", err);
     throw err;
   }
 };
@@ -101,7 +101,7 @@ exports.createComplainDao = async (
       .query(sql, [userId, complaicategoryId, refId, complain, "Pending"]);
     return result.insertId;
   } catch (err) {
-    console.error("Database error in createComplainDao:", err);
+    console.error("❌ Database error in createComplainDao:", err);
     throw err;
   }
 };
@@ -118,7 +118,7 @@ exports.addComplainImageDao = async (complainId, imageUrl) => {
       .query(sql, [complainId, imageUrl]);
     return result;
   } catch (err) {
-    console.error("Database error in addComplainImageDao:", err);
+    console.error("❌ Database error in addComplainImageDao:", err);
     throw err;
   }
 };
@@ -161,7 +161,7 @@ exports.getComplainByIdDao = async (complainId) => {
       images: imageResults,
     };
   } catch (err) {
-    console.error("Database error in getComplainByIdDao:", err);
+    console.error("❌ Database error in getComplainByIdDao:", err);
     throw new Error("Database error while fetching complain: " + err.message);
   }
 };
@@ -214,7 +214,7 @@ exports.getComplainsByUserIdDao = async (userId) => {
         })),
     }));
   } catch (err) {
-    console.error("Database error in getComplainsByUserIdDao:", err);
+    console.error("❌ Database error in getComplainsByUserIdDao:", err);
     throw new Error(
       "Database error while fetching user complains: " + err.message,
     );

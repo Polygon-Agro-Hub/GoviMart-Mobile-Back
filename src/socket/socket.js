@@ -27,12 +27,12 @@ const initSocket = (httpServer) => {
           socket.userId = decoded.id;
           socket.user = decoded;
         } catch (jwtErr) {
-          console.warn("[Socket] Token verification failed:", jwtErr.message);
+          console.warn("⚠️ [Socket] Token verification failed:", jwtErr.message);
         }
       }
       return next();
     } catch (err) {
-      console.error("[Socket] Auth middleware error:", err);
+      console.error("❌ [Socket] Auth middleware error:", err);
       return next();
     }
   });
@@ -84,7 +84,7 @@ const initSocket = (httpServer) => {
             return;
           }
         } catch (tokenErr) {
-          console.warn("[Socket Security] Token verification failed on register_user:", tokenErr.message);
+          console.warn("⚠️ [Socket Security] Token verification failed on register_user:", tokenErr.message);
           return;
         }
       }
@@ -127,7 +127,7 @@ const getIO = () => {
 
 const emitNotificationToUser = (userId, notification) => {
   if (!io) {
-    console.warn("[Socket] IO not initialized, cannot emit notification");
+    console.warn("⚠️ [Socket] IO not initialized, cannot emit notification");
     return false;
   }
 
@@ -140,7 +140,7 @@ const emitNotificationToUser = (userId, notification) => {
 
 const emitCatalogUpdate = (data) => {
   if (!io) {
-    console.warn("[Socket] IO not initialized, cannot emit catalog update");
+    console.warn("⚠️ [Socket] IO not initialized, cannot emit catalog update");
     return false;
   }
 
@@ -153,7 +153,7 @@ const emitCatalogUpdate = (data) => {
 
 const emitUnreadCountToUser = (userId, unreadCount) => {
   if (!io) {
-    console.warn("[Socket] IO not initialized, cannot emit unread count");
+    console.warn("⚠️ [Socket] IO not initialized, cannot emit unread count");
     return false;
   }
 

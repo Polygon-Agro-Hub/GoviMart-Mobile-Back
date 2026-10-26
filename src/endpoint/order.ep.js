@@ -23,7 +23,7 @@ exports.getRetailOrderHistory = async (req, res) => {
             orderHistory,
         });
     } catch (err) {
-        console.error("Error fetching order history:", err);
+        console.error("❌ Error fetching order history:", err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch order history.",
@@ -37,7 +37,7 @@ exports.getRetailOrderById = async (req, res) => {
         const processOrderId = req.query?.processOrderId;
         const { userId } = req.user;
         const targetId = processOrderId || orderId;
-        console.log("Received orderId:", orderId, "processOrderId:", processOrderId, "for userId:", userId); // Debug log
+
 
         const order = await RetailOrderDao.getRetailOrderByIdDao(targetId, userId, processOrderId);
 
@@ -47,7 +47,7 @@ exports.getRetailOrderById = async (req, res) => {
             order,
         });
     } catch (err) {
-        console.error("Error fetching order for orderId:", req.params.orderId, err);
+        console.error("❌ Error fetching order for orderId:", req.params.orderId, err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch order.",
@@ -67,7 +67,7 @@ exports.getOrderPackages = async (req, res) => {
             data: packages
         });
     } catch (error) {
-        console.error('Error in getPackagesByOrderId:', error);
+        console.error('❌ Error in getPackagesByOrderId:', error);
         res.status(500).json({
             status: false,
             message: error?.toString() || 'Unknown server error'
@@ -88,10 +88,9 @@ exports.getOrderAdditionalItems = async (req, res) => {
             data: additionalItems
         });
 
-        console.log("getOrderAdditionalItems executed for orderId:", orderId);
-        console.log("Additional items:", additionalItems);
+
     } catch (error) {
-        console.error('Error in getOrderAdditionalItems:', error);
+        console.error('❌ Error in getOrderAdditionalItems:', error);
         res.status(500).json({
             status: false,
             message: error?.toString() || 'Unknown server error'
@@ -104,7 +103,7 @@ exports.checkCouponAvalability = async (req, res) => {
         const { userId } = req.user;
         const { coupon, deliveryMethod } = await couponValidationSchema.validateAsync(req.body);
 
-        console.log('coupon detailsss', req.body);
+
 
         const currentDate = new Date();
         let discount = 0;
@@ -118,7 +117,7 @@ exports.checkCouponAvalability = async (req, res) => {
         };
 
         const couponData = await RetailOrderDao.getCouponDetailsDao(coupon);
-        console.log("Coupon data:", couponData);
+
 
         if (!couponData || couponData === null) {
             return res.status(404).json({
@@ -150,7 +149,7 @@ exports.checkCouponAvalability = async (req, res) => {
         const startDate = couponData.startDate ? new Date(couponData.startDate) : null;
         const endDate = couponData.endDate ? new Date(couponData.endDate) : null;
 
-        console.log(currentDate, startDate);
+
 
         if (startDate && !isNaN(startDate.getTime()) && currentDate < startDate) {
             return res.status(400).json({
@@ -234,7 +233,7 @@ exports.checkCouponAvalability = async (req, res) => {
             code: couponData.code,
         });
     } catch (err) {
-        console.error("Error validating coupon:", err);
+        console.error("❌ Error validating coupon:", err);
         res.status(500).json({
             status: false,
             message: err?.message || "Invalid coupon code",
@@ -251,7 +250,7 @@ exports.getAvailableCoupons = async (req, res) => {
             data: coupons,
         });
     } catch (err) {
-        console.error("Error fetching available coupons:", err);
+        console.error("❌ Error fetching available coupons:", err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch available coupons.",
@@ -271,7 +270,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 1. Validate request payload ──────────────────────────────────────────
     const { error, value } = createOrderSchema.validate(req.body, { abortEarly: false });
     if (error) {
-        console.error("[createOrder] Validation error:", error.details.map((d) => d.message));
+        console.error("❌ [createOrder] Validation error:", error.details.map((d) => d.message));
         return res.status(400).json({
             status: false,
             message: "Validation failed: " + error.details.map((d) => d.message).join("; "),
@@ -338,7 +337,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
             resolvedPhone1 = resolvedPhone1 || userProfile.phoneNumber || req.user.phoneNumber || "";
         }
     } catch (e) {
-        console.warn("[createOrder] Profile lookup fallback failed:", e.message);
+        console.warn(" ⚠️ [createOrder] Profile lookup fallback failed:", e.message);
     }
     resolvedTitle = resolvedTitle || "Mr";
     resolvedFullName = resolvedFullName || "Customer";
@@ -351,7 +350,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
         try {
             const recentOrder = await RetailOrderDao.getRecentOrderByUserDao(userId, 15);
             if (recentOrder) {
-                console.log("[createOrder] Cart was already converted to an order recently. Returning existing order:", recentOrder.orderId);
+
                 return safeRespond(200, {
                     status: true,
                     message: "Order was already placed successfully",
@@ -364,7 +363,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 });
             }
         } catch (recentErr) {
-            console.warn("[createOrder] Error checking recent order fallback:", recentErr.message);
+            console.warn(" ⚠️ [createOrder] Error checking recent order fallback:", recentErr.message);
         }
 
         return safeRespond(403, {
@@ -413,14 +412,15 @@ exports.createOrder = asyncHandler(async (req, res) => {
             : normPrice;
         const pUnit = (p.unit || p.unitType || "g").toLowerCase();
         const weightMultiplier = pUnit === "kg" ? pQty : pQty / 1000;
-        calculatedNormalItemsTotal += normPrice * weightMultiplier;
-        calculatedDiscountedItemsTotal += discPrice * weightMultiplier;
+        calculatedNormalItemsTotal += Math.round(normPrice * weightMultiplier * 100) / 100;
+        calculatedDiscountedItemsTotal += Math.round(discPrice * weightMultiplier * 100) / 100;
     }
     for (const pkg of cartPackages) {
         const pkgQty = parseFloat(pkg.quantity) || 0;
         const pkgPrice = parseFloat(pkg.price) || 0;
-        calculatedNormalItemsTotal += pkgPrice * pkgQty;
-        calculatedDiscountedItemsTotal += pkgPrice * pkgQty;
+        const pkgSubtotal = Math.round(pkgPrice * pkgQty * 100) / 100;
+        calculatedNormalItemsTotal += pkgSubtotal;
+        calculatedDiscountedItemsTotal += pkgSubtotal;
     }
 
     const isFreeDeliveryCoupon = Boolean(
@@ -459,10 +459,13 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
     // Verify grandTotal from client against server-calculated grandTotal
     if (!isMatch) {
-        console.warn(`[createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Expected Discounted: ${expectedDiscountedGrandTotal}, Expected Normal-Discount: ${expectedNormalMinusDiscountGrandTotal}`);
+        console.warn(`⚠️ [createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Expected Discounted: ${expectedDiscountedGrandTotal}, Expected Normal-Discount: ${expectedNormalMinusDiscountGrandTotal}`);
         return safeRespond(400, {
             status: false,
+            code: "ORDER_TOTAL_MISMATCH",
             message: `Order total mismatch. Expected Rs. ${expectedDiscountedGrandTotal.toFixed(2)}, but received Rs. ${Number(grandTotal).toFixed(2)}.`,
+            expectedTotal: expectedDiscountedGrandTotal,
+            clientTotal: Number(grandTotal),
         });
     }
 
@@ -759,7 +762,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         userId,
                         requestedCredit
                     );
-                    console.log(`[createOrder] Deducted Rs. ${requestedCredit} credit from marketplaceusers for userId: ${userId}`);
+
                 }
 
                 // ── 5f. Commit ────────────────────────────────────────────────
@@ -775,12 +778,12 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                     // ── Clear cart (best-effort, after commit) ────────────
                     RetailOrderDao.clearCartAfterOrderDao(effectiveCartId).catch((clearErr) => {
-                        console.error("[createOrder] Cart clear failed (non-fatal):", clearErr);
+                        console.error("❌ [createOrder] Cart clear failed (non-fatal):", clearErr);
                     });
 
                     // ── Refresh marketplaceusers.creditLimit (best-effort, after commit) ──
                     RetailOrderDao.recalculateAndPersistCreditLimitDao(userId).catch((limitErr) => {
-                        console.error("[createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
+                        console.error("❌ [createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
                     });
 
                     // ── ShoutOUT SMS Dispatch (best-effort, after commit) ──
@@ -824,7 +827,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                                 });
                             }
                         } catch (smsErr) {
-                            console.error("[createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
+                            console.error("❌ [createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
                         }
                     })();
 
@@ -854,7 +857,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     });
                 }
 
-                console.error("[createOrder] Transaction error:", err);
+                console.error("❌ [createOrder] Transaction error:", err);
                 return safeRespond(500, {
                     status: false,
                     message: "Order creation failed. Please try again.",
@@ -933,7 +936,7 @@ exports.getDeliveredOrdersTotal = async (req, res) => {
         const result = await RetailOrderDao.getDeliveredOrdersTotal(userId);
         return res.status(200).json({ success: true, data: result });
     } catch (error) {
-        console.error("Error in getDeliveredOrdersTotal:", error);
+        console.error("❌ Error in getDeliveredOrdersTotal:", error);
         return res.status(500).json({
             success: false,
             message: "Failed to fetch delivered orders total",

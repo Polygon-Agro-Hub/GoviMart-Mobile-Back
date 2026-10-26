@@ -108,7 +108,7 @@ exports.initiatePayment = asyncHandler(async (req, res) => {
         };
       }
     } catch (addrErr) {
-      console.warn("[Payment EP] Could not fetch saved address for user:", addrErr.message);
+      console.warn("⚠️ [Payment EP] Could not fetch saved address for user:", addrErr.message);
     }
 
     const customerDetails = {
@@ -145,7 +145,7 @@ exports.initiatePayment = asyncHandler(async (req, res) => {
       data: session,
     });
   } catch (error) {
-    console.error("[Payment Initiate Error]", error);
+    console.error("❌ [Payment Initiate Error]", error);
     return res.status(500).json({
       status: false,
       message: error.message || "Failed to initiate payment session",
@@ -181,7 +181,7 @@ exports.handlePaymentsLkWebhook = asyncHandler(async (req, res) => {
     const isSignatureValid = strategy.verifyWebhook(signatureHeader, rawBody);
 
     if (!isSignatureValid) {
-      console.error("[Payments.lk Webhook] Signature verification failed!");
+      console.error("❌ [Payments.lk Webhook] Signature verification failed!");
       return res.status(400).json({ error: "Invalid webhook signature" });
     }
 
@@ -220,11 +220,11 @@ exports.handlePaymentsLkWebhook = asyncHandler(async (req, res) => {
             );
           } else {
             console.warn(
-              `[Payments.lk Webhook] No user found for email: ${customerEmail} — card NOT saved`
+              `⚠️ [Payments.lk Webhook] No user found for email: ${customerEmail} — card NOT saved`
             );
           }
         } catch (lookupErr) {
-          console.error("[Payments.lk Webhook] Email→userId lookup failed:", lookupErr.message);
+          console.error("❌ [Payments.lk Webhook] Email→userId lookup failed:", lookupErr.message);
         }
       }
 
@@ -238,7 +238,7 @@ exports.handlePaymentsLkWebhook = asyncHandler(async (req, res) => {
       // Payment succeeded but processor did not vault the card
       const failedEmail = event.customer?.email || payload?.data?.customer?.email;
       console.warn(
-        `[Payments.lk Webhook] card.save_failed — payment went through but card was NOT kept.` +
+        `⚠️ [Payments.lk Webhook] card.save_failed — payment went through but card was NOT kept.` +
         (failedEmail ? ` Customer: ${failedEmail}` : "") +
         ` The customer should be prompted to save their card again.`
       );
@@ -279,25 +279,25 @@ exports.handlePaymentsLkWebhook = asyncHandler(async (req, res) => {
                 });
               }
             } catch (smsErr) {
-              console.warn("[Payments.lk Webhook] Order confirmed SMS error:", smsErr.message);
+              console.warn("⚠️ [Payments.lk Webhook] Order confirmed SMS error:", smsErr.message);
             }
           })();
         } catch (settleErr) {
           console.error(
-            `[Payments.lk Webhook] Failed to mark order paid:`,
+            `❌ [Payments.lk Webhook] Failed to mark order paid:`,
             settleErr
           );
         }
       }
     } else {
       console.warn(
-        `[Payments.lk Webhook] Event received with status unfulfilled: ${event.eventType}`
+        `⚠️ [Payments.lk Webhook] Event received with status unfulfilled: ${event.eventType}`
       );
     }
 
     return res.status(200).json({ received: true });
   } catch (error) {
-    console.error("[Payments.lk Webhook Error]", error);
+    console.error("❌ [Payments.lk Webhook Error]", error);
     return res.status(500).json({ error: "Server error processing webhook" });
   }
 });
@@ -344,7 +344,7 @@ exports.initiatePayHere = asyncHandler(async (req, res) => {
       data: result.rawConfig,
     });
   } catch (error) {
-    console.error("PayHere initiation error:", error);
+    console.error("❌ PayHere initiation error:", error);
     return res.status(500).json({
       status: false,
       message: error.message || "Failed to initiate PayHere payment",
@@ -363,7 +363,7 @@ exports.handlePayHereNotify = asyncHandler(async (req, res) => {
 
     const isValid = verifyPayHereNotify(payload, merchantSecret);
     if (!isValid) {
-      console.error("[PayHere Webhook] Signature verification failed!");
+      console.error("❌ [PayHere Webhook] Signature verification failed!");
       return res.status(400).send("Invalid signature");
     }
 
@@ -418,22 +418,22 @@ exports.handlePayHereNotify = asyncHandler(async (req, res) => {
                 });
               }
             } catch (smsErr) {
-              console.warn("[PayHere Webhook] Order confirmed SMS error:", smsErr.message);
+              console.warn("⚠️ [PayHere Webhook] Order confirmed SMS error:", smsErr.message);
             }
           })();
         } catch (settleErr) {
-          console.error(`[PayHere Webhook] Failed to mark order paid:`, settleErr);
+          console.error(`❌ [PayHere Webhook] Failed to mark order paid:`, settleErr);
         }
       }
     } else {
       console.warn(
-        `[PayHere Webhook] Payment not successful. Status code: ${status_code}`
+        `⚠️ [PayHere Webhook] Payment not successful. Status code: ${status_code}`
       );
     }
 
     return res.status(200).send("OK");
   } catch (error) {
-    console.error("[PayHere Webhook] Error:", error);
+    console.error("❌ [PayHere Webhook] Error:", error);
     return res.status(500).send("Server Error");
   }
 });
@@ -515,7 +515,7 @@ exports.syncCheckout = asyncHandler(async (req, res) => {
         try {
           await orderDao.markOrderPaidDao(orderIdentifier, payment.id || checkoutId, parseFloat(amountInLkr));
         } catch (markErr) {
-          console.warn("[Sync Checkout] markOrderPaidDao error:", markErr.message);
+          console.warn("⚠️ [Sync Checkout] markOrderPaidDao error:", markErr.message);
         }
       }
     }
@@ -530,7 +530,7 @@ exports.syncCheckout = asyncHandler(async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("[Sync Checkout Error]", err);
+    console.error("❌ [Sync Checkout Error]", err);
     return res.status(500).json({
       status: false,
       message: err.message || "Failed to sync checkout with Payments.lk",
@@ -614,7 +614,7 @@ exports.chargeSavedCard = asyncHandler(async (req, res) => {
       try {
         await orderDao.markOrderPaidDao(orderId, result.paymentId || result.id, parseFloat(amount));
       } catch (markErr) {
-        console.warn("[Charge Saved Card] markOrderPaidDao error:", markErr.message);
+        console.warn("⚠️ [Charge Saved Card] markOrderPaidDao error:", markErr.message);
       }
     }
 
@@ -624,7 +624,7 @@ exports.chargeSavedCard = asyncHandler(async (req, res) => {
       data: result,
     });
   } catch (err) {
-    console.error("[Charge Saved Card Error]", err);
+    console.error("❌ [Charge Saved Card Error]", err);
     const errMsg = err.message || "Failed to charge saved card";
     const isCardInvalid =
       errMsg.includes("No such object") ||
@@ -638,7 +638,7 @@ exports.chargeSavedCard = asyncHandler(async (req, res) => {
       try {
         await savedCardService.removeCard(req.user.id);
       } catch (cleanErr) {
-        console.warn("[Charge Saved Card] Failed to clean up invalid card:", cleanErr.message);
+        console.warn("⚠️ [Charge Saved Card] Failed to clean up invalid card:", cleanErr.message);
       }
     }
 

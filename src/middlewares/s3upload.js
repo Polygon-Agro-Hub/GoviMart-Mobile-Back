@@ -47,7 +47,7 @@ const uploadFileToS3 = async (fileBuffer, fileName, keyPrefix) => {
 
     return fileUrl;
   } catch (error) {
-    console.error("Error uploading to R2:", error);
+    console.error("❌ Error uploading to R2:", error);
     throw new Error("Failed to upload file to R2");
   }
 };

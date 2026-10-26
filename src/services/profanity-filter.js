@@ -162,7 +162,7 @@ async function getFilter() {
           `SELECT word FROM blockwords WHERE word IS NOT NULL AND TRIM(word) != ''`,
           (err, results) => {
             if (err) {
-              console.warn('[ProfanityFilter] Warning reading blockwords table:', err.message);
+              console.warn('⚠️ [ProfanityFilter] Warning reading blockwords table:', err.message);
               return resolve([]);
             }
             resolve(results || []);
@@ -176,7 +176,7 @@ async function getFilter() {
       lastBuiltAt = Date.now();
       return filter;
     } catch (error) {
-      console.error('[ProfanityFilter] Failed to rebuild filter:', error);
+      console.error('❌ [ProfanityFilter] Failed to rebuild filter:', error);
       return filter;
     } finally {
       inFlight = null;

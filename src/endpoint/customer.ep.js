@@ -23,7 +23,7 @@ exports.getCustomerProfile = asyncHandler(async (req, res) => {
     }
     return res.status(200).json({ status: true, data: results[0] });
   } catch (error) {
-    console.error("Profile fetch error:", error);
+    console.error("❌ Profile fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -37,7 +37,7 @@ exports.getSuggestions = asyncHandler(async (req, res) => {
       items: results,
     });
   } catch (error) {
-    console.error("Suggestions fetch error:", error);
+    console.error("❌ Suggestions fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -51,7 +51,7 @@ exports.getIncludeItems = asyncHandler(async (req, res) => {
       items: results,
     });
   } catch (error) {
-    console.error("Include items fetch error:", error);
+    console.error("❌ Include items fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -70,7 +70,7 @@ exports.addIncludeItems = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Included items saved successfully" });
   } catch (error) {
-    console.error("Include items save error:", error);
+    console.error("❌ Include items save error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -89,7 +89,7 @@ exports.deleteIncluded = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Included items deleted successfully" });
   } catch (error) {
-    console.error("Include items delete error:", error);
+    console.error("❌ Include items delete error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -103,7 +103,7 @@ exports.getExcludeItems = asyncHandler(async (req, res) => {
       items: results,
     });
   } catch (error) {
-    console.error("Exclude items fetch error:", error);
+    console.error("❌ Exclude items fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -122,7 +122,7 @@ exports.addExcludeItems = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Excluded items saved successfully" });
   } catch (error) {
-    console.error("Exclude items save error:", error);
+    console.error("❌ Exclude items save error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -141,7 +141,7 @@ exports.deleteExcluded = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Excluded items deleted successfully" });
   } catch (error) {
-    console.error("Exclude items delete error:", error);
+    console.error("❌ Exclude items delete error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -156,7 +156,7 @@ exports.updateUserStatus = asyncHandler(async (req, res) => {
       result,
     });
   } catch (error) {
-    console.error("Update status error:", error);
+    console.error("❌ Update status error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -190,7 +190,7 @@ exports.getSavedAddresses = asyncHandler(async (req, res) => {
       result: addresses,
     });
   } catch (error) {
-    console.error("Error fetching saved addresses:", error);
+    console.error("❌ Error fetching saved addresses:", error);
     return res.status(500).json({
       status: false,
       message: "Internal server error",
@@ -209,7 +209,7 @@ exports.getAccountDetails = asyncHandler(async (req, res) => {
     }
     return res.status(200).json({ status: true, data: results[0] });
   } catch (error) {
-    console.error("Account details fetch error:", error);
+    console.error("❌ Account details fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -241,7 +241,7 @@ exports.addAddress = asyncHandler(async (req, res) => {
         message: "An address with this name already exists. Please use a different name.",
       });
     }
-    console.error("Add address error:", error);
+    console.error("❌ Add address error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -285,7 +285,7 @@ exports.updateAddress = asyncHandler(async (req, res) => {
         message: "An address with this name already exists. Please use a different name.",
       });
     }
-    console.error("Update address error:", error);
+    console.error("❌ Update address error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -319,7 +319,7 @@ exports.deleteAddress = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Address deleted successfully" });
   } catch (error) {
-    console.error("Delete address error:", error);
+    console.error("❌ Delete address error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -366,7 +366,7 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
           const deleteFromR2 = require("../middlewares/s3delete");
           await deleteFromR2(oldImage);
         } catch (delErr) {
-          console.warn("Failed to delete old profile image from R2:", delErr.message);
+          console.warn(" ⚠️ Failed to delete old profile image from R2:", delErr.message);
         }
       }
     }
@@ -389,7 +389,7 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "User details updated successfully" });
   } catch (error) {
-    console.error("Update user details error:", error);
+    console.error("❌ Update user details error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -401,7 +401,7 @@ exports.getDeleteAccountStatus = asyncHandler(async (req, res) => {
     const statusData = await customerDao.getDeleteAccountStatusDao(userId);
     return res.status(200).json({ status: true, data: statusData });
   } catch (error) {
-    console.error("Get delete account status error:", error);
+    console.error("❌ Get delete account status error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -436,7 +436,7 @@ exports.deleteUserAccount = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Account deleted successfully" });
   } catch (error) {
-    console.error("Delete account error:", error);
+    console.error("❌ Delete account error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -469,10 +469,23 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
       });
     }
 
+    const emailRegex =
+      /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
+
+    // Resolve target email from body, req.user, or database
+    let targetEmail = (req.body.email && String(req.body.email).trim().toLowerCase()) || null;
+    if (!targetEmail && req.user?.email) {
+      targetEmail = String(req.user.email).trim().toLowerCase();
+    }
+    if (!targetEmail) {
+      const profile = await customerDao.getCustomerProfileDao(userId);
+      if (profile && profile.length > 0 && profile[0].email) {
+        targetEmail = String(profile[0].email).trim().toLowerCase();
+      }
+    }
+
     if (req.body.email) {
       const cleanEmail = String(req.body.email).trim();
-      const emailRegex =
-        /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
       if (
         cleanEmail.includes(" ") ||
         cleanEmail.includes("..") ||
@@ -489,8 +502,20 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
       }
     }
 
+    // Determine method: SMS for Sri Lanka (+94), email for all other countries
+    const method = phoneCode === "+94" ? "sms" : "email";
+
+    if (method === "email") {
+      if (!targetEmail || !emailRegex.test(targetEmail)) {
+        return res.status(400).json({
+          status: false,
+          message: "A valid email address is required to receive verification code for overseas numbers.",
+        });
+      }
+    }
+
     const lockoutKeys = userAuthEp.getSignupLockoutKeys(
-      req.user.email,
+      targetEmail || req.user?.email,
       phoneCode,
       normalizedPhone
     );
@@ -510,37 +535,45 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
     phoneOtpAttempts.delete(referenceId);
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes
 
-    await authDao.saveOtpDao(referenceId, req.user.email || null, otp, expiresAt);
+    await authDao.saveOtpDao(referenceId, targetEmail || req.user?.email || null, otp, expiresAt);
 
-    // Stateless session token carrying the intended new phone
+    // Stateless session token carrying the intended new phone and email
     const phoneChangeToken = jwt.sign(
-      { userId, phoneCode, phoneNumber: normalizedPhone },
+      { userId, phoneCode, phoneNumber: normalizedPhone, email: targetEmail },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
-
-    // Determine method: SMS for Sri Lanka (+94), email for all other countries
-    const method = phoneCode === "+94" ? "sms" : "email";
 
     if (method === "sms") {
       try {
-        const fullPhone = `${phoneCode}${normalizedPhone}`
-          .replace(/\+/g, "")
-          .replace(/\s+/g, "");
+        const cleanDigits = String(normalizedPhone).replace(/^0+/, "");
+        const fullPhone = `+${phoneCode.replace(/\+/g, "")}${cleanDigits}`;
+        console.log(`[Phone Change OTP] Generated OTP for user ${userId} (${fullPhone}): ${otp}`);
         await userAuthEp.sendShoutoutSms(fullPhone, otp);
         console.log(`[SMS] Phone change OTP sent to ${fullPhone}`);
       } catch (smsErr) {
-        console.error("Failed to send Shoutout SMS for phone change:", smsErr.message);
+        console.error("❌ Failed to send Shoutout SMS for phone change:", smsErr.message);
+        return res.status(500).json({
+          status: false,
+          message: "Failed to send SMS verification code. Please try again later.",
+        });
       }
     } else {
       try {
-        const userEmail = req.user.email;
-        if (userEmail) {
-          await userAuthEp.sendEmailOtp(userEmail, otp);
-          console.log(`[Email] Phone change OTP sent to ${userEmail}`);
-        }
+        await userAuthEp.sendEmailOtp(targetEmail, otp, {
+          title: "Verify Your Mobile Number",
+          subject: "Polygon Mobile Number Update Verification",
+          introText: "You recently requested to update your mobile number for your Polygon account.",
+          actionText: "To verify and complete this mobile number update, please use the following One-Time Password (OTP):",
+          instructionText: "Enter this OTP in the Polygon app to verify and update your mobile number.",
+        });
+        console.log(`[Email] Phone change OTP sent to ${targetEmail}`);
       } catch (emailErr) {
-        console.error("Failed to send email OTP for phone change:", emailErr.message);
+        console.error("❌ Failed to send email OTP for phone change:", emailErr.message);
+        return res.status(500).json({
+          status: false,
+          message: "Failed to send verification email. Please try again later.",
+        });
       }
     }
 
@@ -554,7 +587,7 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
         : "Verification code has been sent to your email address.",
     });
   } catch (error) {
-    console.error("Send phone change OTP error:", error);
+    console.error("❌ Send phone change OTP error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -581,9 +614,9 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
       });
     }
 
-    const { userId, phoneCode, phoneNumber } = decoded;
+    const { userId, phoneCode, phoneNumber, email: tokenEmail } = decoded;
     const lockoutKeys = userAuthEp.getSignupLockoutKeys(
-      req.user?.email,
+      tokenEmail || req.user?.email,
       phoneCode,
       phoneNumber
     );
@@ -622,9 +655,10 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
         });
       }
 
+      const remainingAttempts = 5 - attempts;
       return res.status(400).json({
         status: false,
-        message: `Incorrect verification code. ${5 - attempts} attempts remaining.`,
+        message: `Incorrect verification code. ${remainingAttempts} ${remainingAttempts === 1 ? "attempt" : "attempts"} remaining.`,
       });
     }
 
@@ -671,7 +705,7 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
       message: "Your mobile number has been updated successfully.",
     });
   } catch (error) {
-    console.error("Verify phone change error:", error);
+    console.error("❌ Verify phone change error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -695,9 +729,18 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
       });
     }
 
-    const { userId, phoneCode, phoneNumber } = decoded;
+    const { userId, phoneCode, phoneNumber, email: tokenEmail } = decoded;
+
+    let targetEmail = tokenEmail || (req.user?.email ? String(req.user.email).trim().toLowerCase() : null);
+    if (!targetEmail) {
+      const profile = await customerDao.getCustomerProfileDao(userId);
+      if (profile && profile.length > 0 && profile[0].email) {
+        targetEmail = String(profile[0].email).trim().toLowerCase();
+      }
+    }
+
     const lockoutKeys = userAuthEp.getSignupLockoutKeys(
-      req.user?.email,
+      targetEmail || req.user?.email,
       phoneCode,
       phoneNumber
     );
@@ -712,40 +755,58 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
       });
     }
 
+    const method = phoneCode === "+94" ? "sms" : "email";
+
+    if (method === "email" && !targetEmail) {
+      return res.status(400).json({
+        status: false,
+        message: "A valid email address is required to receive verification code for overseas numbers.",
+      });
+    }
+
     const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
     phoneOtpAttempts.delete(referenceId);
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000);
 
-    await authDao.saveOtpDao(referenceId, req.user?.email || null, otp, expiresAt);
+    await authDao.saveOtpDao(referenceId, targetEmail || req.user?.email || null, otp, expiresAt);
 
     const newSignupToken = jwt.sign(
-      { userId, phoneCode, phoneNumber },
+      { userId, phoneCode, phoneNumber, email: targetEmail },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
-
-    const method = phoneCode === "+94" ? "sms" : "email";
 
     if (method === "sms") {
       try {
-        const fullPhone = `${phoneCode}${phoneNumber}`
-          .replace(/\+/g, "")
-          .replace(/\s+/g, "");
+        const cleanDigits = String(phoneNumber).replace(/[^0-9]/g, "").replace(/^0+/, "");
+        const fullPhone = `+${phoneCode.replace(/\+/g, "")}${cleanDigits}`;
+        console.log(`[Phone Change OTP Resend] Generated OTP for user ${userId} (${fullPhone}): ${otp}`);
         await userAuthEp.sendShoutoutSms(fullPhone, otp);
         console.log(`[SMS] Phone change OTP resent to ${fullPhone}`);
       } catch (smsErr) {
-        console.error("Failed to send Shoutout SMS on phone change resend:", smsErr.message);
+        console.error("❌ Failed to send Shoutout SMS on phone change resend:", smsErr.message);
+        return res.status(500).json({
+          status: false,
+          message: "Failed to resend SMS verification code. Please try again later.",
+        });
       }
     } else {
       try {
-        const userEmail = req.user?.email;
-        if (userEmail) {
-          await userAuthEp.sendEmailOtp(userEmail, otp);
-          console.log(`[Email] Phone change OTP resent to ${userEmail}`);
-        }
+        await userAuthEp.sendEmailOtp(targetEmail, otp, {
+          title: "Verify Your Mobile Number",
+          subject: "Polygon Mobile Number Update Verification",
+          introText: "You recently requested to update your mobile number for your Polygon account.",
+          actionText: "To verify and complete this mobile number update, please use the following One-Time Password (OTP):",
+          instructionText: "Enter this OTP in the Polygon app to verify and update your mobile number.",
+        });
+        console.log(`[Email] Phone change OTP resent to ${targetEmail}`);
       } catch (emailErr) {
-        console.error("Failed to send email OTP on phone change resend:", emailErr.message);
+        console.error("❌ Failed to send email OTP on phone change resend:", emailErr.message);
+        return res.status(500).json({
+          status: false,
+          message: "Failed to resend verification email. Please try again later.",
+        });
       }
     }
 
@@ -759,7 +820,7 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
         : "Verification code has been resent to your email address.",
     });
   } catch (error) {
-    console.error("Resend phone change OTP error:", error);
+    console.error("❌ Resend phone change OTP error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -793,7 +854,7 @@ exports.updateCreditBalance = asyncHandler(async (req, res) => {
       data: result,
     });
   } catch (error) {
-    console.error("Update credit balance error:", error);
+    console.error("❌ Update credit balance error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -824,7 +885,7 @@ exports.uploadProfileImage = asyncHandler(async (req, res) => {
         await deleteFromR2(oldImage);
       }
     } catch (delErr) {
-      console.warn("Failed to delete previous profile image from R2:", delErr.message);
+      console.warn(" ⚠️ Failed to delete previous profile image from R2:", delErr.message);
     }
 
     await customerDao.updateProfileImageDao(userId, imageUrl);
@@ -837,7 +898,7 @@ exports.uploadProfileImage = asyncHandler(async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Profile image upload error:", error);
+    console.error("❌ Profile image upload error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -852,7 +913,7 @@ exports.getDeliveryEligibility = asyncHandler(async (req, res) => {
       nearestCity: result.nearestCity,
     });
   } catch (error) {
-    console.error("Delivery eligibility fetch error:", error);
+    console.error("❌ Delivery eligibility fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });

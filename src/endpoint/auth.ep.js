@@ -203,7 +203,7 @@ exports.login = asyncHandler(async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Login failed:", err.message);
+    console.error("❌ Login failed:", err.message);
     return res.status(401).json({ success: false, message: err.message });
   }
 });
@@ -225,7 +225,7 @@ exports.getCities = asyncHandler(async (req, res) => {
       data: cities,
     });
   } catch (err) {
-    console.error("Error in getCities:", err.message);
+    console.error("❌ Error in getCities:", err.message);
     return res.status(500).json({
       status: false,
       message: "Failed to fetch cities",
@@ -258,7 +258,7 @@ exports.updateCityAvailability = asyncHandler(async (req, res) => {
       data: updatedCities,
     });
   } catch (err) {
-    console.error("Error updating city availability:", err.message);
+    console.error("❌ Error updating city availability:", err.message);
     return res.status(500).json({
       status: false,
       message: "Failed to update city availability",
@@ -269,7 +269,7 @@ exports.updateCityAvailability = asyncHandler(async (req, res) => {
 
 const sendEmailOtp = async (email, otp, options = {}) => {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    console.error("Email SMTP credentials not configured in env");
+    console.error("❌ Email SMTP credentials not configured in env");
     throw new Error("Email service not configured.");
   }
 
@@ -281,8 +281,11 @@ const sendEmailOtp = async (email, otp, options = {}) => {
     ? "Enter this OTP on the verification page to reset your password."
     : "Enter this OTP on the verification page to activate your account.");
 
-  const logoPath = path.join(__dirname, "..", "assets", "polygon-logo.png");
-  const logoExists = fs.existsSync(logoPath);
+  const logoUrl =
+    (process.env.R2_ENDPOINT ? `${process.env.R2_ENDPOINT}/assets/polygon-logo.png` : null) ||
+    "https://pub-c6c0c1ff8b3448d7a26dde3ec91eb3a5.r2.dev/assets/polygon-logo.png";
+
+  const logoHtml = `<img src="${logoUrl}" alt="Polygon" width="180" style="display: block; width: 180px; max-width: 180px; height: auto; margin: 0 auto; border: 0; outline: none; text-decoration: none;" />`;
 
   const transporter = nodemailer.createTransport({
     host: process.env.EMAIL_HOST || "smtp.gmail.com",
@@ -304,10 +307,6 @@ const sendEmailOtp = async (email, otp, options = {}) => {
   if (fs.existsSync(templatePath)) {
     htmlContent = fs.readFileSync(templatePath, "utf8");
 
-    const logoHtml = logoExists
-      ? `<img src="cid:polygon_logo" alt="Polygon" style="max-width: 180px; height: auto;" />`
-      : `<h2 style="margin:0; color:#FF7F00;">Polygon</h2>`;
-
     htmlContent = htmlContent
       .replace("{{logo_placeholder}}", logoHtml)
       .replace(/{{title}}/g, title)
@@ -319,7 +318,10 @@ const sendEmailOtp = async (email, otp, options = {}) => {
   } else {
     // Fallback if template doesn't exist
     htmlContent = `
-      <div style="font-family: Arial, sans-serif; padding: 20px;">
+      <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          ${logoHtml}
+        </div>
         <h2>${title}</h2>
         ${introSectionHtml}
         <p>${actionText}</p>
@@ -343,20 +345,21 @@ const sendEmailOtp = async (email, otp, options = {}) => {
     text: `Hello,\n\n${introText ? introText + '\n\n' : ''}${actionText}\n\n${otp}\n\nThis code is valid for 4 minutes.\n${instructionText}`,
   };
 
-  if (logoExists) {
-    mailOptions.attachments = [
-      {
-        filename: "polygon-logo.png",
-        path: logoPath,
-        cid: "polygon_logo",
-      },
-    ];
-  }
-
   await transporter.sendMail(mailOptions);
 };
 
 const sendShoutoutSms = async (phoneNumber, code) => {
+  let cleanDigits = String(phoneNumber || "").trim().replace(/[^0-9]/g, "");
+  if (cleanDigits.startsWith("940")) {
+    cleanDigits = "94" + cleanDigits.slice(3);
+  } else if (cleanDigits.startsWith("0")) {
+    cleanDigits = "94" + cleanDigits.replace(/^0+/, "");
+  } else if (!cleanDigits.startsWith("94") && cleanDigits.length === 9) {
+    cleanDigits = "94" + cleanDigits;
+  }
+
+  const formattedPhone = `+${cleanDigits}`;
+
   const message = `Your OTP for verification is: ${code}`;
   const apiUrl = "https://api.getshoutout.com/coreservice/messages";
   const headers = {
@@ -367,7 +370,7 @@ const sendShoutoutSms = async (phoneNumber, code) => {
     source: "Polygon",
     transports: ["sms"],
     content: { sms: message },
-    destinations: [phoneNumber],
+    destinations: [formattedPhone],
   };
 
   const response = await fetch(apiUrl, {
@@ -377,10 +380,24 @@ const sendShoutoutSms = async (phoneNumber, code) => {
   });
 
   const data = await response.json();
-  if (!response.ok || (!data.referenceId && !data.reference_id)) {
-    throw new Error(data.message || "Failed to send SMS OTP via Shoutout.");
+  const refId =
+    data.referenceId ||
+    data.reference_id ||
+    (Array.isArray(data.responses) && (data.responses[0]?.reference_id || data.responses[0]?.referenceId));
+
+  const isSuccess =
+    response.ok &&
+    (refId || data.status === "1001" || data.status === 1001 || data.description === "submit success");
+
+  if (!isSuccess) {
+    const errorMsg =
+      data.message ||
+      data.error ||
+      data.description ||
+      `Failed to send SMS OTP via Shoutout (HTTP ${response.status}).`;
+    throw new Error(errorMsg);
   }
-  return data.referenceId || data.reference_id;
+  return refId || "SUCCESS";
 };
 
 // Register User
@@ -520,7 +537,7 @@ exports.userSignup = asyncHandler(async (req, res) => {
     const signupToken = jwt.sign(
       { signupData: req.body },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
 
     // Determine verification method based on country code
@@ -533,7 +550,7 @@ exports.userSignup = asyncHandler(async (req, res) => {
         const smsReference = await sendShoutoutSms(fullPhone, otp);
         console.log(`[SMS] OTP successfully sent to ${fullPhone} with ref ${smsReference}`);
       } catch (smsErr) {
-        console.error("Failed to send Shoutout SMS:", smsErr.message);
+        console.error("❌ Failed to send Shoutout SMS:", smsErr.message);
 
       }
     } else {
@@ -542,7 +559,7 @@ exports.userSignup = asyncHandler(async (req, res) => {
         await sendEmailOtp(email, otp);
         console.log(`[Email] OTP successfully sent to ${email}`);
       } catch (emailErr) {
-        console.error("Failed to send verification email:", emailErr.message);
+        console.error("❌ Failed to send verification email:", emailErr.message);
       }
     }
 
@@ -558,7 +575,7 @@ exports.userSignup = asyncHandler(async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Error during signup:", err);
+    console.error("❌ Error during signup:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred during signup.",
@@ -659,7 +676,7 @@ exports.verifySignup = asyncHandler(async (req, res) => {
       const remainingAttempts = MAX_SIGNUP_ATTEMPTS - currentAttempts;
       return res.status(400).json({
         status: false,
-        message: `Incorrect verification code. ${remainingAttempts} attempts remaining.`,
+        message: `Incorrect verification code. ${remainingAttempts} ${remainingAttempts === 1 ? "attempt" : "attempts"} remaining.`,
       });
     }
 
@@ -765,7 +782,7 @@ exports.verifySignup = asyncHandler(async (req, res) => {
     }
 
   } catch (err) {
-    console.error("Error during signup verification:", err);
+    console.error("❌ Error during signup verification:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred during signup verification.",
@@ -840,7 +857,7 @@ exports.resendSignupOtp = asyncHandler(async (req, res) => {
     const newSignupToken = jwt.sign(
       { signupData },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
 
     const method = phoneCode === "+94" ? "sms" : "email";
@@ -850,13 +867,13 @@ exports.resendSignupOtp = asyncHandler(async (req, res) => {
         const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
         await sendShoutoutSms(fullPhone, otp);
       } catch (smsErr) {
-        console.error("Failed to send Shoutout SMS on resend:", smsErr.message);
+        console.error("❌ Failed to send Shoutout SMS on resend:", smsErr.message);
       }
     } else {
       try {
         await sendEmailOtp(email, otp);
       } catch (emailErr) {
-        console.error("Failed to send verification email on resend:", emailErr.message);
+        console.error("❌ Failed to send verification email on resend:", emailErr.message);
       }
     }
 
@@ -870,7 +887,7 @@ exports.resendSignupOtp = asyncHandler(async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Error during resend:", err);
+    console.error("❌ Error during resend:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred during resend.",
@@ -980,7 +997,7 @@ exports.updatePassword = asyncHandler(async (req, res) => {
       });
     }
   } catch (err) {
-    console.error("Error updating password:", err);
+    console.error("❌ Error updating password:", err);
     return res.status(500).json({
       status: false,
       message: "An error occurred while updating the password.",
@@ -1008,10 +1025,10 @@ exports.logout = asyncHandler(async (req, res) => {
         expiresAt = decoded.exp * 1000;
       }
     } catch (e) {
-      console.error("Error decoding token on logout:", e);
+      console.error("❌ Error decoding token on logout:", e);
     }
     blacklistedTokens.set(token, expiresAt);
-    console.log(`🔒 Token successfully blacklisted until: ${new Date(expiresAt).toISOString()}`);
+
   }
 
   res.clearCookie("authToken", {
@@ -1060,7 +1077,7 @@ exports.refreshToken = asyncHandler(async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Token refresh failed:", err.message);
+    console.error("❌ Token refresh failed:", err.message);
     return res.status(401).json({
       success: false,
       message: "Invalid or expired refresh token.",
@@ -1187,7 +1204,7 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
         type: type,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
 
     if (type === "email") {
@@ -1201,7 +1218,7 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
         });
         console.log(`[Forgot Password] Email OTP sent to ${user.email}`);
       } catch (mailErr) {
-        console.error("Failed to send password reset email:", mailErr.message);
+        console.error("❌ Failed to send password reset email:", mailErr.message);
       }
     } else {
       try {
@@ -1209,7 +1226,7 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
         await sendShoutoutSms(fullPhone, otp);
         console.log(`[Forgot Password] SMS OTP sent to ${fullPhone}`);
       } catch (smsErr) {
-        console.error("Failed to send password reset SMS:", smsErr.message);
+        console.error("❌ Failed to send password reset SMS:", smsErr.message);
       }
     }
 
@@ -1224,7 +1241,7 @@ exports.forgotPasswordRequestOtp = asyncHandler(async (req, res) => {
         : "Verification code has been sent to your mobile number.",
     });
   } catch (err) {
-    console.error("Error in forgotPasswordRequestOtp:", err);
+    console.error("❌ Error in forgotPasswordRequestOtp:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred while requesting verification code.",
@@ -1297,7 +1314,7 @@ exports.forgotPasswordResendOtp = asyncHandler(async (req, res) => {
     const newResetToken = jwt.sign(
       { userId, email, phoneCode, phoneNumber, type },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
 
     if (type === "email") {
@@ -1310,14 +1327,14 @@ exports.forgotPasswordResendOtp = asyncHandler(async (req, res) => {
           instructionText: "Enter this OTP on the verification page to reset your password.",
         });
       } catch (mailErr) {
-        console.error("Failed to resend password reset email:", mailErr.message);
+        console.error("❌ Failed to resend password reset email:", mailErr.message);
       }
     } else {
       try {
         const fullPhone = `${phoneCode}${phoneNumber}`.replace(/\+/g, "").replace(/\s+/g, "");
         await sendShoutoutSms(fullPhone, otp);
       } catch (smsErr) {
-        console.error("Failed to resend password reset SMS:", smsErr.message);
+        console.error("❌ Failed to resend password reset SMS:", smsErr.message);
       }
     }
 
@@ -1330,7 +1347,7 @@ exports.forgotPasswordResendOtp = asyncHandler(async (req, res) => {
         : "Verification code has been resent to your mobile number.",
     });
   } catch (err) {
-    console.error("Error in forgotPasswordResendOtp:", err);
+    console.error("❌ Error in forgotPasswordResendOtp:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred while resending verification code.",
@@ -1431,7 +1448,7 @@ exports.forgotPasswordVerifyOtp = asyncHandler(async (req, res) => {
       const remainingAttempts = MAX_FORGOT_PWD_ATTEMPTS - currentAttempts;
       return res.status(400).json({
         status: false,
-        message: `Incorrect verification code. ${remainingAttempts} attempts remaining.`,
+        message: `Incorrect verification code. ${remainingAttempts} ${remainingAttempts === 1 ? "attempt" : "attempts"} remaining.`,
       });
     }
 
@@ -1461,7 +1478,7 @@ exports.forgotPasswordVerifyOtp = asyncHandler(async (req, res) => {
       verifiedResetToken: verifiedResetToken,
     });
   } catch (err) {
-    console.error("Error in forgotPasswordVerifyOtp:", err);
+    console.error("❌ Error in forgotPasswordVerifyOtp:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred during OTP verification.",
@@ -1533,6 +1550,30 @@ exports.forgotPasswordReset = asyncHandler(async (req, res) => {
       });
     }
 
+    const user = await userDao.getUserPasswordByIdDao(decoded.userId);
+    if (!user) {
+      return res.status(404).json({
+        status: false,
+        message: "User not found.",
+      });
+    }
+
+    let isSamePassword = false;
+    if (user.password) {
+      isSamePassword = bcrypt.compareSync(newPassword, user.password);
+      if (!isSamePassword && /^[0-9]{9}[vVxX]$/.test(newPassword)) {
+        isSamePassword = bcrypt.compareSync(newPassword.toUpperCase(), user.password);
+      }
+    }
+
+    if (isSamePassword) {
+      return res.status(400).json({
+        status: false,
+        code: "SAME_PASSWORD",
+        message: "New password cannot be the same as your current password. Please choose a different password.",
+      });
+    }
+
     const SALT_ROUNDS = parseInt(process.env.SALT_ROUNDS || "10", 10);
     const hashedPassword = bcrypt.hashSync(newPassword, SALT_ROUNDS);
 
@@ -1559,7 +1600,7 @@ exports.forgotPasswordReset = asyncHandler(async (req, res) => {
       });
     }
   } catch (err) {
-    console.error("Error in forgotPasswordReset:", err);
+    console.error("❌ Error in forgotPasswordReset:", err);
     return res.status(500).json({
       status: false,
       message: "An unexpected error occurred while resetting the password.",

@@ -150,7 +150,7 @@ exports.searchCitiesDao = async (searchTerm) => {
       isAvailable: row.isAvailable === 1 || row.isAvailable === true,
     }));
   } catch (err) {
-    console.error("Database error in searchCitiesDao:", err);
+    console.error("❌ Database error in searchCitiesDao:", err);
     throw new Error("Database error while searching cities: " + err.message);
   }
 };
@@ -180,7 +180,7 @@ exports.getAllCitiesDao = async () => {
       isAvailable: row.isAvailable === 1 || row.isAvailable === true,
     }));
   } catch (err) {
-    console.error("Database error in getAllCitiesDao:", err);
+    console.error("❌ Database error in getAllCitiesDao:", err);
     throw new Error("Database error while fetching all cities: " + err.message);
   }
 };
@@ -203,7 +203,7 @@ exports.updateCityAvailabilityDao = async (cityId, isAvailable, companyCenterId 
     const updatedCities = await exports.getAllCitiesDao();
     return updatedCities;
   } catch (err) {
-    console.error("Database error in updateCityAvailabilityDao:", err);
+    console.error("❌ Database error in updateCityAvailabilityDao:", err);
     throw new Error("Database error while updating city availability: " + err.message);
   }
 };
@@ -221,7 +221,7 @@ exports.getMarketPlaceUserLastCusIdDao = async () => {
     const [results] = await db.collectionofficer.promise().query(sql);
     return results[0] ? results[0].cusId : null;
   } catch (err) {
-    console.error("Database error in getMarketPlaceUserLastCusIdDao:", err);
+    console.error("❌ Database error in getMarketPlaceUserLastCusIdDao:", err);
     throw err;
   }
 };
@@ -233,7 +233,7 @@ exports.getUserByEmailDao = async (email) => {
     const [results] = await db.collectionofficer.promise().query(sql, [email]);
     return results[0] || null;
   } catch (err) {
-    console.error("Database error in getUserByEmailDao:", err);
+    console.error("❌ Database error in getUserByEmailDao:", err);
     throw err;
   }
 };
@@ -333,7 +333,7 @@ exports.getUserByPhoneDao = async (phoneCode, phoneNumber) => {
     const [results] = await db.collectionofficer.promise().query(sql, params);
     return results[0] || null;
   } catch (err) {
-    console.error("Database error in getUserByPhoneDao:", err);
+    console.error("❌ Database error in getUserByPhoneDao:", err);
     throw err;
   }
 };
@@ -352,7 +352,7 @@ exports.getUserByNicDao = async (nic) => {
     const [results] = await db.collectionofficer.promise().query(sql, candidates);
     return results[0] || null;
   } catch (err) {
-    console.error("Database error in getUserByNicDao:", err);
+    console.error("❌ Database error in getUserByNicDao:", err);
     throw err;
   }
 };
@@ -463,7 +463,7 @@ exports.signupUserDao = async (user, hashedPassword, nextId = null, existingUser
       };
     }
   } catch (err) {
-    console.error("Database error in signupUserDao:", err);
+    console.error("❌ Database error in signupUserDao:", err);
     throw err;
   }
 };
@@ -497,7 +497,7 @@ exports.getDeletedAccountStatsDao = async (userId, userRecord) => {
       deletedOn,
     };
   } catch (err) {
-    console.error("Database error in getDeletedAccountStatsDao:", err);
+    console.error("❌ Database error in getDeletedAccountStatsDao:", err);
     throw err;
   }
 };
@@ -515,7 +515,7 @@ exports.saveOtpDao = async (referenceId, email, otp, expiresAt) => {
     const [result] = await db.collectionofficer.promise().query(sql, [referenceId, otp, email, expiresAt]);
     return result;
   } catch (err) {
-    console.error("Database error in saveOtpDao:", err);
+    console.error("❌ Database error in saveOtpDao:", err);
     throw err;
   }
 };
@@ -530,7 +530,7 @@ exports.getOtpDao = async (referenceId) => {
     const [results] = await db.collectionofficer.promise().query(sql, [referenceId]);
     return results.length > 0 ? results[0] : null;
   } catch (err) {
-    console.error("Database error in getOtpDao:", err);
+    console.error("❌ Database error in getOtpDao:", err);
     throw err;
   }
 };
@@ -541,7 +541,7 @@ exports.deleteOtpDao = async (referenceId) => {
     const [result] = await db.collectionofficer.promise().query(sql, [referenceId]);
     return result;
   } catch (err) {
-    console.error("Database error in deleteOtpDao:", err);
+    console.error("❌ Database error in deleteOtpDao:", err);
     throw err;
   }
 };
@@ -552,7 +552,7 @@ exports.getUserPasswordByIdDao = async (userId) => {
     const [results] = await db.collectionofficer.promise().query(sql, [userId]);
     return results[0] || null;
   } catch (err) {
-    console.error("Database error in getUserPasswordByIdDao:", err);
+    console.error("❌ Database error in getUserPasswordByIdDao:", err);
     throw err;
   }
 };
@@ -563,7 +563,7 @@ exports.updatePasswordDao = async (userId, hashedPassword) => {
     const [result] = await db.collectionofficer.promise().query(sql, [hashedPassword, userId]);
     return result.affectedRows === 1;
   } catch (err) {
-    console.error("Database error in updatePasswordDao:", err);
+    console.error("❌ Database error in updatePasswordDao:", err);
     throw err;
   }
 };

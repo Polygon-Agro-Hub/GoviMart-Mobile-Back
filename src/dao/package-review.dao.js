@@ -58,9 +58,7 @@ const applyCreditChange = async (q, userId, change) => {
             "SELECT creditBalance FROM marketplaceusers WHERE id = ? LIMIT 1",
             [userId],
         );
-        console.log(
-            `[creditBalance] user ${userId}: ${applied > 0 ? "+" : ""}${applied} -> new balance ${balRows[0]?.creditBalance}`,
-        );
+
     }
     return shortfall;
 };
@@ -737,10 +735,17 @@ exports.resetPackageItemDao = ({
  *  2. Delete removed ala carte rows
  *  2b. UPDATE edited EXISTING ala carte rows by id
  *  3. Insert / merge newly added ala carte items
+ *  3c. Refresh all ala carte rows with live prices
  *  4. Lock packages
- *  5. Schedule date
+ *  5. Schedule date (shifted by the number of "Package Finalization Review" reminders)
+ *       1 notification row  -> no change
+ *       2 notification rows -> sheduleDate + 1 day
+ *       3 notification rows -> sheduleDate + 2 days
  *  6. Totals on processorders (fullTotal, total, discount, + amount/moneyPaid for card)
  *  7. Credit balance (card orders): creditBalance += oldFullTotal - newFullTotal (capped at 0)
+ *
+ * Relies on helpers defined elsewhere in this DAO file: db, round2,
+ * settleCredit, applyCreditChange.
  */
 exports.confirmPackageReviewDao = ({
     orderId,
@@ -763,7 +768,7 @@ exports.confirmPackageReviewDao = ({
         db.collectionofficer.getConnection((connErr, connection) => {
             if (connErr) {
                 console.error(
-                    "[confirmPackageReviewDao] DB Connection Error:",
+                    "❌ [confirmPackageReviewDao] DB Connection Error:",
                     connErr,
                 );
                 return reject(connErr);
@@ -1249,11 +1254,34 @@ exports.confirmPackageReviewDao = ({
                     );
 
                     // 5. Schedule date
+                    // Count the "Package Finalization Review" reminders for this order:
+                    //   1 row  -> keep date
+                    //   2 rows -> +1 day  (2nd notification: Delivery Date + 1 Day)
+                    //   3 rows -> +2 days (3rd notification: Delivery Date + 2 Days)
+                    // NOTE: ordernotfication.orderId is matched with the process order id,
+                    // the same as getPackingSlotAvailabilityDao. If your rows store
+                    // orders.id instead, pass realOrderId here.
+                    const reminderRows = await q(
+                        `SELECT COUNT(*) AS cnt
+                         FROM ordernotfication
+                         WHERE orderId = ? AND Title = 'Package Finalization Review'`,
+                        [realProcessOrderId],
+                    );
+                    const reminderCount = parseInt(reminderRows[0]?.cnt, 10) || 0;
+                    const extraDays = Math.min(Math.max(reminderCount - 1, 0), 2);
+
                     if (newScheduleDate) {
-                        await q("UPDATE processorders SET sheduleDate = ? WHERE id = ?", [
-                            new Date(newScheduleDate),
-                            realProcessOrderId,
-                        ]);
+                        // App sent an explicit date: use it, then add the reminder shift
+                        await q(
+                            "UPDATE processorders SET sheduleDate = DATE_ADD(?, INTERVAL ? DAY) WHERE id = ?",
+                            [new Date(newScheduleDate), extraDays, realProcessOrderId],
+                        );
+                    } else if (extraDays > 0) {
+                        // No explicit date: shift the date currently stored in the DB
+                        await q(
+                            "UPDATE processorders SET sheduleDate = DATE_ADD(sheduleDate, INTERVAL ? DAY) WHERE id = ?",
+                            [extraDays, realProcessOrderId],
+                        );
                     }
 
                     // 6. Totals (processorders only)
@@ -1386,7 +1414,7 @@ exports.confirmPackageReviewDao = ({
                     });
                 } catch (err) {
                     console.error(
-                        "[confirmPackageReviewDao] Execution Error (Rolling back):",
+                        "❌ [confirmPackageReviewDao] Execution Error (Rolling back):",
                         err,
                     );
                     connection.rollback(() => {
@@ -1401,7 +1429,16 @@ exports.confirmPackageReviewDao = ({
 
 /**
  * Fetch latest packing target limit, count accepted orders for the date,
- * and check unread reminder history for an order.
+ * and check reminder history for an order.
+ *
+ * Returns:
+ *  - unreadReminderDays : unread notification rows (max 3)   -> used for the "3 reminders used" screen
+ *  - reminderCount      : TOTAL "Package Finalization Review" rows (read + unread, 1..3)
+ *                         -> used for the schedule date shift
+ *                            1 row  = date unchanged
+ *                            2 rows = date + 1 day
+ *                            3 rows = date + 2 days
+ *
  * Never rejects: resolves safe defaults on error.
  */
 exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
@@ -1425,6 +1462,9 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
 
             // Unread reminder notification count
             let unreadReminderDays = 1;
+            // Total "Package Finalization Review" reminders (read or unread)
+            let reminderCount = 1;
+
             if (processOrderId) {
                 const notifSql = `
                     SELECT COUNT(*) AS unreadCount 
@@ -1447,6 +1487,23 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                         parseInt(notifRows[0].unreadCount, 10) || 1,
                     );
                 }
+
+                const countRows = await new Promise((res) => {
+                    db.collectionofficer.query(
+                        `SELECT COUNT(*) AS cnt
+                         FROM ordernotfication
+                         WHERE orderId = ? AND Title = 'Package Finalization Review'`,
+                        [processOrderId],
+                        (err, rows) => {
+                            if (err) return res([]);
+                            res(rows || []);
+                        },
+                    );
+                });
+                reminderCount = Math.min(
+                    3,
+                    Math.max(1, parseInt(countRows[0]?.cnt, 10) || 1),
+                );
             }
 
             const remaining = targetInfo.remaining;
@@ -1460,6 +1517,7 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 remaining,
                 isLimitReached,
                 unreadReminderDays,
+                reminderCount,
                 scheduleDate: targetInfo.sheduleDate,
                 additionalItems: targetInfo.additionalItems,
                 packageFinalizeImdt: targetInfo.packageFinalizeImdt,
@@ -1467,7 +1525,7 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 confirmOrders: targetInfo.confirmOrders,
             });
         } catch (err) {
-            console.error("[getPackingSlotAvailabilityDao] Error:", err);
+            console.error("❌ [getPackingSlotAvailabilityDao] Error:", err);
             resolve({
                 targetLimit: 50,
                 acceptedOrdersCount: 0,
@@ -1475,6 +1533,7 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 remaining: 50,
                 isLimitReached: false,
                 unreadReminderDays: 1,
+                reminderCount: 1,
                 scheduleDate: targetDate || new Date().toISOString().split("T")[0],
             });
         }
@@ -1637,7 +1696,7 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
                 [pOrderId, notifMsg],
             );
         } catch (notifErr) {
-            console.error("Error inserting ordernotfication on cancel:", notifErr);
+            console.error("❌ Error inserting ordernotfication on cancel:", notifErr);
         }
 
         try {
@@ -1658,7 +1717,7 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
                 );
             }
         } catch (dashErr) {
-            console.error("Error updating dashnotification on cancel:", dashErr);
+            console.error("❌ Error updating dashnotification on cancel:", dashErr);
         }
 
         await commit(connection);
@@ -1993,7 +2052,7 @@ exports.confirmOrderWithLivePricesDao = ({
                         Math.abs(parseFloat(newTotal) - finalFullTotal) > 0.01
                     ) {
                         console.warn(
-                            `[confirmOrderWithLivePrices] app total ${newTotal} != server total ${finalFullTotal}; server value used`,
+                            ` ⚠️ [confirmOrderWithLivePrices] app total ${newTotal} != server total ${finalFullTotal}; server value used`,
                         );
                     }
 
@@ -2197,11 +2256,7 @@ exports.cancelOrderBeforeConfirmDao = async ({
         const rawCreditPaid = parseFloat(order.creditPaid) || 0;
         const refundCreditAmount = rawCreditPaid;
 
-        console.log(
-            `[cancelOrderBeforeConfirm] order ${pOrderId} user ${userId} | method="${order.paymentMethod}" ` +
-            `isPaid=${order.isPaid} isConfirmed=${order.isConfirmed} amount=${rawAmount} ` +
-            `moneyPaid=${order.moneyPaid} creditPaid=${rawCreditPaid} -> refundCreditAmount=${refundCreditAmount}`,
-        );
+
 
         // 3. Mark as Cancelled AND reset the payment columns
         const cancelResult = await run(
@@ -2245,10 +2300,7 @@ exports.cancelOrderBeforeConfirmDao = async ({
             if (creditRows && creditRows.length > 0) {
                 newCreditBalance = parseFloat(creditRows[0].creditBalance || 0);
             }
-            console.log(
-                `[cancelOrderBeforeConfirm] order ${pOrderId}: creditPaid ${rawCreditPaid} -> 0, ` +
-                `+${refundCreditAmount} to user ${userId} creditBalance (now ${newCreditBalance})`,
-            );
+
         }
 
         // 5. Notifications (failures are logged but don't block the cancel)
@@ -2263,7 +2315,7 @@ exports.cancelOrderBeforeConfirmDao = async ({
                 [pOrderId, notifMsg],
             );
         } catch (notifErr) {
-            console.error("Error inserting ordernotfication on cancel:", notifErr);
+            console.error("❌ Error inserting ordernotfication on cancel:", notifErr);
         }
 
         try {
@@ -2284,7 +2336,7 @@ exports.cancelOrderBeforeConfirmDao = async ({
                 );
             }
         } catch (dashErr) {
-            console.error("Error updating dashnotification on cancel:", dashErr);
+            console.error("❌ Error updating dashnotification on cancel:", dashErr);
         }
 
         await commit(connection);
