@@ -15,14 +15,19 @@ const formatPhoneNumber = (phone, phoneCode = "94") => {
 
   const codeDigits = String(phoneCode || "94").replace(/[^0-9]/g, "") || "94";
 
+  // If already starts with the country code followed by 0 (e.g. 940771234567)
+  if (rawDigits.startsWith(`${codeDigits}0`)) {
+    return `+${codeDigits}${rawDigits.slice(codeDigits.length).replace(/^0+/, "")}`;
+  }
+
   // If already starts with the country code (e.g. 94771234567)
   if (rawDigits.startsWith(codeDigits)) {
-    return rawDigits;
+    return `+${rawDigits}`;
   }
 
   // Strip leading zero(s) (e.g. 0771234567 -> 771234567)
   const noZero = rawDigits.replace(/^0+/, "");
-  return `${codeDigits}${noZero}`;
+  return `+${codeDigits}${noZero}`;
 };
 
 /**
@@ -69,13 +74,26 @@ const sendSms = async (destinationPhone, message) => {
     });
 
     const data = await response.json();
-    if (!response.ok || (!data.referenceId && !data.reference_id)) {
-      const errMsg = data.message || `HTTP status ${response.status}`;
+    const refId =
+      data.referenceId ||
+      data.reference_id ||
+      (Array.isArray(data.responses) && (data.responses[0]?.reference_id || data.responses[0]?.referenceId));
+
+    const isSuccess =
+      response.ok &&
+      (refId || data.status === "1001" || data.status === 1001 || data.description === "submit success");
+
+    if (!isSuccess) {
+      const errMsg =
+        data.message ||
+        data.error ||
+        data.description ||
+        `HTTP status ${response.status}`;
       console.error(`❌ [SMS Service] Failed to send SMS via ShoutOUT: ${errMsg}`);
       return { success: false, error: errMsg };
     }
 
-    const referenceId = data.referenceId || data.reference_id;
+    const referenceId = refId || "SUCCESS";
     console.log(`[SMS Service] SMS successfully sent to ${formattedPhone}. Ref: ${referenceId}`);
     return { success: true, referenceId };
   } catch (error) {
