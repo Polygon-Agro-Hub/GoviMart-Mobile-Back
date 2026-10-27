@@ -6,7 +6,7 @@ exports.getAllSlidesDao = async () => {
     const [results] = await db.collectionofficer.promise().query(query);
     return results;
   } catch (err) {
-    console.error("Database error in getAllSlidesDao:", err);
+    console.error("❌ Database error in getAllSlidesDao:", err);
     throw err;
   }
 };

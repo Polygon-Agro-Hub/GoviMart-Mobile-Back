@@ -38,11 +38,11 @@ app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
 const DatabaseConnection = (db, name) => {
   db.getConnection((err, connection) => {
     if (err) {
-      console.error(`Error getting connection from ${name}:`, err);
+      console.error(`❌ Error getting connection from ${name}:`, err);
     } else {
       connection.ping((err) => {
         if (err) {
-          console.error(`Error pinging ${name} database:`, err);
+          console.error(`❌ Error pinging ${name} database:`, err);
         } else {
           console.log(`✅ Ping to ${name} database successful.`);
         }

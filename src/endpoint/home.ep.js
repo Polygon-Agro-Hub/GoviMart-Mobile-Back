@@ -9,7 +9,7 @@ exports.getAllSlides = async (req, res) => {
       slides,
     });
   } catch (err) {
-    console.error("Error in getAllSlides endpoint:", err);
+    console.error("❌ Error in getAllSlides endpoint:", err);
     return res.status(500).json({ status: false, error: "Failed to fetch slides" });
   }
 };
