@@ -1254,13 +1254,6 @@ exports.confirmPackageReviewDao = ({
                     );
 
                     // 5. Schedule date
-                    // Count the "Package Finalization Review" reminders for this order:
-                    //   1 row  -> keep date
-                    //   2 rows -> +1 day  (2nd notification: Delivery Date + 1 Day)
-                    //   3 rows -> +2 days (3rd notification: Delivery Date + 2 Days)
-                    // NOTE: ordernotfication.orderId is matched with the process order id,
-                    // the same as getPackingSlotAvailabilityDao. If your rows store
-                    // orders.id instead, pass realOrderId here.
                     const reminderRows = await q(
                         `SELECT COUNT(*) AS cnt
                          FROM ordernotfication
@@ -1271,13 +1264,11 @@ exports.confirmPackageReviewDao = ({
                     const extraDays = Math.min(Math.max(reminderCount - 1, 0), 2);
 
                     if (newScheduleDate) {
-                        // App sent an explicit date: use it, then add the reminder shift
                         await q(
                             "UPDATE processorders SET sheduleDate = DATE_ADD(?, INTERVAL ? DAY) WHERE id = ?",
                             [new Date(newScheduleDate), extraDays, realProcessOrderId],
                         );
                     } else if (extraDays > 0) {
-                        // No explicit date: shift the date currently stored in the DB
                         await q(
                             "UPDATE processorders SET sheduleDate = DATE_ADD(sheduleDate, INTERVAL ? DAY) WHERE id = ?",
                             [extraDays, realProcessOrderId],
@@ -1338,8 +1329,46 @@ exports.confirmPackageReviewDao = ({
                         ? settle.newCreditPaid
                         : parseFloat(matchedOrder.creditPaid) || 0;
 
+                    // FIX: detect a payment that was just completed through the gateway.
+                    // The app only sends isPaid = 1 after the gateway succeeded (or when
+                    // nothing is due), so combine it with the DB state:
+                    //   A) card order that was NOT paid yet (isPaid = 0) -> full amount paid now
+                    //   B) order already paid (card or 100% credit) + extra amount -> extra paid now
+                    const reqIsPaid = Number(isPaid) === 1 || isPaid === true;
+                    const wasPaid = Number(matchedOrder.isPaid) === 1;
+                    const pmLower = String(matchedOrder.paymentMethod || paymentMethod || "")
+                        .trim()
+                        .toLowerCase();
+                    const isCashMethod = /cash|cod/.test(pmLower);
+                    const isCardMethod = /card|payhere|online/.test(pmLower);
+
+                    const paidUnpaidCardNow =
+                        reqIsPaid && !wasPaid && isCardMethod && !isCashMethod;
+                    const paidExtraNow =
+                        reqIsPaid && wasPaid && !isCashMethod && parsedAdditional > 0.005;
+                    const gatewayPaidNow = paidUnpaidCardNow || paidExtraNow;
+
                     // REVIEW step flags: isFinalized = 1, isConfirmed = 0
-                    if (settle && settle.isCard) {
+                    if (gatewayPaidNow) {
+                        // FIX: isPaid = 1 and moneyPaid = amount - creditPaid
+                        const newAmount = finalFullTotal;
+                        const newMoneyPaid = round2(Math.max(0, newAmount - creditPaid));
+                        await q(
+                            `UPDATE processorders
+                             SET amount = ?, moneyPaid = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
+                                 isPaid = 1, isFinalized = 1
+                             WHERE id = ?`,
+                            [
+                                newAmount,
+                                newMoneyPaid,
+                                creditPaid,
+                                finalFullTotal,
+                                finalTotal,
+                                newOrderDiscount,
+                                realProcessOrderId,
+                            ],
+                        );
+                    } else if (settle && settle.isCard) {
                         const newAmount = finalFullTotal;
                         const newMoneyPaid = round2(Math.max(0, newAmount - creditPaid));
                         await q(
@@ -1358,7 +1387,7 @@ exports.confirmPackageReviewDao = ({
                             ],
                         );
                     } else if (settle && settle.isCreditOnly) {
-                        // 100% credit order: paid amount follows the reduced total
+                        // 100% credit order, no gateway payment: paid amount follows the total
                         const newAmount = finalFullTotal;
                         await q(
                             `UPDATE processorders
