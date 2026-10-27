@@ -1877,24 +1877,51 @@ exports.confirmOrderWithLivePricesDao = ({
                     const realProcessOrderId = matchedOrder.processOrderId;
                     const targetUserId = matchedOrder.userId || userId;
 
-                    // Prevents double credit adjustments on a second tap / retry
+                    // Already confirmed: only allowed as the "payment completed" retry
+                    // (isPaid = 1). Prevents double credit adjustments on a second tap.
                     if (Number(matchedOrder.isConfirmed) === 1) {
                         if (Number(isPaid) === 1 || isPaid === true) {
-                            const payAmount = newTotal != null ? Number(newTotal) : Number(matchedOrder.oldOrderFullTotal || matchedOrder.amount || 0);
-                            const payMoneyPaid = round2(Math.max(0, payAmount - Number(matchedOrder.creditPaid || 0)));
+                            const payAmount =
+                                newTotal != null
+                                    ? Number(newTotal)
+                                    : Number(
+                                        matchedOrder.oldOrderFullTotal ||
+                                        matchedOrder.amount ||
+                                        0,
+                                    );
+                            const payMoneyPaid = round2(
+                                Math.max(
+                                    0,
+                                    payAmount - Number(matchedOrder.creditPaid || 0),
+                                ),
+                            );
                             await q(
                                 `UPDATE processorders
                                  SET amount = ?, moneyPaid = ?, isPaid = 1, paymentMethod = 'Card'
                                  WHERE id = ?`,
                                 [payAmount, payMoneyPaid, realProcessOrderId],
                             );
-                            await connection.commit();
-                            connection.release();
-                            return resolve({
-                                message: "Order payment completed successfully.",
-                                processOrderId: realProcessOrderId,
-                                invNo: matchedOrder.invNo,
+
+                            // IMPORTANT: call commit as a plain statement and then `return;`.
+                            // Never `await connection.commit()` and never
+                            // `return connection.commit(...)`: with the callback-style mysql2
+                            // API the returned Query object has a throwing .then(), which
+                            // crashes the Node process inside an async function.
+                            connection.commit((commitErr) => {
+                                if (commitErr) {
+                                    return connection.rollback(() => {
+                                        connection.release();
+                                        reject(commitErr);
+                                    });
+                                }
+                                connection.release();
+                                resolve({
+                                    message: "Order payment completed successfully.",
+                                    processOrderId: realProcessOrderId,
+                                    invNo: matchedOrder.invNo,
+                                });
                             });
+                            return;
                         }
                         throw new Error("This order has already been confirmed.");
                     }
