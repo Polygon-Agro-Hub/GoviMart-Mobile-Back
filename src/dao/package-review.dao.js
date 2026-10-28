@@ -1574,6 +1574,9 @@ exports.getRemainingPackingTarget = getRemainingPackingTarget;
 /**
  * Cancel order and refund the paid amount as credit balance.
  */
+/**
+ * Cancel order and refund the paid amount as credit balance.
+ */
 exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
     if ((!orderId && !processOrderId) || !userId) {
         throw new Error("orderId or processOrderId and userId are required");
@@ -1656,25 +1659,18 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
             throw new Error("Completed order cannot be cancelled");
         }
 
-        // 2. Refundable credit from the locked (original) values
-        const pMethod = (order.paymentMethod || "").trim().toLowerCase();
-        const rawAmount = parseFloat(order.amount) || 0;
+        // 2. FIX: refund = creditPaid + moneyPaid (taken from the locked row,
+        // before the columns are reset below).
+        // moneyPaid counts only when the order is really paid (isPaid = 1), so an
+        // unpaid card / cash order never refunds money the customer did not pay.
         const rawCreditPaid = parseFloat(order.creditPaid) || 0;
         const rawMoneyPaid = parseFloat(order.moneyPaid) || 0;
+        const isOrderPaid =
+            Number(order.isPaid) === 1 || order.isPaid === true;
 
-        let refundCreditAmount = 0;
-        if (isCardPayment(order.paymentMethod, order.isPaid)) {
-            // Card / online (also Card + Credit): card part + credit part are refunded as credit.
-            // (amount / moneyPaid hold the card part = total - credit)
-            refundCreditAmount =
-                rawMoneyPaid > 0 ? rawMoneyPaid + rawCreditPaid : rawAmount;
-        } else if (pMethod.includes("credit") && !pMethod.includes("cash")) {
-            // 100% paid by credit balance
-            refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : rawAmount;
-        } else {
-            // Cash (+ Credit): refund only the credit used at checkout
-            refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : 0;
-        }
+        const refundCreditAmount = round2(
+            rawCreditPaid + (isOrderPaid ? rawMoneyPaid : 0),
+        );
 
         // 3. Mark as Cancelled AND reset the payment columns
         const cancelResult = await run(
