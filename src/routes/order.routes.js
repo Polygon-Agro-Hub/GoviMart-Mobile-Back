@@ -24,6 +24,7 @@ router.post("/create-order", authMiddleware, orderEp.createOrder);
 router.get("/invoice/:orderId", authMiddleware, orderEp.getInvoiceByOrderId);
 router.get("/schedule-orders", authMiddleware, orderEp.getOrdersForSheduleDateEndpoint);
 router.get("/schedule-orders/:sheduleDate", authMiddleware, orderEp.getOrdersForSheduleDateEndpoint);
+router.get("/cancel/additional-items/:orderId", authMiddleware, orderEp.getOrderCancelAdditionalItems);
 router.get("/:orderId", authMiddleware, orderEp.getRetailOrderById);
 router.get('/packages/:orderId', authMiddleware, orderEp.getOrderPackages);
 router.get("/additional-items/:orderId", authMiddleware, orderEp.getOrderAdditionalItems);
