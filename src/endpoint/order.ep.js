@@ -98,6 +98,27 @@ exports.getOrderAdditionalItems = async (req, res) => {
     }
 };
 
+exports.getOrderCancelAdditionalItems = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { processOrderId } = req.query;
+
+        const additionalItems = await RetailOrderDao.getOrderCancelAdditionalItemsDao(orderId, processOrderId);
+
+        res.json({
+            status: true,
+            message: "Cancel order additional items fetched successfully",
+            data: additionalItems
+        });
+    } catch (error) {
+        console.error("❌ Error in getOrderCancelAdditionalItems:", error);
+        res.status(500).json({
+            status: false,
+            message: error?.toString() || "Unknown server error"
+        });
+    }
+};
+
 exports.checkCouponAvalability = async (req, res) => {
     try {
         const { userId } = req.user;
