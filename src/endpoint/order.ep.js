@@ -816,11 +816,19 @@ exports.createOrder = asyncHandler(async (req, res) => {
                                 scheduledDateStr && earliestDateStr && scheduledDateStr <= earliestDateStr
                             );
 
-                            // Only: isFinalizeImdt = 0 AND package order -> no EPSD check
+                            // Package + isFinalizeImdt = 0 -> review/accept flow (no EPSD check)
                             const isPackagePayToConfirmFlow = !Number(isFinalizeImdt) && hasPackages;
 
+                            // A la carte only OR package with isFinalizeImdt = 1
+                            const isAlaCarteOrFinalizedPackage = !hasPackages || Number(isFinalizeImdt) === 1;
+
+                            // Whole order paid with credit (no card / cash money needed)
+                            const isFullyPaidByCredit =
+                                requestedCredit > 0 &&
+                                requestedCredit >= calculatedGrandTotal - 0.01;
+
                             console.log(
-                                `[createOrder SMS] scheduled: ${scheduledDateStr}, earliest: ${earliestDateStr}, isType1: ${isType1}, isFinalizeImdt: ${isFinalizeImdt}, hasPackages: ${hasPackages}, packageFlow: ${isPackagePayToConfirmFlow}`
+                                `[createOrder SMS] scheduled: ${scheduledDateStr}, earliest: ${earliestDateStr}, isType1: ${isType1}, isFinalizeImdt: ${isFinalizeImdt}, hasPackages: ${hasPackages}, packageFlow: ${isPackagePayToConfirmFlow}, alaCarteOrFinalized: ${isAlaCarteOrFinalizedPackage}, fullCredit: ${isFullyPaidByCredit}`
                             );
 
                             if (isPackagePayToConfirmFlow) {
@@ -836,6 +844,14 @@ exports.createOrder = asyncHandler(async (req, res) => {
                                     userId,
                                     phone: resolvedPhone1,
                                     invNo: primaryInvNo,
+                                });
+                            } else if (isAlaCarteOrFinalizedPackage && isFullyPaidByCredit) {
+                                // Delivery after EPSD, a la carte / finalized package, fully paid with credit
+                                // Shows delivery - 3 (18 -> 15)
+                                await orderSmsService.sendOrderPlacedAfterEpsdCreditSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    deliveryDate: scheduledDateStr,
                                 });
                             } else {
                                 // Delivery after earliest date (shows delivery - 3, 18 -> 15)
@@ -994,4 +1010,3 @@ exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
         orders: result.orders,
     });
 });
-
