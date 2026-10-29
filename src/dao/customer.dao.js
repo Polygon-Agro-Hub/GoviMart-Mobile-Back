@@ -270,8 +270,11 @@ exports.addAddressDao = async (customerId, addressData) => {
   const billingName = addressData.billingName || addressData.fullName || null;
   const phonecode1 = addressData.billingPhoneCode1 || addressData.phonecode1 || "+94";
   const phone1 = addressData.billingPhone1 || addressData.phone1 || null;
-  const phonecode2 = addressData.billingPhoneCode2 || addressData.phonecode2 || "+94";
+
   const phone2 = addressData.billingPhone2 || addressData.phone2 || null;
+  const phonecode2 = phone2
+    ? addressData.billingPhoneCode2 || addressData.phonecode2 || "+94"
+    : null;
   const resolvedHouseNo = houseNo || buildingNo || null;
   const resolvedCity = city || nearestCity || null;
 
@@ -378,8 +381,10 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
   const billingName = addressData.billingName || addressData.fullName || null;
   const phonecode1 = addressData.billingPhoneCode1 || addressData.phonecode1 || "+94";
   const phone1 = addressData.billingPhone1 || addressData.phone1 || null;
-  const phonecode2 = addressData.billingPhoneCode2 || addressData.phonecode2 || "+94";
   const phone2 = addressData.billingPhone2 || addressData.phone2 || null;
+  const phonecode2 = phone2
+    ? addressData.billingPhoneCode2 || addressData.phonecode2 || "+94"
+    : null;
   const resolvedHouseNo = houseNo || buildingNo || null;
   const resolvedCity = city || nearestCity || null;
 

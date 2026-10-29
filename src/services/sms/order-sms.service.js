@@ -243,6 +243,31 @@ const sendOrderPlacedPayToConfirmSms = async ({ userId, phone, deliveryDate }) =
   }
 };
 
+/**
+ * Type 2 SMS for orders (a la carte only OR package with isFinalizeImdt = 1)
+ * placed after E.P.S.D. and fully paid with credit:
+ * "Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on [Processing Date]. Please confirm your order by 6:00 PM or it will be cancelled."
+ *
+ * Processing Date = delivery date - 3 (18 -> 15)
+ */
+const sendOrderPlacedAfterEpsdCreditSms = async ({ userId, phone, deliveryDate }) => {
+  try {
+    const processingDateStr = calculateProcessingDate(deliveryDate);
+    const resolvedPhone = await resolveCustomerPhone(userId, phone);
+
+    if (!resolvedPhone) {
+      console.warn(`⚠️ [Order SMS] Could not resolve phone number for userId: ${userId}`);
+      return { success: false, error: "Missing phone number" };
+    }
+
+    const message = `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${processingDateStr}. Please confirm your order by 6:00 PM or it will be cancelled.`;
+    return await sendSms(resolvedPhone, message);
+  } catch (err) {
+    console.error("❌ [Order SMS] Error in sendOrderPlacedAfterEpsdCreditSms:", err.message);
+    return { success: false, error: err.message };
+  }
+};
+
 module.exports = {
   resolveCustomerPhone,
   resolveOrderDetails,
@@ -251,4 +276,5 @@ module.exports = {
   sendOrderConfirmedSms,
   sendOrderPlacedAfterEpsdSms,
   sendOrderPlacedPayToConfirmSms,
+  sendOrderPlacedAfterEpsdCreditSms,
 };
