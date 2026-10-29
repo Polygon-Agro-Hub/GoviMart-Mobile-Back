@@ -202,6 +202,40 @@ exports.removePackageFromCartDao = (cartId, packageId) => {
 };
 
 /**
+ * Remove product item across all carts belonging to a user
+ */
+exports.removeProductFromUserCartsDao = (userId, productId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      DELETE cai FROM cartadditionalitems cai
+      JOIN cart c ON cai.cartId = c.id
+      WHERE c.userId = ? AND cai.productId = ?
+    `;
+    db.collectionofficer.query(sql, [userId, productId], (err, results) => {
+      if (err) return reject(err);
+      resolve(results);
+    });
+  });
+};
+
+/**
+ * Remove package item across all carts belonging to a user
+ */
+exports.removePackageFromUserCartsDao = (userId, packageId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      DELETE cp FROM cartpackage cp
+      JOIN cart c ON cp.cartId = c.id
+      WHERE c.userId = ? AND cp.packageId = ?
+    `;
+    db.collectionofficer.query(sql, [userId, packageId], (err, results) => {
+      if (err) return reject(err);
+      resolve(results);
+    });
+  });
+};
+
+/**
  * Clear all items and delete cart row
  */
 exports.clearCartDao = (cartId) => {
