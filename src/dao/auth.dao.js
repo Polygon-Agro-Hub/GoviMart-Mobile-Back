@@ -607,25 +607,17 @@ exports.getPendingWholesaleUserDao = async (userId) => {
 
 exports.resubmitPendingWholesaleBRDao = async (userId, brImgUrl) => {
   try {
-    const checkSql = "SELECT id FROM pendingwholesaleusers WHERE userId = ? ORDER BY id DESC LIMIT 1";
-    const [existing] = await db.collectionofficer.promise().query(checkSql, [userId]);
+    // Delete previous record(s) so a completely new record is created with 'To Review' status
+    const deleteSql = "DELETE FROM pendingwholesaleusers WHERE userId = ?";
+    await db.collectionofficer.promise().query(deleteSql, [userId]);
 
-    if (existing.length > 0) {
-      const updateSql = `
-        UPDATE pendingwholesaleusers
-        SET approveStatus = 'To Review', brImg = ?, approvedBy = NULL, approvedAt = NULL, createdAt = NOW()
-        WHERE id = ?
-      `;
-      await db.collectionofficer.promise().query(updateSql, [brImgUrl, existing[0].id]);
-      return { id: existing[0].id, userId, approveStatus: "To Review", brImg: brImgUrl };
-    } else {
-      const insertSql = `
-        INSERT INTO pendingwholesaleusers (userId, approveStatus, brImg, createdAt)
-        VALUES (?, 'To Review', ?, NOW())
-      `;
-      const [insertResult] = await db.collectionofficer.promise().query(insertSql, [userId, brImgUrl]);
-      return { id: insertResult.insertId, userId, approveStatus: "To Review", brImg: brImgUrl };
-    }
+    // Insert new clean record
+    const insertSql = `
+      INSERT INTO pendingwholesaleusers (userId, approveStatus, brImg, createdAt)
+      VALUES (?, 'To Review', ?, NOW())
+    `;
+    const [insertResult] = await db.collectionofficer.promise().query(insertSql, [userId, brImgUrl]);
+    return { id: insertResult.insertId, userId, approveStatus: "To Review", brImg: brImgUrl };
   } catch (err) {
     console.error("❌ Database error in resubmitPendingWholesaleBRDao:", err);
     throw err;
