@@ -219,10 +219,7 @@ exports.removeCartProduct = asyncHandler(async (req, res) => {
     return res.status(400).json({ status: false, message: "productId is required" });
   }
 
-  const cart = await cartDao.getCartByUserIdDao(userId);
-  if (cart) {
-    await cartDao.removeProductFromCartDao(cart.id, productId);
-  }
+  await cartDao.removeProductFromUserCartsDao(userId, productId);
 
   return res.status(200).json({
     status: true,
@@ -242,10 +239,7 @@ exports.removeCartPackage = asyncHandler(async (req, res) => {
     return res.status(400).json({ status: false, message: "packageId is required" });
   }
 
-  const cart = await cartDao.getCartByUserIdDao(userId);
-  if (cart) {
-    await cartDao.removePackageFromCartDao(cart.id, packageId);
-  }
+  await cartDao.removePackageFromUserCartsDao(userId, packageId);
 
   return res.status(200).json({
     status: true,

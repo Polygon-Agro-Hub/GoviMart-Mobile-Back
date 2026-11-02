@@ -1266,6 +1266,87 @@ exports.getOrderAdditionalItemsDao = async (orderId, processOrderId = null) => {
 };
 
 /**
+ * Fetch additional items specifically for OrderConfirmedOrderCancelScreen
+ * Directly fetches stored price, normalPrice, discount, qty, and unit from orderadditionalitems.
+ */
+exports.getOrderCancelAdditionalItemsDao = async (orderId, processOrderId = null) => {
+    return new Promise((resolve, reject) => {
+        if (!orderId && !processOrderId) {
+            return reject(new Error("Invalid orderId"));
+        }
+
+        const resolveTargetProcessOrderId = () => {
+            return new Promise((res) => {
+                if (processOrderId) {
+                    return res(processOrderId);
+                }
+
+                const directSql =
+                    "SELECT proOrderId FROM orderadditionalitems WHERE proOrderId = ? LIMIT 1";
+                db.collectionofficer.query(directSql, [orderId], (dErr, dRows) => {
+                    if (!dErr && dRows && dRows.length > 0) {
+                        return res(orderId);
+                    }
+
+                    const poSql = `
+                        SELECT id 
+                        FROM processorders 
+                        WHERE id = ? OR orderId = ? 
+                        ORDER BY (id = ?) DESC, sheduleDate ASC, id ASC 
+                        LIMIT 1
+                    `;
+                    db.collectionofficer.query(
+                        poSql,
+                        [orderId, orderId, orderId],
+                        (poErr, poRows) => {
+                            if (poErr || !poRows || poRows.length === 0) {
+                                return res(orderId);
+                            }
+                            res(poRows[0].id);
+                        },
+                    );
+                });
+            });
+        };
+
+        resolveTargetProcessOrderId()
+            .then((resolvedProOrderId) => {
+                const sql = `
+              SELECT
+                oai.id,
+                oai.proOrderId,
+                oai.productId,
+                oai.qty,
+                oai.unit,
+                oai.price,
+                oai.normalPrice,
+                oai.discount,
+                mi.displayName,
+                cv.image
+              FROM orderadditionalitems oai
+              LEFT JOIN marketplaceitems mi ON oai.productId = mi.id
+              LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
+              WHERE oai.proOrderId = ? 
+                 OR oai.proOrderId IN (SELECT id FROM processorders WHERE id = ? OR orderId = ?)
+              ORDER BY oai.id ASC
+            `;
+
+                db.collectionofficer.query(
+                    sql,
+                    [resolvedProOrderId, orderId, orderId],
+                    (err2, results) => {
+                        if (err2) {
+                            return reject(new Error("Database error: " + err2.message));
+                        }
+                        resolve(results || []);
+                    },
+                );
+            })
+            .catch(reject);
+    });
+};
+
+/**
  * Fetch a single coupon by its code
  */
 exports.getCouponDetailsDao = (code) => {

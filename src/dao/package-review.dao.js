@@ -1254,13 +1254,6 @@ exports.confirmPackageReviewDao = ({
                     );
 
                     // 5. Schedule date
-                    // Count the "Package Finalization Review" reminders for this order:
-                    //   1 row  -> keep date
-                    //   2 rows -> +1 day  (2nd notification: Delivery Date + 1 Day)
-                    //   3 rows -> +2 days (3rd notification: Delivery Date + 2 Days)
-                    // NOTE: ordernotfication.orderId is matched with the process order id,
-                    // the same as getPackingSlotAvailabilityDao. If your rows store
-                    // orders.id instead, pass realOrderId here.
                     const reminderRows = await q(
                         `SELECT COUNT(*) AS cnt
                          FROM ordernotfication
@@ -1271,13 +1264,11 @@ exports.confirmPackageReviewDao = ({
                     const extraDays = Math.min(Math.max(reminderCount - 1, 0), 2);
 
                     if (newScheduleDate) {
-                        // App sent an explicit date: use it, then add the reminder shift
                         await q(
                             "UPDATE processorders SET sheduleDate = DATE_ADD(?, INTERVAL ? DAY) WHERE id = ?",
                             [new Date(newScheduleDate), extraDays, realProcessOrderId],
                         );
                     } else if (extraDays > 0) {
-                        // No explicit date: shift the date currently stored in the DB
                         await q(
                             "UPDATE processorders SET sheduleDate = DATE_ADD(sheduleDate, INTERVAL ? DAY) WHERE id = ?",
                             [extraDays, realProcessOrderId],
@@ -1338,8 +1329,46 @@ exports.confirmPackageReviewDao = ({
                         ? settle.newCreditPaid
                         : parseFloat(matchedOrder.creditPaid) || 0;
 
+                    // FIX: detect a payment that was just completed through the gateway.
+                    // The app only sends isPaid = 1 after the gateway succeeded (or when
+                    // nothing is due), so combine it with the DB state:
+                    //   A) card order that was NOT paid yet (isPaid = 0) -> full amount paid now
+                    //   B) order already paid (card or 100% credit) + extra amount -> extra paid now
+                    const reqIsPaid = Number(isPaid) === 1 || isPaid === true;
+                    const wasPaid = Number(matchedOrder.isPaid) === 1;
+                    const pmLower = String(matchedOrder.paymentMethod || paymentMethod || "")
+                        .trim()
+                        .toLowerCase();
+                    const isCashMethod = /cash|cod/.test(pmLower);
+                    const isCardMethod = /card|payhere|online/.test(pmLower);
+
+                    const paidUnpaidCardNow =
+                        reqIsPaid && !wasPaid && isCardMethod && !isCashMethod;
+                    const paidExtraNow =
+                        reqIsPaid && wasPaid && !isCashMethod && parsedAdditional > 0.005;
+                    const gatewayPaidNow = paidUnpaidCardNow || paidExtraNow;
+
                     // REVIEW step flags: isFinalized = 1, isConfirmed = 0
-                    if (settle && settle.isCard) {
+                    if (gatewayPaidNow) {
+                        // FIX: isPaid = 1 and moneyPaid = amount - creditPaid
+                        const newAmount = finalFullTotal;
+                        const newMoneyPaid = round2(Math.max(0, newAmount - creditPaid));
+                        await q(
+                            `UPDATE processorders
+                             SET amount = ?, moneyPaid = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
+                                 isPaid = 1, isFinalized = 1
+                             WHERE id = ?`,
+                            [
+                                newAmount,
+                                newMoneyPaid,
+                                creditPaid,
+                                finalFullTotal,
+                                finalTotal,
+                                newOrderDiscount,
+                                realProcessOrderId,
+                            ],
+                        );
+                    } else if (settle && settle.isCard) {
                         const newAmount = finalFullTotal;
                         const newMoneyPaid = round2(Math.max(0, newAmount - creditPaid));
                         await q(
@@ -1358,7 +1387,7 @@ exports.confirmPackageReviewDao = ({
                             ],
                         );
                     } else if (settle && settle.isCreditOnly) {
-                        // 100% credit order: paid amount follows the reduced total
+                        // 100% credit order, no gateway payment: paid amount follows the total
                         const newAmount = finalFullTotal;
                         await q(
                             `UPDATE processorders
@@ -1545,6 +1574,9 @@ exports.getRemainingPackingTarget = getRemainingPackingTarget;
 /**
  * Cancel order and refund the paid amount as credit balance.
  */
+/**
+ * Cancel order and refund the paid amount as credit balance.
+ */
 exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
     if ((!orderId && !processOrderId) || !userId) {
         throw new Error("orderId or processOrderId and userId are required");
@@ -1627,25 +1659,18 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
             throw new Error("Completed order cannot be cancelled");
         }
 
-        // 2. Refundable credit from the locked (original) values
-        const pMethod = (order.paymentMethod || "").trim().toLowerCase();
-        const rawAmount = parseFloat(order.amount) || 0;
+        // 2. FIX: refund = creditPaid + moneyPaid (taken from the locked row,
+        // before the columns are reset below).
+        // moneyPaid counts only when the order is really paid (isPaid = 1), so an
+        // unpaid card / cash order never refunds money the customer did not pay.
         const rawCreditPaid = parseFloat(order.creditPaid) || 0;
         const rawMoneyPaid = parseFloat(order.moneyPaid) || 0;
+        const isOrderPaid =
+            Number(order.isPaid) === 1 || order.isPaid === true;
 
-        let refundCreditAmount = 0;
-        if (isCardPayment(order.paymentMethod, order.isPaid)) {
-            // Card / online (also Card + Credit): card part + credit part are refunded as credit.
-            // (amount / moneyPaid hold the card part = total - credit)
-            refundCreditAmount =
-                rawMoneyPaid > 0 ? rawMoneyPaid + rawCreditPaid : rawAmount;
-        } else if (pMethod.includes("credit") && !pMethod.includes("cash")) {
-            // 100% paid by credit balance
-            refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : rawAmount;
-        } else {
-            // Cash (+ Credit): refund only the credit used at checkout
-            refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : 0;
-        }
+        const refundCreditAmount = round2(
+            rawCreditPaid + (isOrderPaid ? rawMoneyPaid : 0),
+        );
 
         // 3. Mark as Cancelled AND reset the payment columns
         const cancelResult = await run(
@@ -1877,24 +1902,47 @@ exports.confirmOrderWithLivePricesDao = ({
                     const realProcessOrderId = matchedOrder.processOrderId;
                     const targetUserId = matchedOrder.userId || userId;
 
-                    // Prevents double credit adjustments on a second tap / retry
+                    // Already confirmed: only allowed as the "payment completed" retry
+                    // (isPaid = 1). Prevents double credit adjustments on a second tap.
                     if (Number(matchedOrder.isConfirmed) === 1) {
                         if (Number(isPaid) === 1 || isPaid === true) {
-                            const payAmount = newTotal != null ? Number(newTotal) : Number(matchedOrder.oldOrderFullTotal || matchedOrder.amount || 0);
-                            const payMoneyPaid = round2(Math.max(0, payAmount - Number(matchedOrder.creditPaid || 0)));
+                            const payAmount =
+                                newTotal != null
+                                    ? Number(newTotal)
+                                    : Number(
+                                        matchedOrder.oldOrderFullTotal ||
+                                        matchedOrder.amount ||
+                                        0,
+                                    );
+                            const payMoneyPaid = round2(
+                                Math.max(
+                                    0,
+                                    payAmount - Number(matchedOrder.creditPaid || 0),
+                                ),
+                            );
                             await q(
                                 `UPDATE processorders
                                  SET amount = ?, moneyPaid = ?, isPaid = 1, paymentMethod = 'Card'
                                  WHERE id = ?`,
                                 [payAmount, payMoneyPaid, realProcessOrderId],
                             );
-                            await connection.commit();
-                            connection.release();
-                            return resolve({
-                                message: "Order payment completed successfully.",
-                                processOrderId: realProcessOrderId,
-                                invNo: matchedOrder.invNo,
+
+                            // Plain commit callback + `return;` (never await / return commit).
+                            connection.commit((commitErr) => {
+                                if (commitErr) {
+                                    return connection.rollback(() => {
+                                        connection.release();
+                                        reject(commitErr);
+                                    });
+                                }
+                                connection.release();
+                                resolve({
+                                    message: "Order payment completed successfully.",
+                                    processOrderId: realProcessOrderId,
+                                    invNo: matchedOrder.invNo,
+                                });
                             });
+                            return;
                         }
                         throw new Error("This order has already been confirmed.");
                     }
@@ -2001,8 +2049,7 @@ exports.confirmOrderWithLivePricesDao = ({
                         (couponTypeStr.includes("free") ||
                             couponTypeStr.includes("delivery"));
 
-                    // DASH SERVICE FEE: only orderApp = 'Dash' AND isPackage = 0 get the fixed
-                    // "Service Fee" (added on top of delivery)
+                    // DASH SERVICE FEE: only orderApp = 'Dash' AND isPackage = 0
                     const isDash =
                         String(matchedOrder.orderApp || "")
                             .trim()
@@ -2020,13 +2067,9 @@ exports.confirmOrderWithLivePricesDao = ({
                             ? parseFloat(matchedOrder.curDlvrCharge) || 0
                             : parseFloat(matchedOrder.deliveryCharge) || 0;
 
-                    // Delivery keeps its normal rules for every order.
                     const deliveryCharge =
                         isPickup || isFreeDeliveryCoupon ? 0 : rawDelivery;
 
-                    // DASH SERVICE FEE: fixed service fee (DASH_SERVICE_FEE) is ADDED on top of
-                    // delivery. Always charged (no pickup / free-delivery waiver) and
-                    // included in both total and fullTotal below.
                     const serviceFee = isDashServiceFee ? DASH_SERVICE_FEE : 0;
 
                     const couponDiscount =
@@ -2035,7 +2078,7 @@ exports.confirmOrderWithLivePricesDao = ({
                             : 0;
 
                     // 6. Final numbers (nothing from the old stored totals)
-                    const finalTotal = round2(
+                    const grossTotal = round2(
                         packagesTotal +
                         packageDiscount +
                         alaNormalTotal +
@@ -2044,8 +2087,11 @@ exports.confirmOrderWithLivePricesDao = ({
                     );
                     const finalDiscount = round2(packageDiscount + alaDiscountTotal);
                     const finalFullTotal = round2(
-                        Math.max(0, finalTotal - finalDiscount - couponDiscount),
+                        Math.max(0, grossTotal - finalDiscount - couponDiscount),
                     );
+                    // FIX: stored `total` = fullTotal + discount (the coupon is already
+                    // deducted from it), instead of the gross amount.
+                    const finalTotal = round2(finalFullTotal + finalDiscount);
 
                     if (
                         newTotal != null &&
@@ -2083,13 +2129,12 @@ exports.confirmOrderWithLivePricesDao = ({
                                 newMoneyPaid,
                                 creditPaid,
                                 finalFullTotal,
-                                finalTotal,
+                                finalTotal, // FIX: fullTotal + discount
                                 finalDiscount,
                                 realProcessOrderId,
                             ],
                         );
                     } else if (settle.isCreditOnly) {
-                        // 100% credit order: paid amount follows the reduced total
                         const newAmount = finalFullTotal;
                         await q(
                             `UPDATE processorders
@@ -2100,7 +2145,7 @@ exports.confirmOrderWithLivePricesDao = ({
                                 newAmount,
                                 creditPaid,
                                 finalFullTotal,
-                                finalTotal,
+                                finalTotal, // FIX: fullTotal + discount
                                 finalDiscount,
                                 realProcessOrderId,
                             ],
@@ -2114,7 +2159,7 @@ exports.confirmOrderWithLivePricesDao = ({
                             [
                                 creditPaid,
                                 finalFullTotal,
-                                finalTotal,
+                                finalTotal, // FIX: fullTotal + discount
                                 finalDiscount,
                                 realProcessOrderId,
                             ],
@@ -2141,7 +2186,7 @@ exports.confirmOrderWithLivePricesDao = ({
                             message:
                                 "Order confirmed and marketplace prices updated successfully",
                             fullTotal: finalFullTotal,
-                            total: finalTotal,
+                            total: finalTotal, // FIX
                             discount: finalDiscount,
                             creditShortfall: shortfall,
                             invNo: matchedOrder.invNo,

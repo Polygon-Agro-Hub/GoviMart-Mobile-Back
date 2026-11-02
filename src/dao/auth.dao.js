@@ -69,6 +69,8 @@ exports.loginUser = async (identifier, password) => {
         OR CONCAT(phoneCode, phoneNumber) = ?
         OR CONCAT(REPLACE(phoneCode, '+', ''), phoneNumber) = ?)
         AND (isMarketPlaceUser = 1 OR isDashUser = 1)
+        AND isActive = 1
+      ORDER BY id DESC
     `;
 
     const [results] = await db.collectionofficer.promise().query(sql, [
@@ -229,7 +231,14 @@ exports.getMarketPlaceUserLastCusIdDao = async () => {
 // Get User By Email
 exports.getUserByEmailDao = async (email) => {
   try {
-    const sql = "SELECT * FROM marketplaceusers WHERE email = ?";
+    const sql = `
+      SELECT * FROM marketplaceusers
+      WHERE email = ?
+        AND isActive = 1
+        AND (isMarketPlaceUser = 1 OR isDashUser = 1)
+      ORDER BY id DESC
+      LIMIT 1
+    `;
     const [results] = await db.collectionofficer.promise().query(sql, [email]);
     return results[0] || null;
   } catch (err) {
@@ -322,6 +331,9 @@ exports.getUserByPhoneDao = async (phoneCode, phoneNumber) => {
       WHERE ${groups.map((g) => g.sql).join("\n         OR ")}
          OR CONCAT(phoneCode, phoneNumber) IN (${numPlaceholders})
          OR CONCAT(REPLACE(phoneCode, '+', ''), phoneNumber) IN (${numPlaceholders})
+        AND isActive = 1
+        AND (isMarketPlaceUser = 1 OR isDashUser = 1)
+      ORDER BY id DESC
       LIMIT 1
     `;
     const params = [
