@@ -38,11 +38,21 @@ const signupSchema = Joi.object({
       "string.pattern.base": "Invalid email address format",
       "any.required": "Email is required",
     }),
-  nic: Joi.string().trim().pattern(/^(?:\d{9}[vVxX]|\d{12})$/).required().messages({
-    "string.empty": "NIC number is required",
-    "string.pattern.base": "Invalid NIC number format",
-    "any.required": "NIC number is required",
+  docType: Joi.string().valid("NIC", "PASS").optional(),
+  nic: Joi.when("docType", {
+    is: "PASS",
+    then: Joi.string().trim().max(12).required().messages({
+      "string.empty": "Passport ID is required",
+      "string.max": "Passport ID cannot exceed 12 characters",
+      "any.required": "Passport ID is required",
+    }),
+    otherwise: Joi.string().trim().pattern(/^(?:\d{9}[vVxX]|\d{12})$/).required().messages({
+      "string.empty": "NIC number is required",
+      "string.pattern.base": "Invalid NIC number format",
+      "any.required": "NIC number is required",
+    }),
   }),
+  brImg: Joi.string().allow("", null).optional(),
   password: Joi.string().pattern(/^\S+$/).required().messages({
     "string.pattern.base": "Password cannot contain spaces",
   }),

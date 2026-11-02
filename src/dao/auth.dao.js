@@ -372,6 +372,8 @@ exports.getUserByNicDao = async (nic) => {
 // Sign Up or Restore User
 exports.signupUserDao = async (user, hashedPassword, nextId = null, existingUserId = null) => {
   try {
+    const docType = String(user.docType || "").toUpperCase() === "PASS" ? "PASS" : "NIC";
+
     if (existingUserId) {
       // Restore existing deleted account
       const updateSql = `
@@ -386,6 +388,8 @@ exports.signupUserDao = async (user, hashedPassword, nextId = null, existingUser
           phoneNumber2 = ?,
           buyerType = ?,
           email = ?,
+          nic = ?,
+          docType = ?,
           password = ?,
           isMarketPlaceUser = 1,
           isSubscribe = 0,
@@ -409,6 +413,8 @@ exports.signupUserDao = async (user, hashedPassword, nextId = null, existingUser
         user.phoneNumber2 || null,
         user.buyerType,
         user.email,
+        user.nic,
+        docType,
         hashedPassword,
         user.companyName || null,
         user.companyPhoneCode || null,
@@ -435,8 +441,8 @@ exports.signupUserDao = async (user, hashedPassword, nextId = null, existingUser
     // Insert brand new user
     const insertSql = `
       INSERT INTO marketplaceusers 
-      (title, firstName, lastName, phoneCode, phoneNumber, phoneCode2, phoneNumber2, buyerType, email, nic, password, isMarketPlaceUser, isSubscribe, companyName, companyPhoneCode, companyPhone, cusId, nearesCity) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (title, firstName, lastName, phoneCode, phoneNumber, phoneCode2, phoneNumber2, buyerType, email, nic, docType, password, isMarketPlaceUser, isSubscribe, companyName, companyPhoneCode, companyPhone, cusId, nearesCity) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const insertValues = [
@@ -450,6 +456,7 @@ exports.signupUserDao = async (user, hashedPassword, nextId = null, existingUser
       user.buyerType,
       user.email,
       user.nic,
+      docType,
       hashedPassword,
       1,
       0,
@@ -579,3 +586,49 @@ exports.updatePasswordDao = async (userId, hashedPassword) => {
     throw err;
   }
 };
+
+// Wholesale pending verification status
+exports.getPendingWholesaleUserDao = async (userId) => {
+  try {
+    const sql = `
+      SELECT id, userId, approveStatus, brImg, approvedBy, approvedAt, createdAt
+      FROM pendingwholesaleusers
+      WHERE userId = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `;
+    const [results] = await db.collectionofficer.promise().query(sql, [userId]);
+    return results.length > 0 ? results[0] : null;
+  } catch (err) {
+    console.error("❌ Database error in getPendingWholesaleUserDao:", err);
+    throw err;
+  }
+};
+
+exports.resubmitPendingWholesaleBRDao = async (userId, brImgUrl) => {
+  try {
+    const checkSql = "SELECT id FROM pendingwholesaleusers WHERE userId = ? ORDER BY id DESC LIMIT 1";
+    const [existing] = await db.collectionofficer.promise().query(checkSql, [userId]);
+
+    if (existing.length > 0) {
+      const updateSql = `
+        UPDATE pendingwholesaleusers
+        SET approveStatus = 'To Review', brImg = ?, approvedBy = NULL, approvedAt = NULL, createdAt = NOW()
+        WHERE id = ?
+      `;
+      await db.collectionofficer.promise().query(updateSql, [brImgUrl, existing[0].id]);
+      return { id: existing[0].id, userId, approveStatus: "To Review", brImg: brImgUrl };
+    } else {
+      const insertSql = `
+        INSERT INTO pendingwholesaleusers (userId, approveStatus, brImg, createdAt)
+        VALUES (?, 'To Review', ?, NOW())
+      `;
+      const [insertResult] = await db.collectionofficer.promise().query(insertSql, [userId, brImgUrl]);
+      return { id: insertResult.insertId, userId, approveStatus: "To Review", brImg: brImgUrl };
+    }
+  } catch (err) {
+    console.error("❌ Database error in resubmitPendingWholesaleBRDao:", err);
+    throw err;
+  }
+};
+
