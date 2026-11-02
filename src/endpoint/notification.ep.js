@@ -2,25 +2,37 @@ const asyncHandler = require("express-async-handler");
 const notificationDao = require("../dao/notification.dao");
 const notificationCache = require("../services/notification-cache");
 
+const DEFAULT_LIMIT = 10;
+
 /**
- * GET /polygon/api/notification/
- * Fetch user notifications and unread count with in-memory caching.
+ * GET /polygon/api/notification?limit=10&offset=0
+ * Fetch user notifications page by page (no total cap) and the unread count.
+ * The app calls this repeatedly with offset 0, 10, 20, ... until hasMore = false.
  */
 exports.getNotifications = asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const buyerType = req.user.buyerType || "Retail";
-  const { limit = 50, offset = 0 } = req.query;
+
+  // Sanitize pagination params (page size defaults to 10, total is unlimited)
+  const limit = Math.max(parseInt(req.query.limit, 10) || DEFAULT_LIMIT, 1);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
 
   // Check in-memory node-cache first
-  let cachedCount = notificationCache.getUnreadCount(userId);
+  const cachedCount = notificationCache.getUnreadCount(userId);
 
-  const notificationsPromise = notificationDao.getUserNotificationsDao(userId, limit, offset, buyerType);
+  // Fetch limit + 1 rows: the extra row tells us if another page exists
+  const notificationsPromise = notificationDao.getUserNotificationsDao(
+    userId,
+    limit + 1,
+    offset,
+    buyerType
+  );
   const unreadPromise =
     cachedCount !== null
       ? Promise.resolve(cachedCount)
       : notificationDao.getUnreadCountDao(userId, buyerType);
 
-  const [notifications, unreadCount] = await Promise.all([
+  const [rows, unreadCount] = await Promise.all([
     notificationsPromise,
     unreadPromise,
   ]);
@@ -29,10 +41,16 @@ exports.getNotifications = asyncHandler(async (req, res) => {
     notificationCache.setUnreadCount(userId, unreadCount);
   }
 
+  const hasMore = rows.length > limit;
+  const notifications = hasMore ? rows.slice(0, limit) : rows;
+
   return res.status(200).json({
     status: true,
     notifications,
     unreadCount,
+    hasMore,
+    limit,
+    offset,
   });
 });
 
