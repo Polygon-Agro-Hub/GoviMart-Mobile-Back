@@ -236,3 +236,45 @@ exports.notifyPackageUpdate = async (req, res) => {
     });
   }
 };
+
+
+/**
+ * GET /api/product/package-item-products/:productTypeId?buyerType=Retail
+ * Returns the enabled products for one product type.
+ */
+exports.getPackageItemProducts = async (req, res) => {
+  const fullUrl = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+  console.log(fullUrl);
+
+  const productTypeId = parseInt(req.params.productTypeId, 10);
+  const { buyerType = "Retail" } = req.query;
+
+  if (!Number.isInteger(productTypeId) || productTypeId <= 0) {
+    return res.status(400).json({
+      status: false,
+      message: "A valid productTypeId is required",
+      products: [],
+    });
+  }
+
+  try {
+    const products = await ProductDao.getEnabledItemsByProductTypeDao(
+      productTypeId,
+      buyerType,
+    );
+
+    return res.status(200).json({
+      status: true,
+      message: products.length ? "Products found." : "No products found.",
+      productTypeId,
+      products,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching package item products:", err);
+    return res.status(500).json({
+      status: false,
+      message: "An error occurred while fetching products.",
+      products: [],
+    });
+  }
+};

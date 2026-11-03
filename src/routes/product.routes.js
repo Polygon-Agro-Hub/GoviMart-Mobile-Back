@@ -19,4 +19,9 @@ router.post("/check-availability", productEp.checkAvailability);
 // Webhook endpoint to broadcast package updates to all connected mobile clients
 router.post("/notify-update", productEp.notifyPackageUpdate);
 
-module.exports = router;
+router.get(
+    "/package-item-products/:productTypeId",
+    productEp.getPackageItemProducts,
+);
+
+module.exports = router;
