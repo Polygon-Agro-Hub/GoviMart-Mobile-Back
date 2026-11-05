@@ -317,3 +317,40 @@ exports.getProductTypesDao = () => {
   });
 };
 
+/**
+ * Enabled marketplace items that belong to a product type.
+ * Used by the package "what's included" popup.
+ */
+exports.getEnabledItemsByProductTypeDao = (productTypeId, buyerType = "Retail") => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT
+        m.id,
+        m.displayName
+      FROM marketplaceitems m
+      WHERE m.productTypeId = ?
+        AND m.isEnable = 1
+        AND LOWER(m.category) = LOWER(?)
+      ORDER BY m.displayName ASC
+    `;
+    db.collectionofficer.query(
+      sql,
+      [productTypeId, buyerType || "Retail"],
+      (err, results) => {
+        if (err) return reject(err);
+
+        // remove duplicate display names
+        const seen = new Set();
+        const unique = (results || []).filter((r) => {
+          const key = String(r.displayName || "").trim().toLowerCase();
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        resolve(unique);
+      },
+    );
+  });
+};
+
