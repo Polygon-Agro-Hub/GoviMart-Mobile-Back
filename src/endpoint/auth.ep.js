@@ -152,6 +152,46 @@ exports.login = asyncHandler(async (req, res) => {
   try {
     const result = await userDao.loginUser(identifier, password);
 
+    // Check pending wholesale approval status
+    if (result.buyerType && String(result.buyerType).trim().toLowerCase() === "wholesale") {
+      const pendingRecord = await userDao.getPendingWholesaleUserDao(result.id);
+      if (pendingRecord) {
+        const rawStatus = String(pendingRecord.approveStatus || "").trim().toLowerCase();
+
+        // 1. If status is "To Review" -> Wholesale Verification Pending
+        if (rawStatus === "to review") {
+          return res.status(200).json({
+            success: false,
+            wholesaleStatus: "To Review",
+            message: "Wholesale verification is pending",
+            data: {
+              userId: result.id,
+              approveStatus: "To Review",
+              brImg: pendingRecord.brImg,
+              submittedDate: pendingRecord.createdAt,
+              approvedAt: pendingRecord.approvedAt,
+            },
+          });
+        }
+
+        // 2. If status is "Reject" / "Rejected" -> Wholesale Verification Rejected
+        if (rawStatus === "reject" || rawStatus === "rejected") {
+          return res.status(200).json({
+            success: false,
+            wholesaleStatus: "Rejected",
+            message: "Wholesale verification is rejected",
+            data: {
+              userId: result.id,
+              approveStatus: "Rejected",
+              brImg: pendingRecord.brImg,
+              submittedDate: pendingRecord.createdAt,
+              approvedAt: pendingRecord.approvedAt,
+            },
+          });
+        }
+      }
+    }
+
     // Define JWT payload
     const payload = {
       id: result.id,
@@ -419,6 +459,7 @@ exports.userSignup = asyncHandler(async (req, res) => {
     phoneNumber2,
     phoneCode2,
     nic,
+    docType,
     companyPhoneNumber,
     companyPhoneCode,
   } = req.body;
@@ -480,8 +521,9 @@ exports.userSignup = asyncHandler(async (req, res) => {
             });
           }
         } else {
-          conflictErrors.nic = "NIC number already exists";
-          errorMessages.push("NIC number already exists");
+          const docLabel = (docType || "").toUpperCase() === "PASS" ? "Passport ID" : "NIC number";
+          conflictErrors.nic = `${docLabel} already exists`;
+          errorMessages.push(`${docLabel} already exists`);
         }
       }
     }
@@ -726,8 +768,9 @@ exports.verifySignup = asyncHandler(async (req, res) => {
         if ((existingNic.isActive === 0 || existingNic.deletedAt) && signupData.allowRestore) {
           restoredUserId = existingNic.id;
         } else {
-          conflictErrors.nic = "NIC number already exists";
-          errorMessages.push("NIC number already exists");
+          const docLabel = (signupData.docType || "").toUpperCase() === "PASS" ? "Passport ID" : "NIC number";
+          conflictErrors.nic = `${docLabel} already exists`;
+          errorMessages.push(`${docLabel} already exists`);
         }
       }
     }
@@ -769,6 +812,22 @@ exports.verifySignup = asyncHandler(async (req, res) => {
     await userDao.deleteOtpDao(referenceId);
 
     if (signupResult.status) {
+      const createdUserId = signupResult.data?.id || signupResult.data?.userId || restoredUserId;
+
+      // If Wholesale customer, create pending wholesale approval record with status 'To Review'
+      if (
+        signupData.buyerType &&
+        String(signupData.buyerType).trim().toLowerCase() === "wholesale" &&
+        createdUserId
+      ) {
+        try {
+          const brImgUrl = signupData.brImg || null;
+          await userDao.resubmitPendingWholesaleBRDao(createdUserId, brImgUrl);
+        } catch (pwErr) {
+          console.error("❌ Failed to create pending wholesale record:", pwErr.message);
+        }
+      }
+
       return res.status(201).json({
         status: true,
         message: "Your Polygon account created successfully.",
@@ -1619,3 +1678,77 @@ exports.clearSignupLockout = clearSignupLockout;
 exports.signupLockouts = signupLockouts;
 exports.signupAttempts = signupAttempts;
 exports.signupRequestAttempts = signupRequestAttempts;
+
+
+// Resubmit Wholesale BR Document
+exports.resubmitWholesaleBR = asyncHandler(async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "BR document file is required",
+      });
+    }
+
+    const uploadFileToS3 = require("../middlewares/s3upload");
+    const brImgUrl = await uploadFileToS3(
+      req.file.buffer,
+      req.file.originalname,
+      "wholesale-br"
+    );
+
+    const record = await userDao.resubmitPendingWholesaleBRDao(userId, brImgUrl);
+
+    return res.status(200).json({
+      success: true,
+      message: "BR document resubmitted successfully",
+      data: {
+        userId: Number(userId),
+        approveStatus: "To Review",
+        brImg: brImgUrl,
+        submittedDate: new Date(),
+      },
+    });
+  } catch (error) {
+    console.error("❌ Resubmit BR error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+
+// Upload Wholesale BR Document (for signup or standalone)
+exports.uploadWholesaleBR = asyncHandler(async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        status: false,
+        message: "BR document file is required",
+      });
+    }
+
+    const uploadFileToS3 = require("../middlewares/s3upload");
+    const brImgUrl = await uploadFileToS3(
+      req.file.buffer,
+      req.file.originalname,
+      "wholesale-br"
+    );
+
+    return res.status(200).json({
+      status: true,
+      message: "BR document uploaded successfully",
+      fileUrl: brImgUrl,
+    });
+  } catch (error) {
+    console.error("❌ Upload BR error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+});

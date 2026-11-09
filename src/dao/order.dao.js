@@ -782,6 +782,9 @@ exports.getRetailOrderByIdDao = async (
 
         const effectiveProcessOrderId = processOrderId || orderId;
 
+        // deliveredTime:
+        //   - PICKUP   => pickuporders.handOverTime (falls back to processorders.deliveredTime)
+        //   - DELIVERY => processorders.deliveredTime
         const orderSql = `
       SELECT 
         o.*, 
@@ -797,7 +800,11 @@ exports.getRetailOrderByIdDao = async (
         p.sheduleDate,
         p.packTime,
         p.outDlvrDate,
-        p.deliveredTime,
+        CASE
+          WHEN UPPER(o.delivaryMethod) = 'PICKUP'
+            THEN COALESCE(pko.handOverTime, p.deliveredTime)
+          ELSE p.deliveredTime
+        END AS deliveredTime,
         p.isCoupon AS isCoupon,
         p.couponType AS couponType,
         p.couponValue AS couponValue,
@@ -825,8 +832,9 @@ exports.getRetailOrderByIdDao = async (
       LEFT JOIN driverorders do_order ON do_order.orderId = p.id
       LEFT JOIN driverreturnorders dro ON dro.drvOrderId = do_order.id
       LEFT JOIN returnreason rr ON rr.id = dro.returnReasonId
+      LEFT JOIN pickuporders pko ON pko.orderId = p.id
       WHERE (p.id = ? OR o.id = ?) AND o.userId = ?
-      ORDER BY (p.id = ?) DESC, p.sheduleDate ASC, p.id ASC
+      ORDER BY (p.id = ?) DESC, p.sheduleDate ASC, p.id ASC, pko.id DESC
     `;
 
         const houseSql = `SELECT * FROM orderhouse WHERE orderId = ?`;
