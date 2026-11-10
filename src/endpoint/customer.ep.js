@@ -640,25 +640,9 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
       return res.status(400).json({ status: false, message: "Verification code has expired." });
     }
     if (otpRecord.otp !== code) {
-      const attempts = (phoneOtpAttempts.get(referenceId) || 0) + 1;
-      phoneOtpAttempts.set(referenceId, attempts);
-
-      if (attempts >= 5) {
-        phoneOtpAttempts.delete(referenceId);
-        await authDao.deleteOtpDao(referenceId);
-        userAuthEp.setSignupLockout(lockoutKeys);
-        return res.status(429).json({
-          status: false,
-          isRateLimited: true,
-          retryAfter: 900,
-          message: "Too many verification attempts. Please try again after 15 minutes.",
-        });
-      }
-
-      const remainingAttempts = 5 - attempts;
       return res.status(400).json({
         status: false,
-        message: `Incorrect verification code. ${remainingAttempts} ${remainingAttempts === 1 ? "attempt" : "attempts"} remaining.`,
+        message: "Incorrect verification code. Please try again.",
       });
     }
 
