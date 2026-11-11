@@ -686,39 +686,9 @@ exports.verifySignup = asyncHandler(async (req, res) => {
     const primaryKey = lockoutKeys[0] || `signup:${signupData?.email || signupData?.phoneNumber || referenceId}`;
 
     if (otpRecord.otp !== code) {
-      const now = Date.now();
-      let attemptData = signupAttempts.get(primaryKey);
-      if (attemptData && typeof attemptData === "object") {
-        if (now - attemptData.firstAttemptAt > SIGNUP_LOCKOUT_MS) {
-          attemptData = null;
-        }
-      } else if (typeof attemptData === "number") {
-        attemptData = { count: attemptData, firstAttemptAt: now };
-      }
-
-      const currentAttempts = (attemptData ? attemptData.count : 0) + 1;
-      signupAttempts.set(primaryKey, {
-        count: currentAttempts,
-        firstAttemptAt: attemptData ? attemptData.firstAttemptAt : now,
-      });
-
-      if (currentAttempts >= MAX_SIGNUP_ATTEMPTS) {
-        signupAttempts.delete(primaryKey);
-        await userDao.deleteOtpDao(referenceId);
-        setSignupLockout(lockoutKeys);
-
-        return res.status(429).json({
-          status: false,
-          isRateLimited: true,
-          retryAfter: 900,
-          message: "Too many verification attempts. Please try again after 15 minutes.",
-        });
-      }
-
-      const remainingAttempts = MAX_SIGNUP_ATTEMPTS - currentAttempts;
       return res.status(400).json({
         status: false,
-        message: `Incorrect verification code. ${remainingAttempts} ${remainingAttempts === 1 ? "attempt" : "attempts"} remaining.`,
+        message: "Incorrect verification code. Please try again.",
       });
     }
 
@@ -1475,39 +1445,9 @@ exports.forgotPasswordVerifyOtp = asyncHandler(async (req, res) => {
     }
 
     if (otpRecord.otp !== code) {
-      const now = Date.now();
-      let attemptData = forgotPasswordAttempts.get(primaryKey);
-      if (attemptData && typeof attemptData === "object") {
-        if (now - attemptData.firstAttemptAt > FORGOT_PWD_REQUEST_WINDOW_MS) {
-          attemptData = null;
-        }
-      } else if (typeof attemptData === "number") {
-        attemptData = { count: attemptData, firstAttemptAt: now };
-      }
-
-      const currentAttempts = (attemptData ? attemptData.count : 0) + 1;
-      forgotPasswordAttempts.set(primaryKey, {
-        count: currentAttempts,
-        firstAttemptAt: attemptData ? attemptData.firstAttemptAt : now,
-      });
-
-      if (currentAttempts >= MAX_FORGOT_PWD_ATTEMPTS) {
-        forgotPasswordAttempts.delete(primaryKey);
-        await userDao.deleteOtpDao(referenceId);
-        setForgotPwdLockout(keys, FORGOT_PWD_LOCKOUT_MS);
-
-        return res.status(429).json({
-          status: false,
-          isRateLimited: true,
-          retryAfter: 900,
-          message: "Too many verification attempts. Please try again after 15 minutes.",
-        });
-      }
-
-      const remainingAttempts = MAX_FORGOT_PWD_ATTEMPTS - currentAttempts;
       return res.status(400).json({
         status: false,
-        message: `Incorrect verification code. ${remainingAttempts} ${remainingAttempts === 1 ? "attempt" : "attempts"} remaining.`,
+        message: "Incorrect verification code. Please try again.",
       });
     }
 
