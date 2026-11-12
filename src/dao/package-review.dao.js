@@ -70,7 +70,7 @@ const applyCreditChange = async (q, userId, change) => {
  *  Card (+ Credit): creditBalance += oldFullTotal - newFullTotal
  *                   (total reduced -> refunded to credit, total increased -> taken, capped at balance)
  *  Credit only    : the reduced price is added back to creditBalance
- *                   (paid by credit = creditPaid, or amount when creditPaid is 0)
+ *                   (paid by Polygon Wallet = creditPaid, or amount when creditPaid is 0)
  *  Cash (+ Credit): only credit already used can be over-applied -> excess is added back
  *
  * Returns the new creditPaid and the creditBalance change (+ add / - take).
