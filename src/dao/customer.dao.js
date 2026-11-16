@@ -2,7 +2,7 @@ const db = require("../startup/database");
 
 exports.getCustomerProfileDao = async (userId) => {
   const query =
-    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName, creditBalance, image FROM marketplaceusers WHERE id = ?";
+    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, nic, docType, email, buyerType, companyName, creditBalance, image FROM marketplaceusers WHERE id = ?";
   const [results] = await db.collectionofficer.promise().query(query, [userId]);
   return results;
 };
@@ -234,6 +234,7 @@ exports.getAccountDetailsDao = async (userId) => {
       phoneCode2,
       phoneNumber2,
       nic,
+      docType,
       buyerType,
       email,
       companyPhoneCode,
@@ -573,6 +574,7 @@ exports.updateUserDetailsDao = async (userId, userData) => {
     "phoneCode2",
     "phoneNumber2",
     "nic",
+    "docType",
     "email",
     "companyPhoneCode",
     "companyPhone",

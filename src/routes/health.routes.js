@@ -213,6 +213,19 @@ router.get(["/health", "/healthz"], (req, res) => {
 });
 
 /**
+ * @route   GET /time or GET /api/time
+ * @desc    Ultra-fast server time endpoint for mobile client clock synchronization and validation
+ */
+router.get(["/time", "/api/time"], (req, res) => {
+  const now = Date.now();
+  res.status(200).json({
+    status: true,
+    serverTime: now,
+    serverUtc: new Date(now).toISOString(),
+  });
+});
+
+/**
  * @route   GET /health/detailed and GET /health/details
  * @desc    Comprehensive system, memory, CPU, and live database connection diagnostics
  *          Compatible with Polygon Admin Dashboard Developer Health Monitor

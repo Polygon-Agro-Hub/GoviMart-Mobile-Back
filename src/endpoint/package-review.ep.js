@@ -2,6 +2,9 @@ const asyncHandler = require("express-async-handler");
 const packageReviewDao = require("../dao/package-review.dao");
 const orderSmsService = require("../services/sms/order-sms.service");
 
+// Package-review features (replace/reset/confirm-review/packing-limit/cancel-order)
+// are Retail-only. The two order-confirmation endpoints (/confirm-order,
+// /cancel-before-confirm) are shared by both Retail and Wholesale.
 const ensureRetailUser = (req, res) => {
     const buyerType = req.user?.buyerType;
     if (!buyerType || buyerType.toLowerCase() !== "retail") {
@@ -307,12 +310,12 @@ exports.cancelPackageOrder = asyncHandler(async (req, res) => {
 
 /**
  * POST /api/order/confirm-order
- * Separate route: confirms order with live marketplace prices, updating orderadditionalitems,
+ * Available to BOTH Retail and Wholesale users.
+ * Confirms order with live marketplace prices, updating orderadditionalitems,
  * processorders (fullTotal, total, discount, amount, moneyPaid), and orders (fullTotal, total, discount).
  */
 exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
-    if (!ensureRetailUser(req, res)) return;
-
+    // Open to both Retail and Wholesale users – no ensureRetailUser check here.
     const userId = getUserId(req);
     const { orderId, processOrderId, newTotal, isPaid = null, amount = null, moneyPaid = null } = req.body;
 
@@ -376,8 +379,7 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
 
 
 exports.cancelOrderBeforeConfirm = asyncHandler(async (req, res) => {
-    if (!ensureRetailUser(req, res)) return;
-
+    // Open to both Retail and Wholesale users – no ensureRetailUser check here.
     const userId = getUserId(req);
     const { orderId, processOrderId } = req.body;
 
