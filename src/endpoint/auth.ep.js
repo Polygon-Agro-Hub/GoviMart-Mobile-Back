@@ -402,7 +402,7 @@ const sendShoutoutSms = async (phoneNumber, code) => {
 
   const formattedPhone = `+${cleanDigits}`;
 
-  const message = `Your OTP for verification is: ${code}`;
+  const message = `Your Polygon verification code is: ${code}.`;
   const apiUrl = "https://api.getshoutout.com/coreservice/messages";
   const headers = {
     "Authorization": `Apikey ${process.env.SHOUTOUT_API_KEY}`,
