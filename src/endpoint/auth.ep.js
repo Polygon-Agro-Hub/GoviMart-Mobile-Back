@@ -235,6 +235,8 @@ exports.login = asyncHandler(async (req, res) => {
         lastName: result.lastName,
         email: result.email,
         phoneNumber: result.phoneNumber,
+        nic: result.nic,
+        docType: result.docType,
         image: result.image,
         firstTimeUser: result.firstTimeUser,
         buyerType: result.buyerType,

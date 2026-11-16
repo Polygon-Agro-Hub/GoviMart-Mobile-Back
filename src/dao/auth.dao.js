@@ -54,6 +54,7 @@ exports.loginUser = async (identifier, password) => {
         phoneNumber, 
         password, 
         nic,
+        docType,
         image, 
         isMarketPlaceUser,
         firstTimeUser,
