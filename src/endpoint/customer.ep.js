@@ -415,7 +415,7 @@ exports.deleteUserAccount = asyncHandler(async (req, res) => {
     if (statusData.hasNegativeCredit) {
       return res.status(400).json({
         status: false,
-        message: "You have a negative credit balance on your account. Please clear the outstanding balance before deleting your account.",
+        message: "You have a negative Polygon Wallet on your account. Please clear the outstanding balance before deleting your account.",
       });
     }
 
