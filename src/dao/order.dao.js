@@ -1411,8 +1411,10 @@ exports.getUserCartTotalDao = (userId, cartId) => {
                 (
                     SELECT COALESCE(SUM(
                         CASE 
-                            WHEN cai.unit = 'g' THEN mpi.discountedPrice * (cai.qty / 1000)
-                            ELSE mpi.discountedPrice * cai.qty
+                            WHEN cai.unit = 'g' THEN 
+                                (CASE WHEN mpi.discountedPrice IS NOT NULL AND mpi.discountedPrice > 0 AND mpi.discountedPrice < mpi.normalPrice THEN mpi.discountedPrice ELSE mpi.normalPrice END) * (cai.qty / 1000)
+                            ELSE 
+                                (CASE WHEN mpi.discountedPrice IS NOT NULL AND mpi.discountedPrice > 0 AND mpi.discountedPrice < mpi.normalPrice THEN mpi.discountedPrice ELSE mpi.normalPrice END) * cai.qty
                         END
                     ), 0)
                     FROM cartadditionalitems cai
