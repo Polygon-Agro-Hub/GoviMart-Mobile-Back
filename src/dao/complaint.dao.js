@@ -98,7 +98,7 @@ exports.createComplainDao = async (
     `;
     const [result] = await db.collectionofficer
       .promise()
-      .query(sql, [userId, complaicategoryId, refId, complain, "Pending"]);
+      .query(sql, [userId, complaicategoryId, refId, complain, "Opened"]);
     return result.insertId;
   } catch (err) {
     console.error("❌ Database error in createComplainDao:", err);

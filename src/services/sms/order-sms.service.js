@@ -109,17 +109,27 @@ const resolveOrderDetails = async (orderIdOrProcessOrderId, fallbackUserId = nul
   return { invNo: null, userId: fallbackUserId };
 };
 
+// ─── Processing Date Gap Constants ──────────────────────────────────────────
+const RETAIL_GAP_DAYS = 3;
+const WHOLESALE_GAP_DAYS = 2;
+
+const isWholesaleBuyer = (buyerType) =>
+  String(buyerType || "").toLowerCase() === "wholesale";
+
 /**
- * Normal orders: Processing Date = delivery date - 3 days.
- * Example: delivery 2026-10-18 -> 2026-10-15
- * (2 full gap days between processing date and delivery date)
+ * Processing Date calculation:
+ * - Retail: delivery date - 3 days (e.g. delivery 20 -> 17)
+ * - Wholesale: delivery date - 2 days (e.g. delivery 20 -> 18)
  *
  * @param {string|Date} deliveryDate
+ * @param {string|null} [buyerType=null]
  * @returns {string} 'YYYY-MM-DD'
  */
-const calculateProcessingDate = (deliveryDate) => {
+const calculateProcessingDate = (deliveryDate, buyerType = null) => {
   const d = toLocalDate(deliveryDate);
-  d.setDate(d.getDate() - 3);
+  d.setDate(
+    d.getDate() - (isWholesaleBuyer(buyerType) ? WHOLESALE_GAP_DAYS : RETAIL_GAP_DAYS)
+  );
   return formatYmd(clampToToday(d));
 };
 
@@ -189,9 +199,9 @@ const sendOrderConfirmedSms = async ({ userId, phone, invNo }) => {
  * @param {boolean} [params.isCardPayment=false]
  * @returns {Promise<{success: boolean, referenceId?: string, error?: string}>}
  */
-const sendOrderPlacedAfterEpsdSms = async ({ userId, phone, deliveryDate, isCardPayment = false }) => {
+const sendOrderPlacedAfterEpsdSms = async ({ userId, phone, deliveryDate, isCardPayment = false, buyerType = null }) => {
   try {
-    const processingDateStr = calculateProcessingDate(deliveryDate);
+    const processingDateStr = calculateProcessingDate(deliveryDate, buyerType);
     const resolvedPhone = await resolveCustomerPhone(userId, phone);
 
     if (!resolvedPhone) {
@@ -199,12 +209,9 @@ const sendOrderPlacedAfterEpsdSms = async ({ userId, phone, deliveryDate, isCard
       return { success: false, error: "Missing phone number" };
     }
 
-    let message;
-    if (isCardPayment) {
-      message = `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${processingDateStr}. Please pay by 6:00 PM to confirm your order, or it will be cancelled.`;
-    } else {
-      message = `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${processingDateStr}. Please confirm your order by 6:00 PM or it will be cancelled.`;
-    }
+    const message = isCardPayment
+      ? `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${processingDateStr}. Please pay by 6:00 PM to confirm your order, or it will be cancelled.`
+      : `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${processingDateStr}. Please confirm your order by 6:00 PM or it will be cancelled.`;
 
     return await sendSms(resolvedPhone, message);
   } catch (err) {
@@ -250,9 +257,9 @@ const sendOrderPlacedPayToConfirmSms = async ({ userId, phone, deliveryDate }) =
  *
  * Processing Date = delivery date - 3 (18 -> 15)
  */
-const sendOrderPlacedAfterEpsdCreditSms = async ({ userId, phone, deliveryDate }) => {
+const sendOrderPlacedAfterEpsdCreditSms = async ({ userId, phone, deliveryDate, buyerType = null }) => {
   try {
-    const processingDateStr = calculateProcessingDate(deliveryDate);
+    const processingDateStr = calculateProcessingDate(deliveryDate, buyerType);
     const resolvedPhone = await resolveCustomerPhone(userId, phone);
 
     if (!resolvedPhone) {
@@ -269,6 +276,7 @@ const sendOrderPlacedAfterEpsdCreditSms = async ({ userId, phone, deliveryDate }
 };
 
 module.exports = {
+  isWholesaleBuyer,
   resolveCustomerPhone,
   resolveOrderDetails,
   calculateProcessingDate,
