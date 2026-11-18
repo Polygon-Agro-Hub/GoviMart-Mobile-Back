@@ -634,7 +634,7 @@ exports.deleteUserAccountDao = async (userId) => {
     if (creditBalance < 0) {
       await connection.rollback();
       const error = new Error(
-        "You have a negative credit balance on your account. Please clear the outstanding balance before deleting your account."
+        "You have a negative Polygon Wallet on your account. Please clear the outstanding balance before deleting your account."
       );
       error.statusCode = 400;
       throw error;
