@@ -75,16 +75,20 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
       } else {
         // Format the results to handle discount price formatting and calculate discount percentage
         const formattedResults = results.map((item) => {
-          // Calculate discount percentage
+          // Calculate discount percentage using numeric float parsing (avoiding string comparison)
           let discountPercentage = null;
+          const normalPrice = parseFloat(item.normalPrice);
+          const discountedPrice = parseFloat(item.discountedPrice);
+
           if (
-            item.normalPrice &&
-            item.discountedPrice &&
-            item.normalPrice > item.discountedPrice
+            !isNaN(normalPrice) &&
+            !isNaN(discountedPrice) &&
+            normalPrice > 0 &&
+            discountedPrice > 0 &&
+            normalPrice > discountedPrice
           ) {
             const discount =
-              ((item.normalPrice - item.discountedPrice) / item.normalPrice) *
-              100;
+              ((normalPrice - discountedPrice) / normalPrice) * 100;
             // Format percentage: if whole number, show as integer; if decimal, show with decimals
             discountPercentage =
               discount % 1 === 0
@@ -92,11 +96,14 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
                 : Math.round(discount * 100) / 100;
           }
 
+          const parsedDiscounted = parseFloat(item.discountedPrice);
           return {
             ...item,
             discountedPrice:
-              item.discountedPrice % 1 === 0
-                ? parseInt(item.discountedPrice)
+              !isNaN(parsedDiscounted)
+                ? parsedDiscounted % 1 === 0
+                  ? parseInt(parsedDiscounted, 10)
+                  : parsedDiscounted
                 : item.discountedPrice,
             discount: discountPercentage,
           };
