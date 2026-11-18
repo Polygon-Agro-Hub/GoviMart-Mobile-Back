@@ -782,6 +782,9 @@ exports.getRetailOrderByIdDao = async (
 
         const effectiveProcessOrderId = processOrderId || orderId;
 
+        // deliveredTime:
+        //   - PICKUP   => pickuporders.handOverTime (falls back to processorders.deliveredTime)
+        //   - DELIVERY => processorders.deliveredTime
         const orderSql = `
       SELECT 
         o.*, 
@@ -797,7 +800,11 @@ exports.getRetailOrderByIdDao = async (
         p.sheduleDate,
         p.packTime,
         p.outDlvrDate,
-        p.deliveredTime,
+        CASE
+          WHEN UPPER(o.delivaryMethod) = 'PICKUP'
+            THEN COALESCE(pko.handOverTime, p.deliveredTime)
+          ELSE p.deliveredTime
+        END AS deliveredTime,
         p.isCoupon AS isCoupon,
         p.couponType AS couponType,
         p.couponValue AS couponValue,
@@ -825,8 +832,9 @@ exports.getRetailOrderByIdDao = async (
       LEFT JOIN driverorders do_order ON do_order.orderId = p.id
       LEFT JOIN driverreturnorders dro ON dro.drvOrderId = do_order.id
       LEFT JOIN returnreason rr ON rr.id = dro.returnReasonId
+      LEFT JOIN pickuporders pko ON pko.orderId = p.id
       WHERE (p.id = ? OR o.id = ?) AND o.userId = ?
-      ORDER BY (p.id = ?) DESC, p.sheduleDate ASC, p.id ASC
+      ORDER BY (p.id = ?) DESC, p.sheduleDate ASC, p.id ASC, pko.id DESC
     `;
 
         const houseSql = `SELECT * FROM orderhouse WHERE orderId = ?`;
@@ -1266,6 +1274,87 @@ exports.getOrderAdditionalItemsDao = async (orderId, processOrderId = null) => {
 };
 
 /**
+ * Fetch additional items specifically for OrderConfirmedOrderCancelScreen
+ * Directly fetches stored price, normalPrice, discount, qty, and unit from orderadditionalitems.
+ */
+exports.getOrderCancelAdditionalItemsDao = async (orderId, processOrderId = null) => {
+    return new Promise((resolve, reject) => {
+        if (!orderId && !processOrderId) {
+            return reject(new Error("Invalid orderId"));
+        }
+
+        const resolveTargetProcessOrderId = () => {
+            return new Promise((res) => {
+                if (processOrderId) {
+                    return res(processOrderId);
+                }
+
+                const directSql =
+                    "SELECT proOrderId FROM orderadditionalitems WHERE proOrderId = ? LIMIT 1";
+                db.collectionofficer.query(directSql, [orderId], (dErr, dRows) => {
+                    if (!dErr && dRows && dRows.length > 0) {
+                        return res(orderId);
+                    }
+
+                    const poSql = `
+                        SELECT id 
+                        FROM processorders 
+                        WHERE id = ? OR orderId = ? 
+                        ORDER BY (id = ?) DESC, sheduleDate ASC, id ASC 
+                        LIMIT 1
+                    `;
+                    db.collectionofficer.query(
+                        poSql,
+                        [orderId, orderId, orderId],
+                        (poErr, poRows) => {
+                            if (poErr || !poRows || poRows.length === 0) {
+                                return res(orderId);
+                            }
+                            res(poRows[0].id);
+                        },
+                    );
+                });
+            });
+        };
+
+        resolveTargetProcessOrderId()
+            .then((resolvedProOrderId) => {
+                const sql = `
+              SELECT
+                oai.id,
+                oai.proOrderId,
+                oai.productId,
+                oai.qty,
+                oai.unit,
+                oai.price,
+                oai.normalPrice,
+                oai.discount,
+                mi.displayName,
+                cv.image
+              FROM orderadditionalitems oai
+              LEFT JOIN marketplaceitems mi ON oai.productId = mi.id
+              LEFT JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
+              WHERE oai.proOrderId = ? 
+                 OR oai.proOrderId IN (SELECT id FROM processorders WHERE id = ? OR orderId = ?)
+              ORDER BY oai.id ASC
+            `;
+
+                db.collectionofficer.query(
+                    sql,
+                    [resolvedProOrderId, orderId, orderId],
+                    (err2, results) => {
+                        if (err2) {
+                            return reject(new Error("Database error: " + err2.message));
+                        }
+                        resolve(results || []);
+                    },
+                );
+            })
+            .catch(reject);
+    });
+};
+
+/**
  * Fetch a single coupon by its code
  */
 exports.getCouponDetailsDao = (code) => {
@@ -1322,8 +1411,10 @@ exports.getUserCartTotalDao = (userId, cartId) => {
                 (
                     SELECT COALESCE(SUM(
                         CASE 
-                            WHEN cai.unit = 'g' THEN mpi.discountedPrice * (cai.qty / 1000)
-                            ELSE mpi.discountedPrice * cai.qty
+                            WHEN cai.unit = 'g' THEN 
+                                (CASE WHEN mpi.discountedPrice IS NOT NULL AND mpi.discountedPrice > 0 AND mpi.discountedPrice < mpi.normalPrice THEN mpi.discountedPrice ELSE mpi.normalPrice END) * (cai.qty / 1000)
+                            ELSE 
+                                (CASE WHEN mpi.discountedPrice IS NOT NULL AND mpi.discountedPrice > 0 AND mpi.discountedPrice < mpi.normalPrice THEN mpi.discountedPrice ELSE mpi.normalPrice END) * cai.qty
                         END
                     ), 0)
                     FROM cartadditionalitems cai

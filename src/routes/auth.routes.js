@@ -3,6 +3,7 @@ const router = express.Router();
 const userAuthEp = require('../endpoint/auth.ep');
 const loginRateLimiter = require('../middlewares/rateLimiter.middleware');
 const authMiddleware = require('../middlewares/auth.middleware');
+const { brUpload } = require('../middlewares/brUpload.middleware');
 
 /**
  * @openapi
@@ -38,6 +39,8 @@ const authMiddleware = require('../middlewares/auth.middleware');
  *         description: Unauthorized / Invalid credentials.
  */
 router.post('/login', loginRateLimiter, userAuthEp.login);
+router.post('/resubmit-wholesale-br', brUpload.single('brDocument'), userAuthEp.resubmitWholesaleBR);
+router.post('/upload-wholesale-br', brUpload.single('brDocument'), userAuthEp.uploadWholesaleBR);
 
 /**
  * @openapi

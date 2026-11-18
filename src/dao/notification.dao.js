@@ -405,7 +405,7 @@ exports.seedDummyNotificationsForUserDao = (userId) => {
           },
           {
             title: "Order Cancelled",
-            message: `Your order #${defaultInvNo}, has been cancelled. Reason : “The customer did not respond to the package review confirmation within the required time.” If you have already made a payment for this order, the total amount will be added to your credit balance. You can use this credit toward your next order.`,
+            message: `Your order #${defaultInvNo}, has been cancelled. Reason : “The customer did not respond to the package review confirmation within the required time.” If you have already made a payment for this order, the total amount will be added to your Polygon Wallet. You can use this credit toward your next order.`,
             minutesAgo: 8640,
             isRead: 1,
           },

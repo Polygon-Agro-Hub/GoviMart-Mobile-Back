@@ -98,6 +98,27 @@ exports.getOrderAdditionalItems = async (req, res) => {
     }
 };
 
+exports.getOrderCancelAdditionalItems = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { processOrderId } = req.query;
+
+        const additionalItems = await RetailOrderDao.getOrderCancelAdditionalItemsDao(orderId, processOrderId);
+
+        res.json({
+            status: true,
+            message: "Cancel order additional items fetched successfully",
+            data: additionalItems
+        });
+    } catch (error) {
+        console.error("❌ Error in getOrderCancelAdditionalItems:", error);
+        res.status(500).json({
+            status: false,
+            message: error?.toString() || "Unknown server error"
+        });
+    }
+};
+
 exports.checkCouponAvalability = async (req, res) => {
     try {
         const { userId } = req.user;
@@ -370,6 +391,15 @@ exports.createOrder = asyncHandler(async (req, res) => {
             status: false,
             message: "Cart does not belong to the current user",
         });
+    }
+
+    // Buyer type (from DB, not client) – drives SMS date gap
+    let buyerType = null;
+    try {
+        const cartRow = await cartDao.getCartByUserIdDao(userId);
+        buyerType = cartRow?.buyerType || null;
+    } catch (e) {
+        console.warn(" ⚠️ [createOrder] buyerType lookup failed:", e.message);
     }
 
     // ── 3. Check item availability ────────────────────────────────────────────
@@ -795,11 +825,19 @@ exports.createOrder = asyncHandler(async (req, res) => {
                                 scheduledDateStr && earliestDateStr && scheduledDateStr <= earliestDateStr
                             );
 
-                            // Only: isFinalizeImdt = 0 AND package order -> no EPSD check
+                            // Package + isFinalizeImdt = 0 -> review/accept flow (no EPSD check)
                             const isPackagePayToConfirmFlow = !Number(isFinalizeImdt) && hasPackages;
 
+                            // A la carte only OR package with isFinalizeImdt = 1
+                            const isAlaCarteOrFinalizedPackage = !hasPackages || Number(isFinalizeImdt) === 1;
+
+                            // Whole order paid with credit (no card / cash money needed)
+                            const isFullyPaidByCredit =
+                                requestedCredit > 0 &&
+                                requestedCredit >= calculatedGrandTotal - 0.01;
+
                             console.log(
-                                `[createOrder SMS] scheduled: ${scheduledDateStr}, earliest: ${earliestDateStr}, isType1: ${isType1}, isFinalizeImdt: ${isFinalizeImdt}, hasPackages: ${hasPackages}, packageFlow: ${isPackagePayToConfirmFlow}`
+                                `[createOrder SMS] scheduled: ${scheduledDateStr}, earliest: ${earliestDateStr}, isType1: ${isType1}, isFinalizeImdt: ${isFinalizeImdt}, hasPackages: ${hasPackages}, packageFlow: ${isPackagePayToConfirmFlow}, alaCarteOrFinalized: ${isAlaCarteOrFinalizedPackage}, fullCredit: ${isFullyPaidByCredit}`
                             );
 
                             if (isPackagePayToConfirmFlow) {
@@ -816,14 +854,24 @@ exports.createOrder = asyncHandler(async (req, res) => {
                                     phone: resolvedPhone1,
                                     invNo: primaryInvNo,
                                 });
+                            } else if (isAlaCarteOrFinalizedPackage && isFullyPaidByCredit) {
+                                // Delivery after EPSD, a la carte / finalized package, fully paid with credit
+                                // Shows delivery - 3 (18 -> 15) for retail, delivery - 2 (18 -> 16) for wholesale
+                                await orderSmsService.sendOrderPlacedAfterEpsdCreditSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    deliveryDate: scheduledDateStr,
+                                    buyerType,
+                                });
                             } else {
-                                // Delivery after earliest date (shows delivery - 3, 18 -> 15)
+                                // Delivery after earliest date (shows delivery - 3, 18 -> 15 for retail, delivery - 2, 18 -> 16 for wholesale)
                                 const isCard = String(paymentMethod).toLowerCase() === "card";
                                 await orderSmsService.sendOrderPlacedAfterEpsdSms({
                                     userId,
                                     phone: resolvedPhone1,
                                     deliveryDate: scheduledDateStr,
                                     isCardPayment: isCard,
+                                    buyerType,
                                 });
                             }
                         } catch (smsErr) {
@@ -955,12 +1003,29 @@ const getColomboDatePlus = (days) => {
 
 /**
  * GET /api/order/schedule-orders/:sheduleDate?
- * Default sheduleDate = today + 3 days 
+ * Default sheduleDate:
+ *   - Wholesale: today + 2 days (2-day gap: today 12 -> 14)
+ *   - Retail:    today + 3 days (3-day gap: today 12 -> 15)
  */
 exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
     const userId = req.user?.id || req.user?.userId;
+
+    let buyerType = req.query.buyerType || req.user?.buyerType;
+    if (!buyerType || String(buyerType).toLowerCase() !== "wholesale") {
+        try {
+            const profile = await customerDao.getCustomerProfileDao(userId);
+            if (profile && profile.length > 0 && profile[0].buyerType) {
+                buyerType = profile[0].buyerType;
+            }
+        } catch (e) {
+            // keep existing buyerType
+        }
+    }
+
+    const isWholesale = String(buyerType || "").trim().toLowerCase() === "wholesale";
+    const defaultGap = isWholesale ? 2 : 3;
     const sheduleDate =
-        req.query.sheduleDate || req.params.sheduleDate || getColomboDatePlus(3);
+        req.query.sheduleDate || req.params.sheduleDate || getColomboDatePlus(defaultGap);
 
     const result = await RetailOrderDao.getOrdersForSheduleDate(sheduleDate, userId);
 
@@ -973,4 +1038,3 @@ exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
         orders: result.orders,
     });
 });
-

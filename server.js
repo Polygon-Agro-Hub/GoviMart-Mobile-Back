@@ -15,7 +15,6 @@ const app = express();
 app.use(compression());
 
 const BASE_PATH = "/polygon";
-
 const corsOptions = {
   origin: process.env.CLIENT_ORIGIN || "*",
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

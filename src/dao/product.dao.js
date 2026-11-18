@@ -9,6 +9,7 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
         m.normalPrice,
         m.discountedPrice,
         m.discount,
+        m.pkgBasePrice,
         m.comPrice,
         m.promo,
         m.unitType,
@@ -74,16 +75,20 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
       } else {
         // Format the results to handle discount price formatting and calculate discount percentage
         const formattedResults = results.map((item) => {
-          // Calculate discount percentage
+          // Calculate discount percentage using numeric float parsing (avoiding string comparison)
           let discountPercentage = null;
+          const normalPrice = parseFloat(item.normalPrice);
+          const discountedPrice = parseFloat(item.discountedPrice);
+
           if (
-            item.normalPrice &&
-            item.discountedPrice &&
-            item.normalPrice > item.discountedPrice
+            !isNaN(normalPrice) &&
+            !isNaN(discountedPrice) &&
+            normalPrice > 0 &&
+            discountedPrice > 0 &&
+            normalPrice > discountedPrice
           ) {
             const discount =
-              ((item.normalPrice - item.discountedPrice) / item.normalPrice) *
-              100;
+              ((normalPrice - discountedPrice) / normalPrice) * 100;
             // Format percentage: if whole number, show as integer; if decimal, show with decimals
             discountPercentage =
               discount % 1 === 0
@@ -91,11 +96,14 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
                 : Math.round(discount * 100) / 100;
           }
 
+          const parsedDiscounted = parseFloat(item.discountedPrice);
           return {
             ...item,
             discountedPrice:
-              item.discountedPrice % 1 === 0
-                ? parseInt(item.discountedPrice)
+              !isNaN(parsedDiscounted)
+                ? parsedDiscounted % 1 === 0
+                  ? parseInt(parsedDiscounted, 10)
+                  : parsedDiscounted
                 : item.discountedPrice,
             discount: discountPercentage,
           };
@@ -266,6 +274,7 @@ exports.getProductsByProductTypeDao = (productTypeId, buyerType = "Retail") => {
         m.normalPrice,
         m.discountedPrice,
         m.discount,
+        m.pkgBasePrice,
         m.comPrice,
         m.promo,
         m.unitType,
@@ -314,6 +323,43 @@ exports.getProductTypesDao = () => {
       if (err) return reject(err);
       resolve(results || []);
     });
+  });
+};
+
+/**
+ * Enabled marketplace items that belong to a product type.
+ * Used by the package "what's included" popup.
+ */
+exports.getEnabledItemsByProductTypeDao = (productTypeId, buyerType = "Retail") => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT
+        m.id,
+        m.displayName
+      FROM marketplaceitems m
+      WHERE m.productTypeId = ?
+        AND m.isEnable = 1
+        AND LOWER(m.category) = LOWER(?)
+      ORDER BY m.displayName ASC
+    `;
+    db.collectionofficer.query(
+      sql,
+      [productTypeId, buyerType || "Retail"],
+      (err, results) => {
+        if (err) return reject(err);
+
+        // remove duplicate display names
+        const seen = new Set();
+        const unique = (results || []).filter((r) => {
+          const key = String(r.displayName || "").trim().toLowerCase();
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        resolve(unique);
+      },
+    );
   });
 };
 
