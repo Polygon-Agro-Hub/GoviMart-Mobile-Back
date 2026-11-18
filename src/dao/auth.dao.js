@@ -399,7 +399,7 @@ exports.signupUserDao = async (user, hashedPassword, nextId = null, existingUser
           companyPhone = ?,
           nearesCity = ?,
           creditBalance = 0,
-          creditLimit = 2000,
+          creditLimit = DEFAULT(creditLimit),
           isActive = 1
         WHERE id = ?
       `;
