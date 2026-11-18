@@ -159,9 +159,8 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
         updatedAdditionalItems = [],
         deletedAdditionalItemIds = [],
         packages = [],
+        packageReviewValues = [],
     } = req.body;
-
-
 
     if (!orderId && !processOrderId) {
         return res.status(400).json({
@@ -203,9 +202,8 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
             updatedAdditionalItems,
             deletedAdditionalItemIds,
             packages,
+            packageReviewValues, 
         });
-
-
 
         // "Order confirmed" SMS after the review is committed. Best-effort:
         // runs in the background and can never fail the review response.
