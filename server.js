@@ -25,13 +25,13 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(
   bodyParser.json({
-    limit: "10mb",
+    limit: "50mb",
     verify: (req, res, buf) => {
       req.rawBody = buf;
     },
   })
 );
-app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
+app.use(bodyParser.urlencoded({ limit: "50mb", extended: true }));
 
 // Function to check database connection
 const DatabaseConnection = (db, name) => {
