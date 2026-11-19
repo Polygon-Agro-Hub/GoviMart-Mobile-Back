@@ -736,6 +736,7 @@ exports.resetPackageItemDao = ({
  *  2b. UPDATE edited EXISTING ala carte rows by id
  *  3. Insert / merge newly added ala carte items
  *  3c. Refresh all ala carte rows with live prices
+ *  3d. Save the price change of each package in orderpackage.reviewValue
  *  4. Lock packages
  *  5. Schedule date (shifted by the number of "Package Finalization Review" reminders)
  *       1 notification row  -> no change
@@ -743,7 +744,6 @@ exports.resetPackageItemDao = ({
  *       3 notification rows -> sheduleDate + 2 days
  *  6. Totals on processorders (fullTotal, total, discount, + amount/moneyPaid for card)
  *  7. Credit balance (card orders): creditBalance += oldFullTotal - newFullTotal (capped at 0)
- *
  * Relies on helpers defined elsewhere in this DAO file: db, round2,
  * settleCredit, applyCreditChange.
  */
@@ -763,6 +763,7 @@ exports.confirmPackageReviewDao = ({
     updatedAdditionalItems = [],
     deletedAdditionalItemIds = [],
     packages = [],
+    packageReviewValues = [], 
 }) => {
     return new Promise((resolve, reject) => {
         db.collectionofficer.getConnection((connErr, connection) => {
@@ -1247,6 +1248,31 @@ exports.confirmPackageReviewDao = ({
                         }
                     }
 
+                    // 3d. Save the price change of each package on orderpackage.reviewValue
+                    //     0 = no change, +300 = price increased, -200 = price reduced.
+                    //     Only packages that belong to THIS order are touched.
+                    //     Old app versions send nothing -> column is left unchanged.
+                    if (
+                        Array.isArray(packageReviewValues) &&
+                        packageReviewValues.length > 0
+                    ) {
+                        const validReviewPkgIds = new Set(
+                            dbPackages.map((p) => Number(p.orderPackageId)),
+                        );
+
+                        for (const rv of packageReviewValues) {
+                            const opId = Number(rv.orderPackageId);
+                            const rawValue = Number(rv.reviewValue);
+                            if (!opId || isNaN(rawValue)) continue;
+                            if (!validReviewPkgIds.has(opId)) continue;
+
+                            await q(
+                                "UPDATE orderpackage SET reviewValue = ? WHERE id = ? AND orderId = ?",
+                                [round2(rawValue), opId, realProcessOrderId],
+                            );
+                        }
+                    }
+
                     // 4. Lock all packages
                     await q(
                         "UPDATE orderpackage SET packingStatus = 'Dispatch', isLock = 1 WHERE orderId = ? OR orderId = ?",
@@ -1329,7 +1355,7 @@ exports.confirmPackageReviewDao = ({
                         ? settle.newCreditPaid
                         : parseFloat(matchedOrder.creditPaid) || 0;
 
-                    // FIX: detect a payment that was just completed through the gateway.
+                    // Detect a payment that was just completed through the gateway.
                     // The app only sends isPaid = 1 after the gateway succeeded (or when
                     // nothing is due), so combine it with the DB state:
                     //   A) card order that was NOT paid yet (isPaid = 0) -> full amount paid now
@@ -1350,7 +1376,7 @@ exports.confirmPackageReviewDao = ({
 
                     // REVIEW step flags: isFinalized = 1, isConfirmed = 0
                     if (gatewayPaidNow) {
-                        // FIX: isPaid = 1 and moneyPaid = amount - creditPaid
+                        // isPaid = 1 and moneyPaid = amount - creditPaid
                         const newAmount = finalFullTotal;
                         const newMoneyPaid = round2(Math.max(0, newAmount - creditPaid));
                         await q(

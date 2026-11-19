@@ -710,7 +710,7 @@ exports.deleteUserAccountDao = async (userId) => {
         nearesCity = NULL,
         creditBalance = 0,
         creditLimit = 0,
-        creditLimitBonusTier = NULL,
+        creditLimitBonusTier = 0,
         isMarketPlaceUser = 0,
         isDashUser = 0,
         firstTimeUser = 0,
