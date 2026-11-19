@@ -33,22 +33,43 @@ const getContentType = (ext) => {
  * @param {Buffer} fileBuffer
  * @param {string} fileName
  * @param {string} keyPrefix
+ * @param {boolean} [alreadyConverted=false]
  * @returns {Promise<string>} file URL
  */
-const uploadFileToS3 = async (fileBuffer, fileName, keyPrefix) => {
+const uploadFileToS3 = async (fileBuffer, fileName, keyPrefix, alreadyConverted = false) => {
   try {
     let body = fileBuffer;
     let fileExtension = (fileName.split(".").pop() || "").toLowerCase();
 
-    // Convert HEIC/HEIF -> JPEG so browsers can display it
-    if (isHeic(fileBuffer) || ["heic", "heif"].includes(fileExtension)) {
-      const converted = await convert({
-        buffer: fileBuffer,
-        format: "JPEG", // use "PNG" if you prefer lossless
-        quality: 0.9,
-      });
-      body = Buffer.from(converted);
-      fileExtension = "jpg";
+    // Convert HEIC/HEIF -> JPEG so browsers can display it (if not already normalized)
+    if (!alreadyConverted && (isHeic(fileBuffer) || ["heic", "heif"].includes(fileExtension))) {
+      try {
+        const converted = await convert({
+          buffer: fileBuffer,
+          format: "JPEG",
+          quality: 0.85,
+        });
+        body = Buffer.from(converted);
+        fileExtension = "jpg";
+      } catch (singleErr) {
+        // Multi-frame / Live Photo fallback
+        try {
+          const allFrames = await convert.all({
+            buffer: fileBuffer,
+            format: "JPEG",
+            quality: 0.85,
+          });
+          if (allFrames && allFrames.length > 0) {
+            body = Buffer.from(allFrames[0]);
+            fileExtension = "jpg";
+          } else {
+            throw singleErr;
+          }
+        } catch (allErr) {
+          console.error("s3upload HEIC conversion failed for all frames:", allErr);
+          throw singleErr;
+        }
+      }
     }
 
     const uniqueFileName = `${uuidv4()}.${fileExtension}`;
