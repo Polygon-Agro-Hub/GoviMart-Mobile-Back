@@ -3,6 +3,8 @@ const RetailOrderDao = require("../dao/order.dao");
 const cartDao = require("../dao/cart.dao");
 const customerDao = require("../dao/customer.dao");
 const orderSmsService = require("../services/sms/order-sms.service");
+// Risk 4-C: server-side payment verification via gateway (do not trust client isPaid)
+const paymentGatewayFactory = require("../services/payment/payment.factory");
 
 const {
     couponValidationSchema,
@@ -302,6 +304,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     const {
         cartId, paymentMethod, grandTotal, discountAmount, deliveryCharge,
         creditPaid, moneyPaid, isFinalizeImdt, checkoutDetails,
+        checkoutSessionId,
     } = value;
 
     const {
@@ -498,6 +501,54 @@ exports.createOrder = asyncHandler(async (req, res) => {
             clientTotal: Number(grandTotal),
         });
     }
+
+    // ── Risk 4-C: Server-side payment verification ────────────────────────────
+    // For card orders: verify payment status directly with the gateway.
+    // Never trust isPaid=1 from the client — a malicious actor could send it
+    // without completing the actual payment (deep-link hijacking).
+    // For cash/credit orders: use the client-supplied value as before (no gateway).
+    const isCardPayment = String(paymentMethod || "").toLowerCase() === "card";
+    let serverVerifiedIsPaid = 0;
+
+    if (isCardPayment && checkoutSessionId) {
+        try {
+            const strategy = paymentGatewayFactory.getGateway("payments_lk");
+            const { isCompleted, checkout } = await strategy.verifyAndSyncCheckout(
+                checkoutSessionId,
+                userId,
+            );
+            if (isCompleted) {
+                // Double-check: gateway-reported amount must match our calculated total (Rs. 1 tolerance)
+                const paidAmountCents = checkout?.payment?.amountCents || 0;
+                const paidAmountLkr = paidAmountCents / 100;
+                if (Math.abs(paidAmountLkr - calculatedGrandTotal) <= 1.0) {
+                    serverVerifiedIsPaid = 1;
+                } else {
+                    console.warn(
+                        `\u26a0\ufe0f [createOrder] Gateway amount mismatch for user ${userId}: ` +
+                        `gateway=${paidAmountLkr}, order=${calculatedGrandTotal}. Setting isPaid=0.`,
+                    );
+                }
+            } else {
+                console.warn(
+                    `\u26a0\ufe0f [createOrder] Gateway reports payment NOT completed for user ${userId}, ` +
+                    `checkoutSessionId=${checkoutSessionId}. Order will be created as unpaid.`,
+                );
+            }
+        } catch (verifyErr) {
+            // Non-fatal: if the gateway is unreachable, create the order as unpaid.
+            // The webhook/reconcile job will update isPaid once the gateway confirms.
+            console.warn(
+                "\u26a0\ufe0f [createOrder] Gateway verification failed (non-fatal, isPaid=0):",
+                verifyErr.message,
+            );
+            serverVerifiedIsPaid = 0;
+        }
+    } else if (!isCardPayment) {
+        // Cash / credit orders: use the client's isPaid claim (no card gateway involved)
+        serverVerifiedIsPaid = Number(req.body.isPaid) === 1 ? 1 : 0;
+    }
+    // Card orders without checkoutSessionId: serverVerifiedIsPaid stays 0
 
     // Verify user credit balance if paying with credit
     const requestedCredit = parseFloat(creditPaid) || 0;
@@ -713,7 +764,8 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     }
 
                     // Create an individual processorders row for each scheduled date
-                    const clientIsPaid = Number(req.body.isPaid) === 1 ? 1 : 0;
+                    // use serverVerifiedIsPaid (gateway-verified) instead of raw client claim
+                    const clientIsPaid = serverVerifiedIsPaid;
 
                     for (let i = 0; i < targetDates.length; i++) {
                         const sDate = targetDates[i];
@@ -758,7 +810,8 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         targetDate = parseScheduleDate(calculatedOrders[0]?.date || calculatedOrders[0]?.dateStr);
                     }
 
-                    const clientIsPaid = Number(req.body.isPaid) === 1 ? 1 : 0;
+                    //use serverVerifiedIsPaid (gateway-verified) instead of raw client claim
+                    const clientIsPaid = serverVerifiedIsPaid;
                     const oneTimeMoneyPaid = clientIsPaid === 1 ? Math.max(0, calculatedGrandTotal - requestedCredit) : 0;
                     const oneTimeAmount = clientIsPaid === 1 ? calculatedGrandTotal : 0;
 
