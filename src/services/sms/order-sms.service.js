@@ -71,7 +71,7 @@ const resolveCustomerPhone = async (userId, fallbackPhone = null) => {
         return `${phoneCode}${phoneNumber}`;
       }
     } catch (err) {
-      console.warn("[Order SMS] Error resolving customer phone from marketplaceusers:", err.message);
+      console.warn("⚠️ [Order SMS] Error resolving customer phone from marketplaceusers:", err.message);
     }
   }
   return fallbackPhone || null;
@@ -104,22 +104,32 @@ const resolveOrderDetails = async (orderIdOrProcessOrderId, fallbackUserId = nul
       };
     }
   } catch (err) {
-    console.warn("[Order SMS] Failed to resolve order details:", err.message);
+    console.warn("⚠️ [Order SMS] Failed to resolve order details:", err.message);
   }
   return { invNo: null, userId: fallbackUserId };
 };
 
+// ─── Processing Date Gap Constants ──────────────────────────────────────────
+const RETAIL_GAP_DAYS = 3;
+const WHOLESALE_GAP_DAYS = 2;
+
+const isWholesaleBuyer = (buyerType) =>
+  String(buyerType || "").toLowerCase() === "wholesale";
+
 /**
- * Normal orders: Processing Date = delivery date - 3 days.
- * Example: delivery 2026-10-18 -> 2026-10-15
- * (2 full gap days between processing date and delivery date)
+ * Processing Date calculation:
+ * - Retail: delivery date - 3 days (e.g. delivery 20 -> 17)
+ * - Wholesale: delivery date - 2 days (e.g. delivery 20 -> 18)
  *
  * @param {string|Date} deliveryDate
+ * @param {string|null} [buyerType=null]
  * @returns {string} 'YYYY-MM-DD'
  */
-const calculateProcessingDate = (deliveryDate) => {
+const calculateProcessingDate = (deliveryDate, buyerType = null) => {
   const d = toLocalDate(deliveryDate);
-  d.setDate(d.getDate() - 3);
+  d.setDate(
+    d.getDate() - (isWholesaleBuyer(buyerType) ? WHOLESALE_GAP_DAYS : RETAIL_GAP_DAYS)
+  );
   return formatYmd(clampToToday(d));
 };
 
@@ -150,7 +160,7 @@ const calculateConfirmationRequestDate = (deliveryDate) => {
 const sendOrderConfirmedSms = async ({ userId, phone, invNo }) => {
   try {
     if (!invNo) {
-      console.warn("[Order SMS] sendOrderConfirmedSms skipped: invNo is required.");
+      console.warn("⚠️ [Order SMS] sendOrderConfirmedSms skipped: invNo is required.");
       return { success: false, error: "Missing invoice number" };
     }
 
@@ -161,14 +171,14 @@ const sendOrderConfirmedSms = async ({ userId, phone, invNo }) => {
 
     const resolvedPhone = await resolveCustomerPhone(userId, phone);
     if (!resolvedPhone) {
-      console.warn(`[Order SMS] Could not resolve phone number for userId: ${userId}`);
+      console.warn(`⚠️ [Order SMS] Could not resolve phone number for userId: ${userId}`);
       return { success: false, error: "Missing phone number" };
     }
 
     const message = `Dear Customer, your order : ${invNo} is confirmed. Thank you for ordering with Polygon!`;
     return await sendSms(resolvedPhone, message);
   } catch (err) {
-    console.error("[Order SMS] Error in sendOrderConfirmedSms:", err.message);
+    console.error("❌ [Order SMS] Error in sendOrderConfirmedSms:", err.message);
     return { success: false, error: err.message };
   }
 };
@@ -189,33 +199,30 @@ const sendOrderConfirmedSms = async ({ userId, phone, invNo }) => {
  * @param {boolean} [params.isCardPayment=false]
  * @returns {Promise<{success: boolean, referenceId?: string, error?: string}>}
  */
-const sendOrderPlacedAfterEpsdSms = async ({ userId, phone, deliveryDate, isCardPayment = false }) => {
+const sendOrderPlacedAfterEpsdSms = async ({ userId, phone, deliveryDate, isCardPayment = false, buyerType = null }) => {
   try {
-    const processingDateStr = calculateProcessingDate(deliveryDate);
+    const processingDateStr = calculateProcessingDate(deliveryDate, buyerType);
     const resolvedPhone = await resolveCustomerPhone(userId, phone);
 
     if (!resolvedPhone) {
-      console.warn(`[Order SMS] Could not resolve phone number for userId: ${userId}`);
+      console.warn(`⚠️ [Order SMS] Could not resolve phone number for userId: ${userId}`);
       return { success: false, error: "Missing phone number" };
     }
 
-    let message;
-    if (isCardPayment) {
-      message = `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${processingDateStr}. Please pay by 6:00 PM to confirm your order, or it will be cancelled.`;
-    } else {
-      message = `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${processingDateStr}. Please confirm your order by 6:00 PM or it will be cancelled.`;
-    }
+    const message = isCardPayment
+      ? `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${processingDateStr}. Please pay by 6:00 PM to confirm your order, or it will be cancelled.`
+      : `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${processingDateStr}. Please confirm your order by 6:00 PM or it will be cancelled.`;
 
     return await sendSms(resolvedPhone, message);
   } catch (err) {
-    console.error("[Order SMS] Error in sendOrderPlacedAfterEpsdSms:", err.message);
+    console.error("❌ [Order SMS] Error in sendOrderPlacedAfterEpsdSms:", err.message);
     return { success: false, error: err.message };
   }
 };
 
 /**
  * SMS for: isFinalizeImdt = 0 AND isPackage = 1 (no E.P.S.D. check):
- * "Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on [Processing Date + 1]. Please pay by 6:00 PM to confirm your order, or it will be canceled."
+ * "Dear Customer, You’ll receive an order review request via the Polygon Platform by 8:00 AM on [Processing Date + 1]. Please review and accept your order by 6:00 PM or it will be canceled."
  *
  * Date shown = delivery date - 2 (18 -> 16)
  *
@@ -231,19 +238,45 @@ const sendOrderPlacedPayToConfirmSms = async ({ userId, phone, deliveryDate }) =
     const resolvedPhone = await resolveCustomerPhone(userId, phone);
 
     if (!resolvedPhone) {
-      console.warn(`[Order SMS] Could not resolve phone number for userId: ${userId}`);
+      console.warn(`⚠️ [Order SMS] Could not resolve phone number for userId: ${userId}`);
       return { success: false, error: "Missing phone number" };
     }
 
-    const message = `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${confirmDateStr}. Please pay by 6:00 PM to confirm your order, or it will be Cancelled.`;
+    const message = `Dear Customer, You’ll receive an order review request via the Polygon Platform by 8:00 AM on ${confirmDateStr}. Please review and accept your order by 6:00 PM or it will be cancelled.`;
     return await sendSms(resolvedPhone, message);
   } catch (err) {
-    console.error("[Order SMS] Error in sendOrderPlacedPayToConfirmSms:", err.message);
+    console.error("❌ [Order SMS] Error in sendOrderPlacedPayToConfirmSms:", err.message);
+    return { success: false, error: err.message };
+  }
+};
+
+/**
+ * Type 2 SMS for orders (a la carte only OR package with isFinalizeImdt = 1)
+ * placed after E.P.S.D. and fully paid with credit:
+ * "Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on [Processing Date]. Please confirm your order by 6:00 PM or it will be cancelled."
+ *
+ * Processing Date = delivery date - 3 (18 -> 15)
+ */
+const sendOrderPlacedAfterEpsdCreditSms = async ({ userId, phone, deliveryDate, buyerType = null }) => {
+  try {
+    const processingDateStr = calculateProcessingDate(deliveryDate, buyerType);
+    const resolvedPhone = await resolveCustomerPhone(userId, phone);
+
+    if (!resolvedPhone) {
+      console.warn(`⚠️ [Order SMS] Could not resolve phone number for userId: ${userId}`);
+      return { success: false, error: "Missing phone number" };
+    }
+
+    const message = `Dear Customer, You’ll receive an order confirmation request via the Polygon Platform by 8:00 AM on ${processingDateStr}. Please confirm your order by 6:00 PM or it will be cancelled.`;
+    return await sendSms(resolvedPhone, message);
+  } catch (err) {
+    console.error("❌ [Order SMS] Error in sendOrderPlacedAfterEpsdCreditSms:", err.message);
     return { success: false, error: err.message };
   }
 };
 
 module.exports = {
+  isWholesaleBuyer,
   resolveCustomerPhone,
   resolveOrderDetails,
   calculateProcessingDate,
@@ -251,4 +284,5 @@ module.exports = {
   sendOrderConfirmedSms,
   sendOrderPlacedAfterEpsdSms,
   sendOrderPlacedPayToConfirmSms,
+  sendOrderPlacedAfterEpsdCreditSms,
 };

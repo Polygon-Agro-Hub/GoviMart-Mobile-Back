@@ -1,53 +1,93 @@
 const { PutObjectCommand } = require("@aws-sdk/client-s3");
-const { v4: uuidv4 } = require('uuid');
+const { v4: uuidv4 } = require("uuid");
+const convert = require("heic-convert");
 const r2Client = require("./r2client");
 
+// Detect HEIC/HEIF by magic bytes (ftyp box), since the extension or
+// mimetype can be wrong (iOS sometimes labels HEIC files as .jpg)
+const isHeic = (buffer) => {
+  if (!buffer || buffer.length < 12) return false;
+  if (buffer.toString("ascii", 4, 8) !== "ftyp") return false;
+  const brand = buffer.toString("ascii", 8, 12).toLowerCase();
+  return ["heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1"].includes(brand);
+};
+
+const getContentType = (ext) => {
+  const mimeTypes = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    webp: "image/webp",
+    svg: "image/svg+xml",
+    pdf: "application/pdf",
+    txt: "text/plain",
+    json: "application/json",
+    mp4: "video/mp4",
+    mp3: "audio/mpeg",
+  };
+  return mimeTypes[ext.toLowerCase()] || "application/octet-stream";
+};
+
 /**
- * @param {Buffer} fileBuffer - The file buffer to upload.
- * @param {string} fileName - The original file name.
- * @param {string} keyPrefix - The prefix path (folder structure) in the R2 bucket.
- * @returns {Promise<string>} - Resolves with the file URL after successful upload.
+ * @param {Buffer} fileBuffer
+ * @param {string} fileName
+ * @param {string} keyPrefix
+ * @param {boolean} [alreadyConverted=false]
+ * @returns {Promise<string>} file URL
  */
-const uploadFileToS3 = async (fileBuffer, fileName, keyPrefix) => {
+const uploadFileToS3 = async (fileBuffer, fileName, keyPrefix, alreadyConverted = false) => {
   try {
-    const fileExtension = fileName.split(".").pop();
+    let body = fileBuffer;
+    let fileExtension = (fileName.split(".").pop() || "").toLowerCase();
+
+    // Convert HEIC/HEIF -> JPEG so browsers can display it (if not already normalized)
+    if (!alreadyConverted && (isHeic(fileBuffer) || ["heic", "heif"].includes(fileExtension))) {
+      try {
+        const converted = await convert({
+          buffer: fileBuffer,
+          format: "JPEG",
+          quality: 0.85,
+        });
+        body = Buffer.from(converted);
+        fileExtension = "jpg";
+      } catch (singleErr) {
+        // Multi-frame / Live Photo fallback
+        try {
+          const allFrames = await convert.all({
+            buffer: fileBuffer,
+            format: "JPEG",
+            quality: 0.85,
+          });
+          if (allFrames && allFrames.length > 0) {
+            body = Buffer.from(allFrames[0]);
+            fileExtension = "jpg";
+          } else {
+            throw singleErr;
+          }
+        } catch (allErr) {
+          console.error("s3upload HEIC conversion failed for all frames:", allErr);
+          throw singleErr;
+        }
+      }
+    }
+
     const uniqueFileName = `${uuidv4()}.${fileExtension}`;
     const key = `${keyPrefix}/${uniqueFileName}`;
 
-    const getContentType = (ext) => {
-      const mimeTypes = {
-        jpg: "image/jpeg",
-        jpeg: "image/jpeg",
-        png: "image/png",
-        gif: "image/gif",
-        webp: "image/webp",
-        heic: "image/heic",
-        heif: "image/heif",
-        svg: "image/svg+xml",
-        pdf: "application/pdf",
-        txt: "text/plain",
-        json: "application/json",
-        mp4: "video/mp4",
-        mp3: "audio/mpeg",
-      };
-      return mimeTypes[ext.toLowerCase()] || "application/octet-stream";
-    };
-
-    const putObjectParams = {
-      Bucket: process.env.R2_BUCKET_NAME,
-      Key: key,
-      Body: fileBuffer,
-      ContentType: getContentType(fileExtension),
-    };
-    const command = new PutObjectCommand(putObjectParams);
-    await r2Client.send(command);
+    await r2Client.send(
+      new PutObjectCommand({
+        Bucket: process.env.R2_BUCKET_NAME,
+        Key: key,
+        Body: body,
+        ContentType: getContentType(fileExtension),
+      })
+    );
 
     const domain = process.env.R2_ENDPOINT.replace("https://", "");
-    const fileUrl = `https://${domain}/${key}`;
-
-    return fileUrl;
+    return `https://${domain}/${key}`;
   } catch (error) {
-    console.error("Error uploading to R2:", error);
+    console.error("❌ Error uploading to R2:", error);
     throw new Error("Failed to upload file to R2");
   }
 };

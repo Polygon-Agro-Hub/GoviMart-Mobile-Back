@@ -20,10 +20,10 @@ const createPool = (database) => {
     enableKeepAlive: true,
     keepAliveInitialDelay: 0,
   });
-  
+
   // Track the pool for cleanup
   pools.push(pool);
-  
+
   return pool;
 };
 
@@ -38,13 +38,13 @@ const closeAllPools = async () => {
     return new Promise((resolve) => {
       pool.end((err) => {
         if (err) {
-          console.error('Error closing database pool:', err);
+          console.error('❌ Error closing database pool:', err);
         }
         resolve();
       });
     });
   });
-  
+
   await Promise.all(closePromises);
   // Clear the pools array
   pools.length = 0;
@@ -55,7 +55,7 @@ const closePool = async (pool) => {
   return new Promise((resolve) => {
     pool.end((err) => {
       if (err) {
-        console.error('Error closing pool:', err);
+        console.error('❌ Error closing pool:', err);
       }
       // Remove from pools array
       const index = pools.indexOf(pool);
@@ -67,9 +67,9 @@ const closePool = async (pool) => {
   });
 };
 
-module.exports = { 
-  plantcare, 
-  collectionofficer, 
+module.exports = {
+  plantcare,
+  collectionofficer,
   admin,
   closeAllPools,
   closePool

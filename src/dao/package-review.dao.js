@@ -58,9 +58,7 @@ const applyCreditChange = async (q, userId, change) => {
             "SELECT creditBalance FROM marketplaceusers WHERE id = ? LIMIT 1",
             [userId],
         );
-        console.log(
-            `[creditBalance] user ${userId}: ${applied > 0 ? "+" : ""}${applied} -> new balance ${balRows[0]?.creditBalance}`,
-        );
+
     }
     return shortfall;
 };
@@ -72,7 +70,7 @@ const applyCreditChange = async (q, userId, change) => {
  *  Card (+ Credit): creditBalance += oldFullTotal - newFullTotal
  *                   (total reduced -> refunded to credit, total increased -> taken, capped at balance)
  *  Credit only    : the reduced price is added back to creditBalance
- *                   (paid by credit = creditPaid, or amount when creditPaid is 0)
+ *                   (paid by Polygon Wallet = creditPaid, or amount when creditPaid is 0)
  *  Cash (+ Credit): only credit already used can be over-applied -> excess is added back
  *
  * Returns the new creditPaid and the creditBalance change (+ add / - take).
@@ -737,10 +735,17 @@ exports.resetPackageItemDao = ({
  *  2. Delete removed ala carte rows
  *  2b. UPDATE edited EXISTING ala carte rows by id
  *  3. Insert / merge newly added ala carte items
+ *  3c. Refresh all ala carte rows with live prices
+ *  3d. Save the price change of each package in orderpackage.reviewValue
  *  4. Lock packages
- *  5. Schedule date
+ *  5. Schedule date (shifted by the number of "Package Finalization Review" reminders)
+ *       1 notification row  -> no change
+ *       2 notification rows -> sheduleDate + 1 day
+ *       3 notification rows -> sheduleDate + 2 days
  *  6. Totals on processorders (fullTotal, total, discount, + amount/moneyPaid for card)
  *  7. Credit balance (card orders): creditBalance += oldFullTotal - newFullTotal (capped at 0)
+ * Relies on helpers defined elsewhere in this DAO file: db, round2,
+ * settleCredit, applyCreditChange.
  */
 exports.confirmPackageReviewDao = ({
     orderId,
@@ -758,12 +763,13 @@ exports.confirmPackageReviewDao = ({
     updatedAdditionalItems = [],
     deletedAdditionalItemIds = [],
     packages = [],
+    packageReviewValues = [], 
 }) => {
     return new Promise((resolve, reject) => {
         db.collectionofficer.getConnection((connErr, connection) => {
             if (connErr) {
                 console.error(
-                    "[confirmPackageReviewDao] DB Connection Error:",
+                    "❌ [confirmPackageReviewDao] DB Connection Error:",
                     connErr,
                 );
                 return reject(connErr);
@@ -1242,6 +1248,31 @@ exports.confirmPackageReviewDao = ({
                         }
                     }
 
+                    // 3d. Save the price change of each package on orderpackage.reviewValue
+                    //     0 = no change, +300 = price increased, -200 = price reduced.
+                    //     Only packages that belong to THIS order are touched.
+                    //     Old app versions send nothing -> column is left unchanged.
+                    if (
+                        Array.isArray(packageReviewValues) &&
+                        packageReviewValues.length > 0
+                    ) {
+                        const validReviewPkgIds = new Set(
+                            dbPackages.map((p) => Number(p.orderPackageId)),
+                        );
+
+                        for (const rv of packageReviewValues) {
+                            const opId = Number(rv.orderPackageId);
+                            const rawValue = Number(rv.reviewValue);
+                            if (!opId || isNaN(rawValue)) continue;
+                            if (!validReviewPkgIds.has(opId)) continue;
+
+                            await q(
+                                "UPDATE orderpackage SET reviewValue = ? WHERE id = ? AND orderId = ?",
+                                [round2(rawValue), opId, realProcessOrderId],
+                            );
+                        }
+                    }
+
                     // 4. Lock all packages
                     await q(
                         "UPDATE orderpackage SET packingStatus = 'Dispatch', isLock = 1 WHERE orderId = ? OR orderId = ?",
@@ -1249,11 +1280,25 @@ exports.confirmPackageReviewDao = ({
                     );
 
                     // 5. Schedule date
+                    const reminderRows = await q(
+                        `SELECT COUNT(*) AS cnt
+                         FROM ordernotfication
+                         WHERE orderId = ? AND Title = 'Package Finalization Review'`,
+                        [realProcessOrderId],
+                    );
+                    const reminderCount = parseInt(reminderRows[0]?.cnt, 10) || 0;
+                    const extraDays = Math.min(Math.max(reminderCount - 1, 0), 2);
+
                     if (newScheduleDate) {
-                        await q("UPDATE processorders SET sheduleDate = ? WHERE id = ?", [
-                            new Date(newScheduleDate),
-                            realProcessOrderId,
-                        ]);
+                        await q(
+                            "UPDATE processorders SET sheduleDate = DATE_ADD(?, INTERVAL ? DAY) WHERE id = ?",
+                            [new Date(newScheduleDate), extraDays, realProcessOrderId],
+                        );
+                    } else if (extraDays > 0) {
+                        await q(
+                            "UPDATE processorders SET sheduleDate = DATE_ADD(sheduleDate, INTERVAL ? DAY) WHERE id = ?",
+                            [extraDays, realProcessOrderId],
+                        );
                     }
 
                     // 6. Totals (processorders only)
@@ -1310,8 +1355,46 @@ exports.confirmPackageReviewDao = ({
                         ? settle.newCreditPaid
                         : parseFloat(matchedOrder.creditPaid) || 0;
 
+                    // Detect a payment that was just completed through the gateway.
+                    // The app only sends isPaid = 1 after the gateway succeeded (or when
+                    // nothing is due), so combine it with the DB state:
+                    //   A) card order that was NOT paid yet (isPaid = 0) -> full amount paid now
+                    //   B) order already paid (card or 100% credit) + extra amount -> extra paid now
+                    const reqIsPaid = Number(isPaid) === 1 || isPaid === true;
+                    const wasPaid = Number(matchedOrder.isPaid) === 1;
+                    const pmLower = String(matchedOrder.paymentMethod || paymentMethod || "")
+                        .trim()
+                        .toLowerCase();
+                    const isCashMethod = /cash|cod/.test(pmLower);
+                    const isCardMethod = /card|payhere|online/.test(pmLower);
+
+                    const paidUnpaidCardNow =
+                        reqIsPaid && !wasPaid && isCardMethod && !isCashMethod;
+                    const paidExtraNow =
+                        reqIsPaid && wasPaid && !isCashMethod && parsedAdditional > 0.005;
+                    const gatewayPaidNow = paidUnpaidCardNow || paidExtraNow;
+
                     // REVIEW step flags: isFinalized = 1, isConfirmed = 0
-                    if (settle && settle.isCard) {
+                    if (gatewayPaidNow) {
+                        // isPaid = 1 and moneyPaid = amount - creditPaid
+                        const newAmount = finalFullTotal;
+                        const newMoneyPaid = round2(Math.max(0, newAmount - creditPaid));
+                        await q(
+                            `UPDATE processorders
+                             SET amount = ?, moneyPaid = ?, creditPaid = ?, fullTotal = ?, total = ?, discount = ?,
+                                 isPaid = 1, isFinalized = 1
+                             WHERE id = ?`,
+                            [
+                                newAmount,
+                                newMoneyPaid,
+                                creditPaid,
+                                finalFullTotal,
+                                finalTotal,
+                                newOrderDiscount,
+                                realProcessOrderId,
+                            ],
+                        );
+                    } else if (settle && settle.isCard) {
                         const newAmount = finalFullTotal;
                         const newMoneyPaid = round2(Math.max(0, newAmount - creditPaid));
                         await q(
@@ -1330,7 +1413,7 @@ exports.confirmPackageReviewDao = ({
                             ],
                         );
                     } else if (settle && settle.isCreditOnly) {
-                        // 100% credit order: paid amount follows the reduced total
+                        // 100% credit order, no gateway payment: paid amount follows the total
                         const newAmount = finalFullTotal;
                         await q(
                             `UPDATE processorders
@@ -1386,7 +1469,7 @@ exports.confirmPackageReviewDao = ({
                     });
                 } catch (err) {
                     console.error(
-                        "[confirmPackageReviewDao] Execution Error (Rolling back):",
+                        "❌ [confirmPackageReviewDao] Execution Error (Rolling back):",
                         err,
                     );
                     connection.rollback(() => {
@@ -1401,7 +1484,16 @@ exports.confirmPackageReviewDao = ({
 
 /**
  * Fetch latest packing target limit, count accepted orders for the date,
- * and check unread reminder history for an order.
+ * and check reminder history for an order.
+ *
+ * Returns:
+ *  - unreadReminderDays : unread notification rows (max 3)   -> used for the "3 reminders used" screen
+ *  - reminderCount      : TOTAL "Package Finalization Review" rows (read + unread, 1..3)
+ *                         -> used for the schedule date shift
+ *                            1 row  = date unchanged
+ *                            2 rows = date + 1 day
+ *                            3 rows = date + 2 days
+ *
  * Never rejects: resolves safe defaults on error.
  */
 exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
@@ -1425,6 +1517,9 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
 
             // Unread reminder notification count
             let unreadReminderDays = 1;
+            // Total "Package Finalization Review" reminders (read or unread)
+            let reminderCount = 1;
+
             if (processOrderId) {
                 const notifSql = `
                     SELECT COUNT(*) AS unreadCount 
@@ -1447,6 +1542,23 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                         parseInt(notifRows[0].unreadCount, 10) || 1,
                     );
                 }
+
+                const countRows = await new Promise((res) => {
+                    db.collectionofficer.query(
+                        `SELECT COUNT(*) AS cnt
+                         FROM ordernotfication
+                         WHERE orderId = ? AND Title = 'Package Finalization Review'`,
+                        [processOrderId],
+                        (err, rows) => {
+                            if (err) return res([]);
+                            res(rows || []);
+                        },
+                    );
+                });
+                reminderCount = Math.min(
+                    3,
+                    Math.max(1, parseInt(countRows[0]?.cnt, 10) || 1),
+                );
             }
 
             const remaining = targetInfo.remaining;
@@ -1460,6 +1572,7 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 remaining,
                 isLimitReached,
                 unreadReminderDays,
+                reminderCount,
                 scheduleDate: targetInfo.sheduleDate,
                 additionalItems: targetInfo.additionalItems,
                 packageFinalizeImdt: targetInfo.packageFinalizeImdt,
@@ -1467,7 +1580,7 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 confirmOrders: targetInfo.confirmOrders,
             });
         } catch (err) {
-            console.error("[getPackingSlotAvailabilityDao] Error:", err);
+            console.error("❌ [getPackingSlotAvailabilityDao] Error:", err);
             resolve({
                 targetLimit: 50,
                 acceptedOrdersCount: 0,
@@ -1475,6 +1588,7 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
                 remaining: 50,
                 isLimitReached: false,
                 unreadReminderDays: 1,
+                reminderCount: 1,
                 scheduleDate: targetDate || new Date().toISOString().split("T")[0],
             });
         }
@@ -1483,6 +1597,9 @@ exports.getPackingSlotAvailabilityDao = (targetDate, processOrderId) => {
 
 exports.getRemainingPackingTarget = getRemainingPackingTarget;
 
+/**
+ * Cancel order and refund the paid amount as credit balance.
+ */
 /**
  * Cancel order and refund the paid amount as credit balance.
  */
@@ -1568,25 +1685,18 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
             throw new Error("Completed order cannot be cancelled");
         }
 
-        // 2. Refundable credit from the locked (original) values
-        const pMethod = (order.paymentMethod || "").trim().toLowerCase();
-        const rawAmount = parseFloat(order.amount) || 0;
+        // 2. FIX: refund = creditPaid + moneyPaid (taken from the locked row,
+        // before the columns are reset below).
+        // moneyPaid counts only when the order is really paid (isPaid = 1), so an
+        // unpaid card / cash order never refunds money the customer did not pay.
         const rawCreditPaid = parseFloat(order.creditPaid) || 0;
         const rawMoneyPaid = parseFloat(order.moneyPaid) || 0;
+        const isOrderPaid =
+            Number(order.isPaid) === 1 || order.isPaid === true;
 
-        let refundCreditAmount = 0;
-        if (isCardPayment(order.paymentMethod, order.isPaid)) {
-            // Card / online (also Card + Credit): card part + credit part are refunded as credit.
-            // (amount / moneyPaid hold the card part = total - credit)
-            refundCreditAmount =
-                rawMoneyPaid > 0 ? rawMoneyPaid + rawCreditPaid : rawAmount;
-        } else if (pMethod.includes("credit") && !pMethod.includes("cash")) {
-            // 100% paid by credit balance
-            refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : rawAmount;
-        } else {
-            // Cash (+ Credit): refund only the credit used at checkout
-            refundCreditAmount = rawCreditPaid > 0 ? rawCreditPaid : 0;
-        }
+        const refundCreditAmount = round2(
+            rawCreditPaid + (isOrderPaid ? rawMoneyPaid : 0),
+        );
 
         // 3. Mark as Cancelled AND reset the payment columns
         const cancelResult = await run(
@@ -1637,7 +1747,7 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
                 [pOrderId, notifMsg],
             );
         } catch (notifErr) {
-            console.error("Error inserting ordernotfication on cancel:", notifErr);
+            console.error("❌ Error inserting ordernotfication on cancel:", notifErr);
         }
 
         try {
@@ -1658,7 +1768,7 @@ exports.cancelOrderDao = async ({ orderId, processOrderId, userId }) => {
                 );
             }
         } catch (dashErr) {
-            console.error("Error updating dashnotification on cancel:", dashErr);
+            console.error("❌ Error updating dashnotification on cancel:", dashErr);
         }
 
         await commit(connection);
@@ -1818,8 +1928,48 @@ exports.confirmOrderWithLivePricesDao = ({
                     const realProcessOrderId = matchedOrder.processOrderId;
                     const targetUserId = matchedOrder.userId || userId;
 
-                    // Prevents double credit adjustments on a second tap / retry
+                    // Already confirmed: only allowed as the "payment completed" retry
+                    // (isPaid = 1). Prevents double credit adjustments on a second tap.
                     if (Number(matchedOrder.isConfirmed) === 1) {
+                        if (Number(isPaid) === 1 || isPaid === true) {
+                            const payAmount =
+                                newTotal != null
+                                    ? Number(newTotal)
+                                    : Number(
+                                        matchedOrder.oldOrderFullTotal ||
+                                        matchedOrder.amount ||
+                                        0,
+                                    );
+                            const payMoneyPaid = round2(
+                                Math.max(
+                                    0,
+                                    payAmount - Number(matchedOrder.creditPaid || 0),
+                                ),
+                            );
+                            await q(
+                                `UPDATE processorders
+                                 SET amount = ?, moneyPaid = ?, isPaid = 1, paymentMethod = 'Card'
+                                 WHERE id = ?`,
+                                [payAmount, payMoneyPaid, realProcessOrderId],
+                            );
+
+                            // Plain commit callback + `return;` (never await / return commit).
+                            connection.commit((commitErr) => {
+                                if (commitErr) {
+                                    return connection.rollback(() => {
+                                        connection.release();
+                                        reject(commitErr);
+                                    });
+                                }
+                                connection.release();
+                                resolve({
+                                    message: "Order payment completed successfully.",
+                                    processOrderId: realProcessOrderId,
+                                    invNo: matchedOrder.invNo,
+                                });
+                            });
+                            return;
+                        }
                         throw new Error("This order has already been confirmed.");
                     }
 
@@ -1925,8 +2075,7 @@ exports.confirmOrderWithLivePricesDao = ({
                         (couponTypeStr.includes("free") ||
                             couponTypeStr.includes("delivery"));
 
-                    // DASH SERVICE FEE: only orderApp = 'Dash' AND isPackage = 0 get the fixed
-                    // "Service Fee" (added on top of delivery)
+                    // DASH SERVICE FEE: only orderApp = 'Dash' AND isPackage = 0
                     const isDash =
                         String(matchedOrder.orderApp || "")
                             .trim()
@@ -1944,13 +2093,9 @@ exports.confirmOrderWithLivePricesDao = ({
                             ? parseFloat(matchedOrder.curDlvrCharge) || 0
                             : parseFloat(matchedOrder.deliveryCharge) || 0;
 
-                    // Delivery keeps its normal rules for every order.
                     const deliveryCharge =
                         isPickup || isFreeDeliveryCoupon ? 0 : rawDelivery;
 
-                    // DASH SERVICE FEE: fixed service fee (DASH_SERVICE_FEE) is ADDED on top of
-                    // delivery. Always charged (no pickup / free-delivery waiver) and
-                    // included in both total and fullTotal below.
                     const serviceFee = isDashServiceFee ? DASH_SERVICE_FEE : 0;
 
                     const couponDiscount =
@@ -1959,7 +2104,7 @@ exports.confirmOrderWithLivePricesDao = ({
                             : 0;
 
                     // 6. Final numbers (nothing from the old stored totals)
-                    const finalTotal = round2(
+                    const grossTotal = round2(
                         packagesTotal +
                         packageDiscount +
                         alaNormalTotal +
@@ -1968,15 +2113,18 @@ exports.confirmOrderWithLivePricesDao = ({
                     );
                     const finalDiscount = round2(packageDiscount + alaDiscountTotal);
                     const finalFullTotal = round2(
-                        Math.max(0, finalTotal - finalDiscount - couponDiscount),
+                        Math.max(0, grossTotal - finalDiscount - couponDiscount),
                     );
+                    // FIX: stored `total` = fullTotal + discount (the coupon is already
+                    // deducted from it), instead of the gross amount.
+                    const finalTotal = round2(finalFullTotal + finalDiscount);
 
                     if (
                         newTotal != null &&
                         Math.abs(parseFloat(newTotal) - finalFullTotal) > 0.01
                     ) {
                         console.warn(
-                            `[confirmOrderWithLivePrices] app total ${newTotal} != server total ${finalFullTotal}; server value used`,
+                            ` ⚠️ [confirmOrderWithLivePrices] app total ${newTotal} != server total ${finalFullTotal}; server value used`,
                         );
                     }
 
@@ -2007,13 +2155,12 @@ exports.confirmOrderWithLivePricesDao = ({
                                 newMoneyPaid,
                                 creditPaid,
                                 finalFullTotal,
-                                finalTotal,
+                                finalTotal, // FIX: fullTotal + discount
                                 finalDiscount,
                                 realProcessOrderId,
                             ],
                         );
                     } else if (settle.isCreditOnly) {
-                        // 100% credit order: paid amount follows the reduced total
                         const newAmount = finalFullTotal;
                         await q(
                             `UPDATE processorders
@@ -2024,7 +2171,7 @@ exports.confirmOrderWithLivePricesDao = ({
                                 newAmount,
                                 creditPaid,
                                 finalFullTotal,
-                                finalTotal,
+                                finalTotal, // FIX: fullTotal + discount
                                 finalDiscount,
                                 realProcessOrderId,
                             ],
@@ -2038,7 +2185,7 @@ exports.confirmOrderWithLivePricesDao = ({
                             [
                                 creditPaid,
                                 finalFullTotal,
-                                finalTotal,
+                                finalTotal, // FIX: fullTotal + discount
                                 finalDiscount,
                                 realProcessOrderId,
                             ],
@@ -2065,7 +2212,7 @@ exports.confirmOrderWithLivePricesDao = ({
                             message:
                                 "Order confirmed and marketplace prices updated successfully",
                             fullTotal: finalFullTotal,
-                            total: finalTotal,
+                            total: finalTotal, // FIX
                             discount: finalDiscount,
                             creditShortfall: shortfall,
                             invNo: matchedOrder.invNo,
@@ -2180,11 +2327,7 @@ exports.cancelOrderBeforeConfirmDao = async ({
         const rawCreditPaid = parseFloat(order.creditPaid) || 0;
         const refundCreditAmount = rawCreditPaid;
 
-        console.log(
-            `[cancelOrderBeforeConfirm] order ${pOrderId} user ${userId} | method="${order.paymentMethod}" ` +
-            `isPaid=${order.isPaid} isConfirmed=${order.isConfirmed} amount=${rawAmount} ` +
-            `moneyPaid=${order.moneyPaid} creditPaid=${rawCreditPaid} -> refundCreditAmount=${refundCreditAmount}`,
-        );
+
 
         // 3. Mark as Cancelled AND reset the payment columns
         const cancelResult = await run(
@@ -2228,10 +2371,7 @@ exports.cancelOrderBeforeConfirmDao = async ({
             if (creditRows && creditRows.length > 0) {
                 newCreditBalance = parseFloat(creditRows[0].creditBalance || 0);
             }
-            console.log(
-                `[cancelOrderBeforeConfirm] order ${pOrderId}: creditPaid ${rawCreditPaid} -> 0, ` +
-                `+${refundCreditAmount} to user ${userId} creditBalance (now ${newCreditBalance})`,
-            );
+
         }
 
         // 5. Notifications (failures are logged but don't block the cancel)
@@ -2246,7 +2386,7 @@ exports.cancelOrderBeforeConfirmDao = async ({
                 [pOrderId, notifMsg],
             );
         } catch (notifErr) {
-            console.error("Error inserting ordernotfication on cancel:", notifErr);
+            console.error("❌ Error inserting ordernotfication on cancel:", notifErr);
         }
 
         try {
@@ -2267,7 +2407,7 @@ exports.cancelOrderBeforeConfirmDao = async ({
                 );
             }
         } catch (dashErr) {
-            console.error("Error updating dashnotification on cancel:", dashErr);
+            console.error("❌ Error updating dashnotification on cancel:", dashErr);
         }
 
         await commit(connection);

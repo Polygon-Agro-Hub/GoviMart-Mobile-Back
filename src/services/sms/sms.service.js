@@ -15,14 +15,19 @@ const formatPhoneNumber = (phone, phoneCode = "94") => {
 
   const codeDigits = String(phoneCode || "94").replace(/[^0-9]/g, "") || "94";
 
+  // If already starts with the country code followed by 0 (e.g. 940771234567)
+  if (rawDigits.startsWith(`${codeDigits}0`)) {
+    return `+${codeDigits}${rawDigits.slice(codeDigits.length).replace(/^0+/, "")}`;
+  }
+
   // If already starts with the country code (e.g. 94771234567)
   if (rawDigits.startsWith(codeDigits)) {
-    return rawDigits;
+    return `+${rawDigits}`;
   }
 
   // Strip leading zero(s) (e.g. 0771234567 -> 771234567)
   const noZero = rawDigits.replace(/^0+/, "");
-  return `${codeDigits}${noZero}`;
+  return `+${codeDigits}${noZero}`;
 };
 
 /**
@@ -38,13 +43,13 @@ const sendSms = async (destinationPhone, message) => {
   try {
     const formattedPhone = formatPhoneNumber(destinationPhone);
     if (!formattedPhone) {
-      console.warn("[SMS Service] Cannot send SMS: destination phone is invalid or empty.", destinationPhone);
+      console.warn("⚠️ [SMS Service] Cannot send SMS: destination phone is invalid or empty.", destinationPhone);
       return { success: false, error: "Invalid phone number" };
     }
 
     const apiKey = process.env.SHOUTOUT_API_KEY;
     if (!apiKey) {
-      console.warn("[SMS Service] SHOUTOUT_API_KEY is missing from environment. Skipping SMS.");
+      console.warn("⚠️ [SMS Service] SHOUTOUT_API_KEY is missing from environment. Skipping SMS.");
       return { success: false, error: "Missing SHOUTOUT_API_KEY" };
     }
 
@@ -69,17 +74,30 @@ const sendSms = async (destinationPhone, message) => {
     });
 
     const data = await response.json();
-    if (!response.ok || (!data.referenceId && !data.reference_id)) {
-      const errMsg = data.message || `HTTP status ${response.status}`;
-      console.error(`[SMS Service] Failed to send SMS via ShoutOUT: ${errMsg}`);
+    const refId =
+      data.referenceId ||
+      data.reference_id ||
+      (Array.isArray(data.responses) && (data.responses[0]?.reference_id || data.responses[0]?.referenceId));
+
+    const isSuccess =
+      response.ok &&
+      (refId || data.status === "1001" || data.status === 1001 || data.description === "submit success");
+
+    if (!isSuccess) {
+      const errMsg =
+        data.message ||
+        data.error ||
+        data.description ||
+        `HTTP status ${response.status}`;
+      console.error(`❌ [SMS Service] Failed to send SMS via ShoutOUT: ${errMsg}`);
       return { success: false, error: errMsg };
     }
 
-    const referenceId = data.referenceId || data.reference_id;
+    const referenceId = refId || "SUCCESS";
     console.log(`[SMS Service] SMS successfully sent to ${formattedPhone}. Ref: ${referenceId}`);
     return { success: true, referenceId };
   } catch (error) {
-    console.error("[SMS Service] Exception sending SMS via ShoutOUT:", error.message);
+    console.error("❌ [SMS Service] Exception sending SMS via ShoutOUT:", error.message);
     return { success: false, error: error.message };
   }
 };

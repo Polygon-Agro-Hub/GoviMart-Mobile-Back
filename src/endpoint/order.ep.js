@@ -23,7 +23,7 @@ exports.getRetailOrderHistory = async (req, res) => {
             orderHistory,
         });
     } catch (err) {
-        console.error("Error fetching order history:", err);
+        console.error("❌ Error fetching order history:", err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch order history.",
@@ -37,7 +37,7 @@ exports.getRetailOrderById = async (req, res) => {
         const processOrderId = req.query?.processOrderId;
         const { userId } = req.user;
         const targetId = processOrderId || orderId;
-        console.log("Received orderId:", orderId, "processOrderId:", processOrderId, "for userId:", userId); // Debug log
+
 
         const order = await RetailOrderDao.getRetailOrderByIdDao(targetId, userId, processOrderId);
 
@@ -47,7 +47,7 @@ exports.getRetailOrderById = async (req, res) => {
             order,
         });
     } catch (err) {
-        console.error("Error fetching order for orderId:", req.params.orderId, err);
+        console.error("❌ Error fetching order for orderId:", req.params.orderId, err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch order.",
@@ -67,7 +67,7 @@ exports.getOrderPackages = async (req, res) => {
             data: packages
         });
     } catch (error) {
-        console.error('Error in getPackagesByOrderId:', error);
+        console.error('❌ Error in getPackagesByOrderId:', error);
         res.status(500).json({
             status: false,
             message: error?.toString() || 'Unknown server error'
@@ -88,13 +88,33 @@ exports.getOrderAdditionalItems = async (req, res) => {
             data: additionalItems
         });
 
-        console.log("getOrderAdditionalItems executed for orderId:", orderId);
-        console.log("Additional items:", additionalItems);
+
     } catch (error) {
-        console.error('Error in getOrderAdditionalItems:', error);
+        console.error('❌ Error in getOrderAdditionalItems:', error);
         res.status(500).json({
             status: false,
             message: error?.toString() || 'Unknown server error'
+        });
+    }
+};
+
+exports.getOrderCancelAdditionalItems = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { processOrderId } = req.query;
+
+        const additionalItems = await RetailOrderDao.getOrderCancelAdditionalItemsDao(orderId, processOrderId);
+
+        res.json({
+            status: true,
+            message: "Cancel order additional items fetched successfully",
+            data: additionalItems
+        });
+    } catch (error) {
+        console.error("❌ Error in getOrderCancelAdditionalItems:", error);
+        res.status(500).json({
+            status: false,
+            message: error?.toString() || "Unknown server error"
         });
     }
 };
@@ -104,7 +124,7 @@ exports.checkCouponAvalability = async (req, res) => {
         const { userId } = req.user;
         const { coupon, deliveryMethod } = await couponValidationSchema.validateAsync(req.body);
 
-        console.log('coupon detailsss', req.body);
+
 
         const currentDate = new Date();
         let discount = 0;
@@ -118,7 +138,7 @@ exports.checkCouponAvalability = async (req, res) => {
         };
 
         const couponData = await RetailOrderDao.getCouponDetailsDao(coupon);
-        console.log("Coupon data:", couponData);
+
 
         if (!couponData || couponData === null) {
             return res.status(404).json({
@@ -150,7 +170,7 @@ exports.checkCouponAvalability = async (req, res) => {
         const startDate = couponData.startDate ? new Date(couponData.startDate) : null;
         const endDate = couponData.endDate ? new Date(couponData.endDate) : null;
 
-        console.log(currentDate, startDate);
+
 
         if (startDate && !isNaN(startDate.getTime()) && currentDate < startDate) {
             return res.status(400).json({
@@ -234,7 +254,7 @@ exports.checkCouponAvalability = async (req, res) => {
             code: couponData.code,
         });
     } catch (err) {
-        console.error("Error validating coupon:", err);
+        console.error("❌ Error validating coupon:", err);
         res.status(500).json({
             status: false,
             message: err?.message || "Invalid coupon code",
@@ -251,7 +271,7 @@ exports.getAvailableCoupons = async (req, res) => {
             data: coupons,
         });
     } catch (err) {
-        console.error("Error fetching available coupons:", err);
+        console.error("❌ Error fetching available coupons:", err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch available coupons.",
@@ -271,7 +291,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 1. Validate request payload ──────────────────────────────────────────
     const { error, value } = createOrderSchema.validate(req.body, { abortEarly: false });
     if (error) {
-        console.error("[createOrder] Validation error:", error.details.map((d) => d.message));
+        console.error("❌ [createOrder] Validation error:", error.details.map((d) => d.message));
         return res.status(400).json({
             status: false,
             message: "Validation failed: " + error.details.map((d) => d.message).join("; "),
@@ -338,7 +358,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
             resolvedPhone1 = resolvedPhone1 || userProfile.phoneNumber || req.user.phoneNumber || "";
         }
     } catch (e) {
-        console.warn("[createOrder] Profile lookup fallback failed:", e.message);
+        console.warn(" ⚠️ [createOrder] Profile lookup fallback failed:", e.message);
     }
     resolvedTitle = resolvedTitle || "Mr";
     resolvedFullName = resolvedFullName || "Customer";
@@ -347,10 +367,39 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 2. Verify cart ownership ──────────────────────────────────────────────
     const cartBelongsToUser = await RetailOrderDao.validateCartDao(effectiveCartId, userId);
     if (!cartBelongsToUser) {
+        // High-latency safety: Check if this user's cart was already converted to an order recently (e.g. earlier in-flight request succeeded and cleared cart)
+        try {
+            const recentOrder = await RetailOrderDao.getRecentOrderByUserDao(userId, 15);
+            if (recentOrder) {
+
+                return safeRespond(200, {
+                    status: true,
+                    message: "Order was already placed successfully",
+                    data: {
+                        orderId: recentOrder.orderId,
+                        processOrderId: recentOrder.processOrderId,
+                        invoiceNumber: recentOrder.invoiceNumber,
+                        total: recentOrder.total,
+                    },
+                });
+            }
+        } catch (recentErr) {
+            console.warn(" ⚠️ [createOrder] Error checking recent order fallback:", recentErr.message);
+        }
+
         return safeRespond(403, {
             status: false,
             message: "Cart does not belong to the current user",
         });
+    }
+
+    // Buyer type (from DB, not client) – drives SMS date gap
+    let buyerType = null;
+    try {
+        const cartRow = await cartDao.getCartByUserIdDao(userId);
+        buyerType = cartRow?.buyerType || null;
+    } catch (e) {
+        console.warn(" ⚠️ [createOrder] buyerType lookup failed:", e.message);
     }
 
     // ── 3. Check item availability ────────────────────────────────────────────
@@ -393,14 +442,15 @@ exports.createOrder = asyncHandler(async (req, res) => {
             : normPrice;
         const pUnit = (p.unit || p.unitType || "g").toLowerCase();
         const weightMultiplier = pUnit === "kg" ? pQty : pQty / 1000;
-        calculatedNormalItemsTotal += normPrice * weightMultiplier;
-        calculatedDiscountedItemsTotal += discPrice * weightMultiplier;
+        calculatedNormalItemsTotal += Math.round(normPrice * weightMultiplier * 100) / 100;
+        calculatedDiscountedItemsTotal += Math.round(discPrice * weightMultiplier * 100) / 100;
     }
     for (const pkg of cartPackages) {
         const pkgQty = parseFloat(pkg.quantity) || 0;
         const pkgPrice = parseFloat(pkg.price) || 0;
-        calculatedNormalItemsTotal += pkgPrice * pkgQty;
-        calculatedDiscountedItemsTotal += pkgPrice * pkgQty;
+        const pkgSubtotal = Math.round(pkgPrice * pkgQty * 100) / 100;
+        calculatedNormalItemsTotal += pkgSubtotal;
+        calculatedDiscountedItemsTotal += pkgSubtotal;
     }
 
     const isFreeDeliveryCoupon = Boolean(
@@ -439,10 +489,13 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
     // Verify grandTotal from client against server-calculated grandTotal
     if (!isMatch) {
-        console.warn(`[createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Expected Discounted: ${expectedDiscountedGrandTotal}, Expected Normal-Discount: ${expectedNormalMinusDiscountGrandTotal}`);
+        console.warn(`⚠️ [createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Expected Discounted: ${expectedDiscountedGrandTotal}, Expected Normal-Discount: ${expectedNormalMinusDiscountGrandTotal}`);
         return safeRespond(400, {
             status: false,
+            code: "ORDER_TOTAL_MISMATCH",
             message: `Order total mismatch. Expected Rs. ${expectedDiscountedGrandTotal.toFixed(2)}, but received Rs. ${Number(grandTotal).toFixed(2)}.`,
+            expectedTotal: expectedDiscountedGrandTotal,
+            clientTotal: Number(grandTotal),
         });
     }
 
@@ -739,7 +792,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         userId,
                         requestedCredit
                     );
-                    console.log(`[createOrder] Deducted Rs. ${requestedCredit} credit from marketplaceusers for userId: ${userId}`);
+
                 }
 
                 // ── 5f. Commit ────────────────────────────────────────────────
@@ -755,12 +808,12 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                     // ── Clear cart (best-effort, after commit) ────────────
                     RetailOrderDao.clearCartAfterOrderDao(effectiveCartId).catch((clearErr) => {
-                        console.error("[createOrder] Cart clear failed (non-fatal):", clearErr);
+                        console.error("❌ [createOrder] Cart clear failed (non-fatal):", clearErr);
                     });
 
                     // ── Refresh marketplaceusers.creditLimit (best-effort, after commit) ──
                     RetailOrderDao.recalculateAndPersistCreditLimitDao(userId).catch((limitErr) => {
-                        console.error("[createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
+                        console.error("❌ [createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
                     });
 
                     // ── ShoutOUT SMS Dispatch (best-effort, after commit) ──
@@ -772,11 +825,19 @@ exports.createOrder = asyncHandler(async (req, res) => {
                                 scheduledDateStr && earliestDateStr && scheduledDateStr <= earliestDateStr
                             );
 
-                            // Only: isFinalizeImdt = 0 AND package order -> no EPSD check
+                            // Package + isFinalizeImdt = 0 -> review/accept flow (no EPSD check)
                             const isPackagePayToConfirmFlow = !Number(isFinalizeImdt) && hasPackages;
 
+                            // A la carte only OR package with isFinalizeImdt = 1
+                            const isAlaCarteOrFinalizedPackage = !hasPackages || Number(isFinalizeImdt) === 1;
+
+                            // Whole order paid with credit (no card / cash money needed)
+                            const isFullyPaidByCredit =
+                                requestedCredit > 0 &&
+                                requestedCredit >= calculatedGrandTotal - 0.01;
+
                             console.log(
-                                `[createOrder SMS] scheduled: ${scheduledDateStr}, earliest: ${earliestDateStr}, isType1: ${isType1}, isFinalizeImdt: ${isFinalizeImdt}, hasPackages: ${hasPackages}, packageFlow: ${isPackagePayToConfirmFlow}`
+                                `[createOrder SMS] scheduled: ${scheduledDateStr}, earliest: ${earliestDateStr}, isType1: ${isType1}, isFinalizeImdt: ${isFinalizeImdt}, hasPackages: ${hasPackages}, packageFlow: ${isPackagePayToConfirmFlow}, alaCarteOrFinalized: ${isAlaCarteOrFinalizedPackage}, fullCredit: ${isFullyPaidByCredit}`
                             );
 
                             if (isPackagePayToConfirmFlow) {
@@ -793,18 +854,28 @@ exports.createOrder = asyncHandler(async (req, res) => {
                                     phone: resolvedPhone1,
                                     invNo: primaryInvNo,
                                 });
+                            } else if (isAlaCarteOrFinalizedPackage && isFullyPaidByCredit) {
+                                // Delivery after EPSD, a la carte / finalized package, fully paid with credit
+                                // Shows delivery - 3 (18 -> 15) for retail, delivery - 2 (18 -> 16) for wholesale
+                                await orderSmsService.sendOrderPlacedAfterEpsdCreditSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    deliveryDate: scheduledDateStr,
+                                    buyerType,
+                                });
                             } else {
-                                // Delivery after earliest date (shows delivery - 3, 18 -> 15)
+                                // Delivery after earliest date (shows delivery - 3, 18 -> 15 for retail, delivery - 2, 18 -> 16 for wholesale)
                                 const isCard = String(paymentMethod).toLowerCase() === "card";
                                 await orderSmsService.sendOrderPlacedAfterEpsdSms({
                                     userId,
                                     phone: resolvedPhone1,
                                     deliveryDate: scheduledDateStr,
                                     isCardPayment: isCard,
+                                    buyerType,
                                 });
                             }
                         } catch (smsErr) {
-                            console.error("[createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
+                            console.error("❌ [createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
                         }
                     })();
 
@@ -834,7 +905,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     });
                 }
 
-                console.error("[createOrder] Transaction error:", err);
+                console.error("❌ [createOrder] Transaction error:", err);
                 return safeRespond(500, {
                     status: false,
                     message: "Order creation failed. Please try again.",
@@ -913,7 +984,7 @@ exports.getDeliveredOrdersTotal = async (req, res) => {
         const result = await RetailOrderDao.getDeliveredOrdersTotal(userId);
         return res.status(200).json({ success: true, data: result });
     } catch (error) {
-        console.error("Error in getDeliveredOrdersTotal:", error);
+        console.error("❌ Error in getDeliveredOrdersTotal:", error);
         return res.status(500).json({
             success: false,
             message: "Failed to fetch delivered orders total",
@@ -932,12 +1003,29 @@ const getColomboDatePlus = (days) => {
 
 /**
  * GET /api/order/schedule-orders/:sheduleDate?
- * Default sheduleDate = today + 3 days 
+ * Default sheduleDate:
+ *   - Wholesale: today + 2 days (2-day gap: today 12 -> 14)
+ *   - Retail:    today + 3 days (3-day gap: today 12 -> 15)
  */
 exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
     const userId = req.user?.id || req.user?.userId;
+
+    let buyerType = req.query.buyerType || req.user?.buyerType;
+    if (!buyerType || String(buyerType).toLowerCase() !== "wholesale") {
+        try {
+            const profile = await customerDao.getCustomerProfileDao(userId);
+            if (profile && profile.length > 0 && profile[0].buyerType) {
+                buyerType = profile[0].buyerType;
+            }
+        } catch (e) {
+            // keep existing buyerType
+        }
+    }
+
+    const isWholesale = String(buyerType || "").trim().toLowerCase() === "wholesale";
+    const defaultGap = isWholesale ? 2 : 3;
     const sheduleDate =
-        req.query.sheduleDate || req.params.sheduleDate || getColomboDatePlus(3);
+        req.query.sheduleDate || req.params.sheduleDate || getColomboDatePlus(defaultGap);
 
     const result = await RetailOrderDao.getOrdersForSheduleDate(sheduleDate, userId);
 
@@ -950,4 +1038,3 @@ exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
         orders: result.orders,
     });
 });
-

@@ -2,6 +2,9 @@ const asyncHandler = require("express-async-handler");
 const packageReviewDao = require("../dao/package-review.dao");
 const orderSmsService = require("../services/sms/order-sms.service");
 
+// Package-review features (replace/reset/confirm-review/packing-limit/cancel-order)
+// are Retail-only. The two order-confirmation endpoints (/confirm-order,
+// /cancel-before-confirm) are shared by both Retail and Wholesale.
 const ensureRetailUser = (req, res) => {
     const buyerType = req.user?.buyerType;
     if (!buyerType || buyerType.toLowerCase() !== "retail") {
@@ -84,7 +87,7 @@ exports.replacePackageItem = asyncHandler(async (req, res) => {
             data: result,
         });
     } catch (err) {
-        console.error("Replace package item error:", err);
+        console.error("❌ Replace package item error:", err);
         return res.status(400).json({
             status: false,
             message: err.message || "Failed to replace package item",
@@ -122,7 +125,7 @@ exports.resetPackageItem = asyncHandler(async (req, res) => {
             message: result.message,
         });
     } catch (err) {
-        console.error("Reset package item error:", err);
+        console.error("❌ Reset package item error:", err);
         return res.status(400).json({
             status: false,
             message: err.message || "Failed to reset package item",
@@ -153,17 +156,11 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
         creditToAdd = 0,
         replacements = [],
         additionalItems = [],
-        updatedAdditionalItems = [], // NEW: edited EXISTING rows (by orderadditionalitems.id)
+        updatedAdditionalItems = [],
         deletedAdditionalItemIds = [],
         packages = [],
+        packageReviewValues = [],
     } = req.body;
-
-    console.log(
-        "[confirmPackageReview Endpoint] Received request by userId:",
-        userId,
-        "body:",
-        JSON.stringify(req.body, null, 2),
-    );
 
     if (!orderId && !processOrderId) {
         return res.status(400).json({
@@ -186,7 +183,7 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
                 });
             }
         } catch (valErr) {
-            console.warn("[confirmPackageReview Endpoint] Slot validation check error:", valErr.message);
+            console.warn("⚠️ [confirmPackageReview Endpoint] Slot validation check error:", valErr.message);
         }
 
         const result = await packageReviewDao.confirmPackageReviewDao({
@@ -205,18 +202,40 @@ exports.confirmPackageReview = asyncHandler(async (req, res) => {
             updatedAdditionalItems,
             deletedAdditionalItemIds,
             packages,
+            packageReviewValues, 
         });
 
-        console.log("[confirmPackageReview Endpoint] Success response:", result);
+        // "Order confirmed" SMS after the review is committed. Best-effort:
+        // runs in the background and can never fail the review response.
+        (async () => {
+            try {
+                const resolved = await orderSmsService.resolveOrderDetails(
+                    processOrderId || orderId,
+                    userId,
+                );
+                const invNo = resolved.invNo;
 
+                if (!invNo) {
+                    console.warn("⚠️ [confirmPackageReview] No invoice number, SMS skipped");
+                    return;
+                }
 
+                const smsRes = await orderSmsService.sendOrderConfirmedSms({
+                    userId,
+                    invNo,
+                });
+                console.log(`[confirmPackageReview] Confirmed SMS for ${invNo}:`, smsRes);
+            } catch (smsErr) {
+                console.warn("⚠️ [confirmPackageReview] Confirmation SMS error:", smsErr.message);
+            }
+        })();
 
         return res.status(200).json({
             status: true,
             message: result.message,
         });
     } catch (err) {
-        console.error("[confirmPackageReview Endpoint] Error finalize package review:", err);
+        console.error("❌ [confirmPackageReview Endpoint] Error finalize package review:", err);
         return res.status(500).json({
             status: false,
             message: err.message || "Failed to finalize package review",
@@ -279,7 +298,7 @@ exports.cancelPackageOrder = asyncHandler(async (req, res) => {
             data: result,
         });
     } catch (error) {
-        console.error("[cancelPackageOrder] Error:", error);
+        console.error("❌ [cancelPackageOrder] Error:", error);
         return res.status(400).json({
             status: false,
             message: error.message || "Failed to cancel order",
@@ -289,14 +308,14 @@ exports.cancelPackageOrder = asyncHandler(async (req, res) => {
 
 /**
  * POST /api/order/confirm-order
- * Separate route: confirms order with live marketplace prices, updating orderadditionalitems,
+ * Available to BOTH Retail and Wholesale users.
+ * Confirms order with live marketplace prices, updating orderadditionalitems,
  * processorders (fullTotal, total, discount, amount, moneyPaid), and orders (fullTotal, total, discount).
  */
 exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
-    if (!ensureRetailUser(req, res)) return;
-
+    // Open to both Retail and Wholesale users – no ensureRetailUser check here.
     const userId = getUserId(req);
-    const { orderId, processOrderId, newTotal, isPaid = null } = req.body;
+    const { orderId, processOrderId, newTotal, isPaid = null, amount = null, moneyPaid = null } = req.body;
 
     if (!orderId && !processOrderId) {
         return res.status(400).json({
@@ -310,7 +329,7 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
             orderId,
             processOrderId,
             userId,
-            newTotal,
+            newTotal: amount || moneyPaid || newTotal,
             isPaid,
         });
 
@@ -331,14 +350,14 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
                 }
 
                 if (!invNo) {
-                    console.warn("[confirmOrderWithLivePrices] No invoice number, SMS skipped");
+                    console.warn("⚠️ [confirmOrderWithLivePrices] No invoice number, SMS skipped");
                     return;
                 }
 
                 const smsRes = await orderSmsService.sendOrderConfirmedSms({ userId, invNo });
                 console.log(`[confirmOrderWithLivePrices] Confirmed SMS for ${invNo}:`, smsRes);
             } catch (smsErr) {
-                console.warn("[confirmOrderWithLivePrices] Confirmation SMS error:", smsErr.message);
+                console.warn("⚠️ [confirmOrderWithLivePrices] Confirmation SMS error:", smsErr.message);
             }
         })();
 
@@ -348,7 +367,7 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
             data: result,
         });
     } catch (error) {
-        console.error("[confirmOrderWithLivePrices] Error:", error);
+        console.error("❌ [confirmOrderWithLivePrices] Error:", error);
         return res.status(400).json({
             status: false,
             message: error.message || "Failed to confirm order with live prices",
@@ -358,8 +377,7 @@ exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
 
 
 exports.cancelOrderBeforeConfirm = asyncHandler(async (req, res) => {
-    if (!ensureRetailUser(req, res)) return;
-
+    // Open to both Retail and Wholesale users – no ensureRetailUser check here.
     const userId = getUserId(req);
     const { orderId, processOrderId } = req.body;
 
@@ -390,7 +408,7 @@ exports.cancelOrderBeforeConfirm = asyncHandler(async (req, res) => {
             data: result,
         });
     } catch (error) {
-        console.error("[cancelOrderBeforeConfirm] Error:", error);
+        console.error("❌ [cancelOrderBeforeConfirm] Error:", error);
         return res.status(400).json({
             status: false,
             message: error.message || "Failed to cancel order",

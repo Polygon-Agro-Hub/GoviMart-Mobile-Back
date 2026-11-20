@@ -15,7 +15,6 @@ const app = express();
 app.use(compression());
 
 const BASE_PATH = "/polygon";
-
 const corsOptions = {
   origin: process.env.CLIENT_ORIGIN || "*",
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -26,23 +25,23 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(
   bodyParser.json({
-    limit: "10mb",
+    limit: "50mb",
     verify: (req, res, buf) => {
       req.rawBody = buf;
     },
   })
 );
-app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
+app.use(bodyParser.urlencoded({ limit: "50mb", extended: true }));
 
 // Function to check database connection
 const DatabaseConnection = (db, name) => {
   db.getConnection((err, connection) => {
     if (err) {
-      console.error(`Error getting connection from ${name}:`, err);
+      console.error(`❌ Error getting connection from ${name}:`, err);
     } else {
       connection.ping((err) => {
         if (err) {
-          console.error(`Error pinging ${name} database:`, err);
+          console.error(`❌ Error pinging ${name} database:`, err);
         } else {
           console.log(`✅ Ping to ${name} database successful.`);
         }

@@ -44,7 +44,7 @@ const resolveSalesAgentId = async (orderId) => {
       return rows[0].salesAgent;
     }
   } catch (err) {
-    console.warn("[SalesDash Notification] DB resolveSalesAgentId error:", err.message);
+    console.warn("⚠️ [SalesDash Notification] DB resolveSalesAgentId error:", err.message);
   }
   return null;
 };
@@ -61,7 +61,7 @@ const triggerSalesDashNotification = async ({
   skipDbInsert = true,
 }) => {
   if (!orderId) {
-    console.warn("[SalesDash Notification] orderId is required to trigger notification.");
+    console.warn("⚠️ [SalesDash Notification] orderId is required to trigger notification.");
     return false;
   }
 

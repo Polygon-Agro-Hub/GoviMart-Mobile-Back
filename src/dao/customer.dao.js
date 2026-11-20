@@ -2,7 +2,7 @@ const db = require("../startup/database");
 
 exports.getCustomerProfileDao = async (userId) => {
   const query =
-    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName, creditBalance, image FROM marketplaceusers WHERE id = ?";
+    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, nic, docType, email, buyerType, companyName, creditBalance, image FROM marketplaceusers WHERE id = ?";
   const [results] = await db.collectionofficer.promise().query(query, [userId]);
   return results;
 };
@@ -234,6 +234,7 @@ exports.getAccountDetailsDao = async (userId) => {
       phoneCode2,
       phoneNumber2,
       nic,
+      docType,
       buyerType,
       email,
       companyPhoneCode,
@@ -270,8 +271,11 @@ exports.addAddressDao = async (customerId, addressData) => {
   const billingName = addressData.billingName || addressData.fullName || null;
   const phonecode1 = addressData.billingPhoneCode1 || addressData.phonecode1 || "+94";
   const phone1 = addressData.billingPhone1 || addressData.phone1 || null;
-  const phonecode2 = addressData.billingPhoneCode2 || addressData.phonecode2 || "+94";
+
   const phone2 = addressData.billingPhone2 || addressData.phone2 || null;
+  const phonecode2 = phone2
+    ? addressData.billingPhoneCode2 || addressData.phonecode2 || "+94"
+    : null;
   const resolvedHouseNo = houseNo || buildingNo || null;
   const resolvedCity = city || nearestCity || null;
 
@@ -378,8 +382,10 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
   const billingName = addressData.billingName || addressData.fullName || null;
   const phonecode1 = addressData.billingPhoneCode1 || addressData.phonecode1 || "+94";
   const phone1 = addressData.billingPhone1 || addressData.phone1 || null;
-  const phonecode2 = addressData.billingPhoneCode2 || addressData.phonecode2 || "+94";
   const phone2 = addressData.billingPhone2 || addressData.phone2 || null;
+  const phonecode2 = phone2
+    ? addressData.billingPhoneCode2 || addressData.phonecode2 || "+94"
+    : null;
   const resolvedHouseNo = houseNo || buildingNo || null;
   const resolvedCity = city || nearestCity || null;
 
@@ -568,6 +574,7 @@ exports.updateUserDetailsDao = async (userId, userData) => {
     "phoneCode2",
     "phoneNumber2",
     "nic",
+    "docType",
     "email",
     "companyPhoneCode",
     "companyPhone",
@@ -627,7 +634,7 @@ exports.deleteUserAccountDao = async (userId) => {
     if (creditBalance < 0) {
       await connection.rollback();
       const error = new Error(
-        "You have a negative credit balance on your account. Please clear the outstanding balance before deleting your account."
+        "You have a negative Polygon Wallet on your account. Please clear the outstanding balance before deleting your account."
       );
       error.statusCode = 400;
       throw error;
@@ -703,7 +710,7 @@ exports.deleteUserAccountDao = async (userId) => {
         nearesCity = NULL,
         creditBalance = 0,
         creditLimit = 0,
-        creditLimitBonusTier = NULL,
+        creditLimitBonusTier = 0,
         isMarketPlaceUser = 0,
         isDashUser = 0,
         firstTimeUser = 0,
@@ -722,7 +729,7 @@ exports.deleteUserAccountDao = async (userId) => {
       try {
         await connection.rollback();
       } catch (rollbackErr) {
-        console.error("Error during rollback in deleteUserAccountDao:", rollbackErr);
+        console.error("❌ Error during rollback in deleteUserAccountDao:", rollbackErr);
       }
     }
     throw err;
@@ -791,6 +798,19 @@ exports.isNicTakenDao = async (userId, nic) => {
     LIMIT 1
   `;
   const [results] = await db.collectionofficer.promise().query(query, [...candidates, userId]);
+  return results.length > 0;
+};
+
+// Check if an email already belongs to another user
+exports.isEmailTakenDao = async (userId, email) => {
+  if (!email) return false;
+  const rawEmail = String(email).trim().toLowerCase();
+  const query = `
+    SELECT id FROM marketplaceusers
+    WHERE LOWER(TRIM(email)) = ? AND id != ?
+    LIMIT 1
+  `;
+  const [results] = await db.collectionofficer.promise().query(query, [rawEmail, userId]);
   return results.length > 0;
 };
 

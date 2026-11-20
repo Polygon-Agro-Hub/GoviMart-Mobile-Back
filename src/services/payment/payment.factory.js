@@ -31,7 +31,7 @@ class PaymentGatewayFactory {
     const strategy = this.strategies.get(activeName);
     if (!strategy) {
       console.warn(
-        `[PaymentGatewayFactory] Unknown gateway "${activeName}". Falling back to payments_lk.`
+        `⚠️ [PaymentGatewayFactory] Unknown gateway "${activeName}". Falling back to payments_lk.`
       );
       return this.strategies.get("payments_lk");
     }

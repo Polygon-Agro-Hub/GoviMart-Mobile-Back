@@ -27,7 +27,7 @@ const checkProfanity = (fields = []) => {
 
       next();
     } catch (err) {
-      console.error('[ProfanityMiddleware] Error executing filter check:', err);
+      console.error('❌ [ProfanityMiddleware] Error executing filter check:', err);
       next(); // Don't block requests if filter check encounters an internal exception
     }
   };

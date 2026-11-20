@@ -72,7 +72,7 @@ class PayHereStrategy extends PaymentStrategy {
         itemsDescription ||
         (paymentType === "clear_balance"
           ? "Clear Credit Balance"
-          : "GoviMart Order"),
+          : "Polygon Order"),
       currency: currency,
       amount: formattedAmount,
       first_name: customer.firstName || "Customer",
