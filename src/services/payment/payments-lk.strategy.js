@@ -206,8 +206,10 @@ class PaymentsLkStrategy extends PaymentStrategy {
           if (attempt > 0) {
             await new Promise((resolve) => setTimeout(resolve, 500));
           }
-          // Query vault for all saved cards
-          const queryUrl = `${this.apiUrl}/cards?limit=20`;
+          // Query vault: official docs support filtering by customerEmail, returning newest first
+          const queryUrl = customerEmail
+            ? `${this.apiUrl}/cards?customerEmail=${encodeURIComponent(customerEmail)}&limit=10`
+            : `${this.apiUrl}/cards?limit=20`;
           const listRes = await fetch(queryUrl, {
             headers: { Authorization: `Bearer ${this.secretKey}` },
           });
