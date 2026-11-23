@@ -10,14 +10,20 @@ class PaymentsLkStrategy extends PaymentStrategy {
     super();
     this.apiUrl =
       process.env.PAYMENTS_LK_API_URL || "https://api.payments.lk/v1";
-    this.secretKey =
-      process.env.PAYMENTS_LK_SECRET_KEY || "sk_test_n5ceveR70UwP3W23ow2M7kchXF0zHoIP";
-    this.webhookSecret =
-      process.env.PAYMENTS_LK_WEBHOOK_SECRET || "whsec_sLQp6urGfRtGFx1XZvZrCzSE4rn0Zw1mNa_AhHOC1_I";
+    this.secretKey = (process.env.PAYMENTS_LK_SECRET_KEY || "").trim();
+    this.webhookSecret = (process.env.PAYMENTS_LK_WEBHOOK_SECRET || "").trim();
     this.appScheme =
       process.env.APP_DEEP_LINK_SCHEME || "polygon";
     this.domain =
-      process.env.PAYMENTS_LK_DOMAIN || "https://dev.govimart.com";
+      process.env.PAYMENTS_LK_DOMAIN || "";
+  }
+
+  _ensureSecretKey() {
+    if (!this.secretKey) {
+      throw new Error(
+        "Payments.lk API secret key is missing. Please set PAYMENTS_LK_SECRET_KEY in your environment variables."
+      );
+    }
   }
 
   get gatewayName() {
@@ -28,6 +34,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
    * Creates a checkout session on Payments.lk
    */
   async initiatePayment(params) {
+    this._ensureSecretKey();
     const {
       userId,
       amount: rawAmount,
@@ -151,6 +158,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
    * Fetches real checkout details directly from Payments.lk API and verifies card saving
    */
   async verifyAndSyncCheckout(checkoutId, userId) {
+    this._ensureSecretKey();
     if (!checkoutId) {
       throw new Error("checkoutId is required to sync checkout session");
     }
@@ -305,10 +313,10 @@ class PaymentsLkStrategy extends PaymentStrategy {
   verifyWebhook(signatureHeader, rawBody, toleranceSeconds = 300) {
     const secret = this.webhookSecret;
     if (!secret) {
-      console.warn(
-        "⚠️ [Payments.lk Webhook] PAYMENTS_LK_WEBHOOK_SECRET is not configured. Skipping signature check."
+      console.error(
+        "❌ [Payments.lk Webhook] PAYMENTS_LK_WEBHOOK_SECRET is not configured in environment variables. Webhook verification failed."
       );
-      return true;
+      return false;
     }
 
     if (!signatureHeader || !rawBody) {
@@ -379,6 +387,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
    * Charges an existing card on file (1-click charge)
    */
   async chargeSavedCard(params) {
+    this._ensureSecretKey();
     const {
       cardId,
       amount,
@@ -487,6 +496,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
    */
   async deleteSavedCard(cardId) {
     if (!cardId) return false;
+    this._ensureSecretKey();
 
     try {
       console.log(`[Payments.lk] Deleting card ${cardId} from processor vault...`);

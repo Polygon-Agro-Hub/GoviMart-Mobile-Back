@@ -354,9 +354,13 @@ exports.initiatePayHere = asyncHandler(async (req, res) => {
 
 exports.handlePayHereNotify = asyncHandler(async (req, res) => {
   try {
-    const merchantSecret =
-      process.env.PAYHERE_MERCHANT_SECRET ||
-      "Mjk4NjMyODI2MjMyMDU0MDMyMzgyNDY5Nzc0OTkwNDEzNzQwNTcxMg==";
+    const merchantSecret = (process.env.PAYHERE_MERCHANT_SECRET || "").trim();
+    if (!merchantSecret) {
+      console.error(
+        "❌ [PayHere Webhook] PAYHERE_MERCHANT_SECRET is not configured in environment variables."
+      );
+      return res.status(500).send("Server configuration error: PAYHERE_MERCHANT_SECRET missing");
+    }
 
     const payload = req.body;
     console.log("[PayHere Webhook] Received notify payload:", payload);
