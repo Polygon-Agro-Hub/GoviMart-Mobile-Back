@@ -33,20 +33,12 @@ class SavedCardDao {
   }
 
   /**
-   * Saves a new card for the user. Enforces the 1 active card rule.
+   * Saves a new card for the user. Enforces the 1 active card rule idempotently.
    */
   async saveUserCard(userId, cardData) {
     const connection = db.collectionofficer.promise();
 
-    // 1. Deactivate existing active cards for this user (1-card limit)
-    const deactivateQuery = `
-      UPDATE user_saved_cards 
-      SET status = 'revoked', isDefault = 0 
-      WHERE userId = ?
-    `;
-    await connection.query(deactivateQuery, [userId]);
-
-    // 2. Format expiry
+    // 1. Format expiry
     let expiryMonth = "";
     let expiryYear = "";
     if (cardData.expiry && typeof cardData.expiry === "object") {
@@ -74,7 +66,42 @@ class SavedCardDao {
       }
     }
 
-    // 3. Insert new active card (with consent timestamp if column exists)
+    // 2. IDEMPOTENCY CHECK:
+    // If this exact cardToken already exists in DB (e.g. Sync API created it and Webhook arrives concurrently):
+    const [existingTokens] = await connection.query(
+      `SELECT id, userId FROM user_saved_cards WHERE cardToken = ? LIMIT 1`,
+      [cardToken]
+    );
+
+    if (existingTokens && existingTokens.length > 0) {
+      const existingId = existingTokens[0].id;
+      console.log(
+        `[SavedCardDao] cardToken ${cardToken} already exists (id: ${existingId}). Updating existing record instead of inserting duplicate.`
+      );
+
+      // Ensure this record is assigned to this user and active — DO NOT insert duplicate row!
+      await connection.query(
+        `UPDATE user_saved_cards 
+         SET userId = ?, status = 'active', isDefault = 1, cardHolder = ?, paymentId = COALESCE(?, paymentId) 
+         WHERE id = ?`,
+        [userId, cardHolder, paymentId, existingId]
+      );
+
+      // Purge any older cards for this user or duplicate token rows
+      await connection.query(
+        `DELETE FROM user_saved_cards WHERE (userId = ? OR cardToken = ?) AND id != ?`,
+        [userId, cardToken, existingId]
+      );
+
+      const [updatedRows] = await connection.query(`SELECT * FROM user_saved_cards WHERE id = ?`, [existingId]);
+      return updatedRows[0];
+    }
+
+    // 3. Purge all previous cards for this user or token before inserting the fresh one (enforces 1 card per user)
+    console.log(`[SavedCardDao] Purging previous card records for user ${userId} to maintain strictly 1 active card.`);
+    await connection.query(`DELETE FROM user_saved_cards WHERE userId = ? OR cardToken = ?`, [userId, cardToken]);
+
+    // 4. Insert new active card (with consent timestamp if column exists)
     const insertQuery = `
       INSERT INTO user_saved_cards (
         userId, 
@@ -127,7 +154,7 @@ class SavedCardDao {
       }
     }
 
-    // 4. Return the inserted card
+    // 5. Return the inserted card
     const selectQuery = `SELECT * FROM user_saved_cards WHERE id = ?`;
     const [savedRows] = await connection.query(selectQuery, [insertResult.insertId]);
     return savedRows[0];

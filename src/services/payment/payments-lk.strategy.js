@@ -63,8 +63,9 @@ class PaymentsLkStrategy extends PaymentStrategy {
         : paymentType === "save_card"
           ? "SC"
           : "ORD";
+    const nonce = Math.random().toString(36).substring(2, 7);
     const orderId =
-      clientOrderId || `${prefix}_${userId}_${Date.now()}`;
+      clientOrderId || `${prefix}_${userId}_${Date.now()}_${nonce}`;
 
     // Callback URLs: Supports deep link scheme for mobile apps
     const successUrl = `${this.appScheme}://payments-lk/return?status=success&orderId=${encodeURIComponent(
@@ -215,7 +216,8 @@ class PaymentsLkStrategy extends PaymentStrategy {
           });
           if (listRes.ok) {
             const listData = await listRes.json();
-            const cardList = (listData?.data || []).filter((c) => c.active !== false);
+            // Strictly filter out any deleted / retired cards (Payments.lk sets active: false and retiredAt)
+            const cardList = (listData?.data || []).filter((c) => c.active !== false && !c.retiredAt);
 
             console.log(`[Payments.lk Sync] Card vault has ${cardList.length} active card(s). cardWasSaved=${cardWasSaved}`);
 
