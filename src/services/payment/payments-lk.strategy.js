@@ -201,9 +201,8 @@ class PaymentsLkStrategy extends PaymentStrategy {
           if (attempt > 0) {
             await new Promise((resolve) => setTimeout(resolve, 400));
           }
-          const queryUrl = customerEmail
-            ? `${this.apiUrl}/cards?customerEmail=${encodeURIComponent(customerEmail)}&limit=10`
-            : `${this.apiUrl}/cards?limit=10`;
+          // Query both recent cards and by email to find matched card
+          const queryUrl = `${this.apiUrl}/cards?limit=20`;
           const listRes = await fetch(queryUrl, {
             headers: { Authorization: `Bearer ${this.secretKey}` },
           });
@@ -212,8 +211,8 @@ class PaymentsLkStrategy extends PaymentStrategy {
             const cardList = listData?.data || [];
             const matched =
               cardList.find((c) => payment.id && c.paymentId === payment.id) ||
-              cardList.find((c) => customerEmail && c.customerEmail === customerEmail && c.active !== false) ||
-              cardList.find((c) => c.active !== false);
+              cardList.find((c) => customerEmail && c.customerEmail?.toLowerCase() === customerEmail.toLowerCase() && c.active !== false) ||
+              (paymentType === "save_card" && cardList.length > 0 && cardList[0].active !== false ? cardList[0] : null);
             if (matched) {
               savedCardId = matched.id;
               if (matched.expiry) {
@@ -470,9 +469,17 @@ class PaymentsLkStrategy extends PaymentStrategy {
     let paymentType = metadata.paymentType || "order";
     if (reference.startsWith("CB_")) {
       paymentType = "clear_balance";
+    } else if (reference.startsWith("SC_")) {
+      paymentType = "save_card";
     }
 
-    const userId = metadata.userId ? Number(metadata.userId) : null;
+    let userId = metadata.userId ? Number(metadata.userId) : null;
+    if (!userId && (reference.startsWith("SC_") || reference.startsWith("CB_") || reference.startsWith("ORD_"))) {
+      const parts = reference.split("_");
+      if (parts.length >= 2 && !isNaN(parts[1])) {
+        userId = Number(parts[1]);
+      }
+    }
 
     return {
       eventType,
