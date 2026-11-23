@@ -445,18 +445,17 @@ exports.createProcessOrderWithTransactionDao = (
                                 finalMoneyPaid = 0;
                             }
 
-                            // 20 columns, invNo is @new_inv_no => 19 placeholders / 19 values
+                            // 19 columns, invNo is @new_inv_no => 18 placeholders / 18 values
                             const sql = `
                             INSERT INTO processorders (
-                                orderId, invNo, transactionId, paymentMethod,
+                                orderId, invNo, paymentMethod,
                                 isPaid, amount, creditPaid, moneyPaid, status, reportStatus, qrCode, sheduleDate,
                                 isConfirmed,
                                 isCoupon, couponType, couponValue, total, fullTotal, discount, deliveryCharge
-                            ) VALUES (?, @new_inv_no, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ) VALUES (?, @new_inv_no, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         `;
                             const values = [
                                 orderId,
-                                null,
                                 finalMethod,
                                 finalIsPaid,
                                 finalAmount,
@@ -1967,8 +1966,17 @@ exports.getDeliveredOrdersTotal = async (userId) => {
 /**
  * Marks processorders record as paid via PayHere webhook or direct card settlement.
  * Accepts invNo, orderId, or processorders.id as identifier.
+ * Note: transactionId is intentionally omitted and never written to the DB.
  */
-exports.markOrderPaidDao = async (identifier, transactionId, amount = null) => {
+exports.markOrderPaidDao = async (identifier, arg1 = null, arg2 = null) => {
+    // Resolve amount whether called as (id, amount) or (id, ignoredPaymentId, amount)
+    let amount = null;
+    if (arg2 !== null && arg2 !== undefined && !isNaN(arg2)) {
+        amount = parseFloat(arg2);
+    } else if (arg1 !== null && arg1 !== undefined && !isNaN(arg1) && typeof arg1 !== "string") {
+        amount = parseFloat(arg1);
+    }
+
     let connection;
     try {
         connection = await db.collectionofficer.promise().getConnection();
@@ -1976,12 +1984,10 @@ exports.markOrderPaidDao = async (identifier, transactionId, amount = null) => {
             `UPDATE processorders 
              SET isPaid = 1, 
                  paymentMethod = 'Card', 
-                 transactionId = COALESCE(?, transactionId),
                  moneyPaid = CASE WHEN moneyPaid > 0 THEN moneyPaid ELSE COALESCE(?, fullTotal, amount) END,
                  amount = CASE WHEN amount > 0 THEN amount ELSE COALESCE(?, fullTotal, amount) END
              WHERE invNo = ? OR orderId = ? OR id = ?`,
             [
-                transactionId || null,
                 amount,
                 amount,
                 identifier,
