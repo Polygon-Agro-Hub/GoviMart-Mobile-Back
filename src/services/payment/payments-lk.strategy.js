@@ -10,14 +10,20 @@ class PaymentsLkStrategy extends PaymentStrategy {
     super();
     this.apiUrl =
       process.env.PAYMENTS_LK_API_URL || "https://api.payments.lk/v1";
-    this.secretKey =
-      process.env.PAYMENTS_LK_SECRET_KEY || "sk_test_n5ceveR70UwP3W23ow2M7kchXF0zHoIP";
-    this.webhookSecret =
-      process.env.PAYMENTS_LK_WEBHOOK_SECRET || "whsec_sLQp6urGfRtGFx1XZvZrCzSE4rn0Zw1mNa_AhHOC1_I";
+    this.secretKey = (process.env.PAYMENTS_LK_SECRET_KEY || "").trim();
+    this.webhookSecret = (process.env.PAYMENTS_LK_WEBHOOK_SECRET || "").trim();
     this.appScheme =
       process.env.APP_DEEP_LINK_SCHEME || "polygon";
     this.domain =
-      process.env.PAYMENTS_LK_DOMAIN || "https://dev.govimart.com";
+      process.env.PAYMENTS_LK_DOMAIN || "";
+  }
+
+  _ensureSecretKey() {
+    if (!this.secretKey) {
+      throw new Error(
+        "Payments.lk API secret key is missing. Please set PAYMENTS_LK_SECRET_KEY in your environment variables."
+      );
+    }
   }
 
   get gatewayName() {
@@ -28,6 +34,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
    * Creates a checkout session on Payments.lk
    */
   async initiatePayment(params) {
+    this._ensureSecretKey();
     const {
       userId,
       amount: rawAmount,
@@ -150,7 +157,8 @@ class PaymentsLkStrategy extends PaymentStrategy {
   /**
    * Fetches real checkout details directly from Payments.lk API and verifies card saving
    */
-  async verifyAndSyncCheckout(checkoutId, userId) {
+  async verifyAndSyncCheckout(checkoutId, userId, clientCardHolder = null) {
+    this._ensureSecretKey();
     if (!checkoutId) {
       throw new Error("checkoutId is required to sync checkout session");
     }
@@ -178,35 +186,58 @@ class PaymentsLkStrategy extends PaymentStrategy {
 
     let expiryMonth = "";
     let expiryYear = "";
+    let savedCardObj = null;
 
     // 1. Look up official SavedCard in Payments.lk vault
     const customer = payment.customer || checkoutData.customer || {};
     const customerEmail = customer.email;
+    const reference = String(checkoutData.reference || checkoutData.orderId || payment.reference || "");
+    const isSaveCard = reference.startsWith("SC_");
 
     console.log(
       `[Payments.lk Sync] Checkout ${checkoutId}: status=${checkoutData.status}, paymentStatus=${payment.status}, cardSave=${payment.cardSave}, savedCardId=${savedCardId}, email=${customerEmail}`
     );
 
     if (!savedCardId) {
+      // Only attempt card lookup if the checkout payment indicates card was saved
+      const cardWasSaved = payment.cardSave === "saved";
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           if (attempt > 0) {
-            await new Promise((resolve) => setTimeout(resolve, 400));
+            await new Promise((resolve) => setTimeout(resolve, 500));
           }
-          const queryUrl = customerEmail
-            ? `${this.apiUrl}/cards?customerEmail=${encodeURIComponent(customerEmail)}&limit=10`
-            : `${this.apiUrl}/cards?limit=10`;
+          // Query vault for all saved cards
+          const queryUrl = `${this.apiUrl}/cards?limit=20`;
           const listRes = await fetch(queryUrl, {
             headers: { Authorization: `Bearer ${this.secretKey}` },
           });
           if (listRes.ok) {
             const listData = await listRes.json();
-            const cardList = listData?.data || [];
-            const matched =
-              cardList.find((c) => payment.id && c.paymentId === payment.id) ||
-              cardList.find((c) => customerEmail && c.customerEmail === customerEmail && c.active !== false) ||
-              cardList.find((c) => c.active !== false);
+            const cardList = (listData?.data || []).filter((c) => c.active !== false);
+
+            console.log(`[Payments.lk Sync] Card vault has ${cardList.length} active card(s). cardWasSaved=${cardWasSaved}`);
+
+            // Priority 1: match by payment ID on the card object
+            let matched = cardList.find(
+              (c) => payment.id && (c.paymentId === payment.id || c.payment_id === payment.id)
+            );
+
+            // Priority 2: match by customer email (only when card was explicitly saved during this checkout)
+            if (!matched && cardWasSaved && customerEmail) {
+              matched = cardList.find(
+                (c) =>
+                  (c.customerEmail || c.email || c.customer?.email || "")
+                    .toLowerCase() === customerEmail.toLowerCase()
+              );
+            }
+
+            // Priority 3: for save_card type flows, take the most recently added card
+            if (!matched && isSaveCard && cardList.length > 0) {
+              matched = cardList[0];
+            }
+
             if (matched) {
+              console.log(`[Payments.lk Sync] Matched card in vault: ${matched.id} (paymentId: ${matched.paymentId})`);
               savedCardId = matched.id;
               if (matched.expiry) {
                 expiryMonth = String(matched.expiry.month || "").padStart(2, "0");
@@ -215,6 +246,9 @@ class PaymentsLkStrategy extends PaymentStrategy {
               if (matched.last4) last4 = String(matched.last4);
               if (matched.scheme) scheme = String(matched.scheme).toLowerCase();
               break;
+            } else {
+              console.log(`[Payments.lk Sync] No matching card found in vault (attempt ${attempt + 1}). cardWasSaved=${cardWasSaved}`);
+              if (!cardWasSaved) break; // Don't retry if card was never saved
             }
           }
         } catch (err) {
@@ -223,7 +257,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
       }
     }
 
-    if (savedCardId && !expiryMonth) {
+    if (savedCardId) {
       try {
         const cardRes = await fetch(`${this.apiUrl}/cards/${savedCardId}`, {
           headers: {
@@ -231,8 +265,8 @@ class PaymentsLkStrategy extends PaymentStrategy {
           },
         });
         if (cardRes.ok) {
-          const savedCardObj = await cardRes.json();
-          if (savedCardObj && savedCardObj.expiry) {
+          savedCardObj = await cardRes.json();
+          if (savedCardObj && savedCardObj.expiry && !expiryMonth) {
             expiryMonth = String(savedCardObj.expiry.month || "").padStart(2, "0");
             expiryYear = String(savedCardObj.expiry.year || "").slice(-2);
           }
@@ -273,23 +307,39 @@ class PaymentsLkStrategy extends PaymentStrategy {
     }
 
     const effectiveCardId = savedCardId;
-    const cardHolder = customer.name || checkoutData.customer?.name || "Cardholder";
+    // Prioritize the actual name entered on the card over generic profile name
+    const resolvedCardHolder =
+      (clientCardHolder && String(clientCardHolder).trim()) ||
+      card.name ||
+      card.holderName ||
+      card.cardholderName ||
+      card.card_holder_name ||
+      (payment.card && (payment.card.name || payment.card.holderName || payment.card.cardholderName)) ||
+      (savedCardObj && (savedCardObj.name || savedCardObj.cardHolder || savedCardObj.holderName)) ||
+      customer.name ||
+      checkoutData.customer?.name ||
+      "Cardholder";
 
     const savedCardPayload = {
       id: effectiveCardId,
+      cardToken: effectiveCardId,   // DAO prefers cardToken field
+      token: effectiveCardId,
       userId: String(userId),
       scheme: scheme.includes("master") ? "mastercard" : "visa",
       last4,
-      cardHolder,
+      cardHolder: resolvedCardHolder,
       expiryMonth,
       expiryYear,
       isDefault: true,
-      token: effectiveCardId,
       status: "active",
       checkoutId,
       paymentId: payment.id,
+      mode: savedCardObj?.mode || "test",
+      consent: savedCardObj?.consent || null,
       rawEvent: checkoutData,
     };
+
+    console.log(`[Payments.lk Sync] Returning savedCardPayload: token=${effectiveCardId}, scheme=${savedCardPayload.scheme}, last4=${last4}, holder=${resolvedCardHolder}`);
 
     return {
       checkout: checkoutData,
@@ -305,10 +355,10 @@ class PaymentsLkStrategy extends PaymentStrategy {
   verifyWebhook(signatureHeader, rawBody, toleranceSeconds = 300) {
     const secret = this.webhookSecret;
     if (!secret) {
-      console.warn(
-        "⚠️ [Payments.lk Webhook] PAYMENTS_LK_WEBHOOK_SECRET is not configured. Skipping signature check."
+      console.error(
+        "❌ [Payments.lk Webhook] PAYMENTS_LK_WEBHOOK_SECRET is not configured in environment variables. Webhook verification failed."
       );
-      return true;
+      return false;
     }
 
     if (!signatureHeader || !rawBody) {
@@ -379,6 +429,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
    * Charges an existing card on file (1-click charge)
    */
   async chargeSavedCard(params) {
+    this._ensureSecretKey();
     const {
       cardId,
       amount,
@@ -461,9 +512,17 @@ class PaymentsLkStrategy extends PaymentStrategy {
     let paymentType = metadata.paymentType || "order";
     if (reference.startsWith("CB_")) {
       paymentType = "clear_balance";
+    } else if (reference.startsWith("SC_")) {
+      paymentType = "save_card";
     }
 
-    const userId = metadata.userId ? Number(metadata.userId) : null;
+    let userId = metadata.userId ? Number(metadata.userId) : null;
+    if (!userId && (reference.startsWith("SC_") || reference.startsWith("CB_") || reference.startsWith("ORD_"))) {
+      const parts = reference.split("_");
+      if (parts.length >= 2 && !isNaN(parts[1])) {
+        userId = Number(parts[1]);
+      }
+    }
 
     return {
       eventType,
@@ -487,6 +546,7 @@ class PaymentsLkStrategy extends PaymentStrategy {
    */
   async deleteSavedCard(cardId) {
     if (!cardId) return false;
+    this._ensureSecretKey();
 
     try {
       console.log(`[Payments.lk] Deleting card ${cardId} from processor vault...`);

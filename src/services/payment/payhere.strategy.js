@@ -11,15 +11,21 @@ const {
 class PayHereStrategy extends PaymentStrategy {
   constructor() {
     super();
-    this.merchantId = process.env.PAYHERE_MERCHANT_ID || "1237830";
-    this.merchantSecret =
-      process.env.PAYHERE_MERCHANT_SECRET ||
-      "Mjk4NjMyODI2MjMyMDU0MDMyMzgyNDY5Nzc0OTkwNDEzNzQwNTcxMg==";
+    this.merchantId = (process.env.PAYHERE_MERCHANT_ID || "").trim();
+    this.merchantSecret = (process.env.PAYHERE_MERCHANT_SECRET || "").trim();
     this.isSandbox =
       process.env.PAYHERE_SANDBOX !== undefined
         ? String(process.env.PAYHERE_SANDBOX).toLowerCase() === "true"
         : process.env.NODE_ENV !== "production";
-    this.domain = process.env.PAYHERE_DOMAIN || "https://dev.govimart.com";
+    this.domain = process.env.PAYHERE_DOMAIN || "";
+  }
+
+  _ensureCredentials() {
+    if (!this.merchantId || !this.merchantSecret) {
+      throw new Error(
+        "PayHere credentials not configured. Please set PAYHERE_MERCHANT_ID and PAYHERE_MERCHANT_SECRET in your environment variables."
+      );
+    }
   }
 
   get gatewayName() {
@@ -27,6 +33,7 @@ class PayHereStrategy extends PaymentStrategy {
   }
 
   async initiatePayment(params) {
+    this._ensureCredentials();
     const {
       userId,
       amount,
@@ -108,6 +115,12 @@ class PayHereStrategy extends PaymentStrategy {
   }
 
   verifyWebhook(headers, body) {
+    if (!this.merchantSecret) {
+      console.error(
+        "❌ [PayHere Webhook] PAYHERE_MERCHANT_SECRET is not configured in environment variables."
+      );
+      return false;
+    }
     return verifyPayHereNotify(body, this.merchantSecret);
   }
 

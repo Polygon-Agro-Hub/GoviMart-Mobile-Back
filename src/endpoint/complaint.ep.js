@@ -20,7 +20,7 @@ const isHeic = (file) => {
   // Sniff magic bytes (covers application/octet-stream with no/wrong extension)
   if (file.buffer && file.buffer.length > 12) {
     const isFtyp = file.buffer.toString("ascii", 4, 8) === "ftyp";
-    const brand = file.buffer.toString("ascii", 8, 12);
+    const brand = file.buffer.toString("ascii", 8, 12).toLowerCase();
     return isFtyp && HEIC_BRANDS.includes(brand);
   }
   return false;
@@ -29,21 +29,41 @@ const isHeic = (file) => {
 // Converts HEIC/HEIF to JPEG; passes everything else through untouched
 const normalizeImage = async (file) => {
   if (!isHeic(file)) {
-    return { buffer: file.buffer, name: file.originalname };
+    return { buffer: file.buffer, name: file.originalname, converted: false };
   }
 
-  const output = await convert({
-    buffer: file.buffer,
-    format: "JPEG",
-    quality: 0.8,
-  });
+  let output;
+  try {
+    output = await convert({
+      buffer: file.buffer,
+      format: "JPEG",
+      quality: 0.8,
+    });
+  } catch (singleErr) {
+    // Multi-frame or Live Photo fallback
+    try {
+      const allFrames = await convert.all({
+        buffer: file.buffer,
+        format: "JPEG",
+        quality: 0.8,
+      });
+      if (allFrames && allFrames.length > 0) {
+        output = allFrames[0];
+      } else {
+        throw singleErr;
+      }
+    } catch (allErr) {
+      console.error("complaint.ep HEIC conversion failed for all frames:", allErr);
+      throw singleErr;
+    }
+  }
 
   const baseName = (file.originalname || `image_${Date.now()}`).replace(
     /\.[^.]+$/,
     "",
   );
 
-  return { buffer: Buffer.from(output), name: `${baseName}.jpg` };
+  return { buffer: Buffer.from(output), name: `${baseName}.jpg`, converted: true };
 };
 
 // Get All Complain Categories
@@ -122,12 +142,13 @@ exports.createComplain = asyncHandler(async (req, res) => {
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
         try {
-          const { buffer, name } = await normalizeImage(file);
+          const { buffer, name, converted } = await normalizeImage(file);
 
           const imageUrl = await uploadFileToS3(
             buffer,
             name,
             "complain-images",
+            converted,
           );
           await complainDao.addComplainImageDao(complainId, imageUrl);
           uploadedImages.push(imageUrl);

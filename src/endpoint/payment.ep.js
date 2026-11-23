@@ -210,6 +210,12 @@ exports.handlePaymentsLkWebhook = asyncHandler(async (req, res) => {
       );
 
       let resolvedUserId = event.userId || null;
+      if (!resolvedUserId && event.orderId) {
+        const parts = String(event.orderId).split("_");
+        if (parts.length >= 2 && !isNaN(parts[1])) {
+          resolvedUserId = Number(parts[1]);
+        }
+      }
       if (!resolvedUserId && customerEmail) {
         try {
           const userRow = await customerDao.getCustomerByEmailDao(customerEmail);
@@ -354,9 +360,13 @@ exports.initiatePayHere = asyncHandler(async (req, res) => {
 
 exports.handlePayHereNotify = asyncHandler(async (req, res) => {
   try {
-    const merchantSecret =
-      process.env.PAYHERE_MERCHANT_SECRET ||
-      "Mjk4NjMyODI2MjMyMDU0MDMyMzgyNDY5Nzc0OTkwNDEzNzQwNTcxMg==";
+    const merchantSecret = (process.env.PAYHERE_MERCHANT_SECRET || "").trim();
+    if (!merchantSecret) {
+      console.error(
+        "❌ [PayHere Webhook] PAYHERE_MERCHANT_SECRET is not configured in environment variables."
+      );
+      return res.status(500).send("Server configuration error: PAYHERE_MERCHANT_SECRET missing");
+    }
 
     const payload = req.body;
     console.log("[PayHere Webhook] Received notify payload:", payload);
@@ -453,7 +463,7 @@ exports.getSavedCards = asyncHandler(async (req, res) => {
 exports.syncCheckout = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
-    const { checkoutId } = req.body;
+    const { checkoutId, cardHolder } = req.body;
 
     if (!checkoutId) {
       return res.status(400).json({
@@ -465,13 +475,23 @@ exports.syncCheckout = asyncHandler(async (req, res) => {
     const strategy = paymentGatewayFactory.getGateway("payments_lk");
     const { checkout, card, isCompleted } = await strategy.verifyAndSyncCheckout(
       checkoutId,
-      userId
+      userId,
+      cardHolder
     );
 
     // Save the card in MySQL DB (user_saved_cards table)
     let savedCard = null;
-    if (card && card.id) {
-      savedCard = await savedCardService.saveCard(userId, card, checkout);
+    const cardToken = card?.cardToken || card?.id || card?.token;
+    console.log(`[Sync Checkout] Card from strategy: token=${cardToken}, card=${JSON.stringify(card ? { id: card.id, scheme: card.scheme, last4: card.last4 } : null)}`);
+    if (card && cardToken) {
+      try {
+        savedCard = await savedCardService.saveCard(userId, card, checkout);
+        console.log(`[Sync Checkout] Card saved to MySQL: ${savedCard?.scheme} ending ${savedCard?.last4} for user ${userId}`);
+      } catch (saveErr) {
+        console.error("❌ [Sync Checkout] Failed to save card to MySQL:", saveErr.message);
+      }
+    } else {
+      console.log(`[Sync Checkout] No card token found — skipping MySQL save.`);
     }
 
     // If this was a Clear Balance payment and is completed, auto-update DB credit balance

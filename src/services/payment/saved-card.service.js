@@ -48,11 +48,44 @@ class SavedCardService {
 
   /**
    * Saves or replaces user active card in MySQL DB (user_saved_cards)
+   * Strictly enforces 1-card limit across both Payments.lk vault and MySQL DB.
    */
   async saveCard(userId, cardData, rawEvent = null) {
     if (!userId) {
       console.warn("⚠️ [SavedCardService] Cannot save card without userId");
       return null;
+    }
+
+    // Enforce 1-card limit in Payments.lk processor vault:
+    // If user already has an active saved card with a different token, purge it from Payments.lk
+    try {
+      const existingCard = await savedCardDao.getActiveCardByUserId(userId);
+      const newCardToken = cardData.cardToken || cardData.id || cardData.token;
+      if (
+        existingCard &&
+        existingCard.cardToken &&
+        newCardToken &&
+        existingCard.cardToken !== newCardToken
+      ) {
+        console.log(
+          `[SavedCardService] Enforcing 1-card limit: Deleting prior card token ${existingCard.cardToken} from Payments.lk vault for user ${userId}`
+        );
+        const paymentGatewayFactory = require("./payment.factory");
+        const paymentsLkStrategy = paymentGatewayFactory.getGateway("payments_lk");
+        if (
+          paymentsLkStrategy &&
+          typeof paymentsLkStrategy.deleteSavedCard === "function"
+        ) {
+          await paymentsLkStrategy.deleteSavedCard(existingCard.cardToken).catch((delErr) => {
+            console.warn(
+              "⚠️ [SavedCardService] Could not delete previous card from Payments.lk:",
+              delErr.message
+            );
+          });
+        }
+      }
+    } catch (checkErr) {
+      console.warn("⚠️ [SavedCardService] Error checking existing card:", checkErr.message);
     }
 
     const saved = await savedCardDao.saveUserCard(userId, cardData);
