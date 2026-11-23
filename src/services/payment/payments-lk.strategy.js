@@ -156,12 +156,52 @@ class PaymentsLkStrategy extends PaymentStrategy {
   }
 
   /**
+   * Verifies a direct Payment (e.g. from a 1-click saved card charge) via Payments.lk API
+   */
+  async verifyPayment(paymentId) {
+    this._ensureSecretKey();
+    if (!paymentId) {
+      throw new Error("paymentId is required to verify payment");
+    }
+
+    const response = await fetch(`${this.apiUrl}/payments/${paymentId}`, {
+      headers: {
+        Authorization: `Bearer ${this.secretKey}`,
+      },
+    });
+
+    const paymentData = await response.json();
+    if (!response.ok) {
+      throw new Error(
+        paymentData?.message ||
+        `Failed to retrieve payment from Payments.lk: ${response.status}`
+      );
+    }
+
+    const isCompleted = paymentData.status === "succeeded";
+    return {
+      isCompleted,
+      payment: paymentData,
+    };
+  }
+
+  /**
    * Fetches real checkout details directly from Payments.lk API and verifies card saving
    */
   async verifyAndSyncCheckout(checkoutId, userId, clientCardHolder = null) {
     this._ensureSecretKey();
     if (!checkoutId) {
       throw new Error("checkoutId is required to sync checkout session");
+    }
+
+    // Direct payment ID (from 1-click saved card charge) support
+    if (typeof checkoutId === "string" && checkoutId.startsWith("pay_")) {
+      const res = await this.verifyPayment(checkoutId);
+      return {
+        checkout: { payment: res.payment, status: res.payment.status },
+        card: res.payment.card || {},
+        isCompleted: res.isCompleted,
+      };
     }
 
     const response = await fetch(`${this.apiUrl}/checkouts/${checkoutId}`, {
