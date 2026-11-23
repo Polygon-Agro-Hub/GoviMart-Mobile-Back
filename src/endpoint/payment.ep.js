@@ -453,7 +453,8 @@ exports.handlePayHereNotify = asyncHandler(async (req, res) => {
 // =========================================================================
 exports.getSavedCards = asyncHandler(async (req, res) => {
   const userId = req.user.id;
-  const card = await savedCardService.getCard(userId);
+  const userEmail = req.user.email;
+  const card = await savedCardService.getCard(userId, userEmail);
   return res.status(200).json({
     status: true,
     data: card ? [card] : [],
@@ -577,17 +578,19 @@ exports.saveCardLocally = asyncHandler(async (req, res) => {
 
 exports.deleteSavedCard = asyncHandler(async (req, res) => {
   const userId = req.user.id;
+  const userEmail = req.user.email;
   const { cardId } = req.params;
-  await savedCardService.removeCard(userId, cardId);
+  await savedCardService.removeCard(userId, cardId, userEmail);
   return res.status(200).json({
     status: true,
-    message: "Card removed successfully from database and Payments.lk vault",
+    message: "Card removed successfully from Payments.lk vault",
   });
 });
 
 exports.chargeSavedCard = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
+    const userEmail = req.user.email;
     const {
       cardId,
       amount,
@@ -604,8 +607,9 @@ exports.chargeSavedCard = asyncHandler(async (req, res) => {
     }
 
     // Security check 3: Verify the card belongs to the authenticated user (prevent charging another user's card)
-    const userCard = await savedCardService.getCard(userId);
-    if (!userCard || (userCard.id !== cardId && String(userCard.cardId) !== String(cardId))) {
+    const userCard = await savedCardService.getCard(userId, userEmail);
+    const requestedId = String(cardId || "").trim();
+    if (!userCard || (requestedId !== "current" && userCard.id !== requestedId && String(userCard.cardId) !== requestedId)) {
       return res.status(403).json({
         status: false,
         message: "Unauthorized or invalid payment card",
