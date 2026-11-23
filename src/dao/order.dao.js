@@ -333,7 +333,6 @@ exports.createProcessOrderWithTransactionDao = (
     return new Promise((resolve, reject) => {
         const {
             orderId,
-            transactionId = null,
             paymentMethod,
             isPaid,
             amount,
@@ -457,7 +456,7 @@ exports.createProcessOrderWithTransactionDao = (
                         `;
                             const values = [
                                 orderId,
-                                transactionId || null,
+                                null,
                                 finalMethod,
                                 finalIsPaid,
                                 finalAmount,

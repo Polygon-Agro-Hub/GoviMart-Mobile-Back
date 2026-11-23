@@ -304,7 +304,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     const {
         cartId, paymentMethod, grandTotal, discountAmount, deliveryCharge,
         creditPaid, moneyPaid, isFinalizeImdt, checkoutDetails,
-        checkoutSessionId, paymentId, transactionId,
+        checkoutSessionId, paymentId,
     } = value;
 
     const {
@@ -536,7 +536,6 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // Determine effective payment/checkout identifier
     const effectivePaymentId = paymentId || (typeof checkoutSessionId === "string" && checkoutSessionId.startsWith("pay_") ? checkoutSessionId : null);
     const effectiveCheckoutId = (typeof checkoutSessionId === "string" && !checkoutSessionId.startsWith("pay_")) ? checkoutSessionId : null;
-    let resolvedTransactionId = transactionId || effectivePaymentId || null;
 
     if (isFullyPaidByCredit) {
         serverVerifiedIsPaid = 1;
@@ -553,7 +552,6 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     Math.abs(paidAmountLkr - calculatedGrandTotal) <= 1.0
                 ) {
                     serverVerifiedIsPaid = 1;
-                    resolvedTransactionId = payment.id || effectivePaymentId;
                     console.log(`✅ [createOrder] Verified saved card payment ${effectivePaymentId} for user ${userId}: Rs. ${paidAmountLkr}`);
                 } else {
                     console.warn(
@@ -585,7 +583,6 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     Math.abs(paidAmountLkr - calculatedGrandTotal) <= 1.0
                 ) {
                     serverVerifiedIsPaid = 1;
-                    resolvedTransactionId = checkout?.payment?.id || effectiveCheckoutId;
                 } else {
                     console.warn(
                         `⚠️ [createOrder] Gateway amount mismatch for user ${userId}: ` +
@@ -831,7 +828,6 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                         const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
                             orderId,
-                            transactionId: isFirstOrder ? resolvedTransactionId : null,
                             paymentMethod: paymentMethod || (isFirstOrder ? "Card" : "Cash"),
                             isPaid: isFirstOrder ? clientIsPaid : 0,
                             amount: rowAmount,
@@ -870,7 +866,6 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                     const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
                         orderId,
-                        transactionId: resolvedTransactionId,
                         paymentMethod,
                         isPaid: clientIsPaid,
                         amount: oneTimeAmount,
