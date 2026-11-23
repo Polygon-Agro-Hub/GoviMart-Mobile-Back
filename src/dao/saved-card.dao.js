@@ -65,7 +65,14 @@ class SavedCardDao {
     const paymentId = cardData.paymentId || null;
     const mode = cardData.mode || "test";
     // Store consent timestamp from card.saved webhook (consent.agreedAt per Payments.lk docs)
-    const consentAgreedAt = cardData.consent?.agreedAt || cardData.consentAgreedAt || null;
+    let consentAgreedAt = null;
+    const rawConsent = cardData.consent?.agreedAt || cardData.consentAgreedAt;
+    if (rawConsent) {
+      const parsedDate = new Date(rawConsent);
+      if (!isNaN(parsedDate.getTime())) {
+        consentAgreedAt = parsedDate; // mysql2 automatically serializes Date instances to MySQL timestamps
+      }
+    }
 
     // 3. Insert new active card (with consent timestamp if column exists)
     const insertQuery = `
@@ -102,8 +109,12 @@ class SavedCardDao {
     try {
       [insertResult] = await connection.query(insertQuery, insertValues);
     } catch (insertErr) {
-      // Graceful fallback: if consentAgreedAt column doesn't exist in older schema, retry without it
-      if (insertErr.code === "ER_BAD_FIELD_ERROR" && insertErr.message.includes("consentAgreedAt")) {
+      // Graceful fallback: if consentAgreedAt column doesn't exist or has formatting issues, retry without it
+      if (
+        (insertErr.code === "ER_BAD_FIELD_ERROR" && insertErr.message.includes("consentAgreedAt")) ||
+        insertErr.code === "ER_TRUNCATED_WRONG_VALUE"
+      ) {
+        console.warn("⚠️ [SavedCardDao] Retrying card insert without consentAgreedAt column:", insertErr.message);
         const fallbackQuery = `
           INSERT INTO user_saved_cards (
             userId, cardToken, cardScheme, last4, cardHolder,
