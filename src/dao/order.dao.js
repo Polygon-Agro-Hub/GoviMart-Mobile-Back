@@ -411,7 +411,7 @@ exports.createProcessOrderWithTransactionDao = (
                             const is100PercentCredit =
                                 rawCreditPaid > 0 &&
                                 rawAmount > 0 &&
-                                rawCreditPaid >= rawAmount;
+                                rawCreditPaid >= rawAmount - 0.01;
                             const isCardMethod =
                                 normalized === "card" ||
                                 normalized === "payhere" ||
@@ -425,7 +425,7 @@ exports.createProcessOrderWithTransactionDao = (
                                 finalMoneyPaid = 0;
                             } else if (isCardMethod) {
                                 finalMethod = "Card";
-                                if (Number(isPaid) === 1 && rawMoneyPaid > 0) {
+                                if (Number(isPaid) === 1) {
                                     finalIsPaid = 1;
                                     finalAmount = rawAmount;
                                     finalCreditPaid = rawCreditPaid;
