@@ -480,19 +480,19 @@ exports.syncCheckout = asyncHandler(async (req, res) => {
       cardHolder
     );
 
-    // Save the card in MySQL DB (user_saved_cards table)
+    // Confirm card in Payments.lk vault (zero MySQL DB dependency)
     let savedCard = null;
     const cardToken = card?.cardToken || card?.id || card?.token;
     console.log(`[Sync Checkout] Card from strategy: token=${cardToken}, card=${JSON.stringify(card ? { id: card.id, scheme: card.scheme, last4: card.last4 } : null)}`);
     if (card && cardToken) {
       try {
         savedCard = await savedCardService.saveCard(userId, card, checkout);
-        console.log(`[Sync Checkout] Card saved to MySQL: ${savedCard?.scheme} ending ${savedCard?.last4} for user ${userId}`);
+        console.log(`[Sync Checkout] Card active on file in Payments.lk: ${savedCard?.scheme} ending ${savedCard?.last4} for user ${userId}`);
       } catch (saveErr) {
-        console.error("❌ [Sync Checkout] Failed to save card to MySQL:", saveErr.message);
+        console.error("❌ [Sync Checkout] Failed to process card:", saveErr.message);
       }
     } else {
-      console.log(`[Sync Checkout] No card token found — skipping MySQL save.`);
+      console.log(`[Sync Checkout] No card token found in checkout response.`);
     }
 
     // If this was a Clear Balance payment and is completed, auto-update DB credit balance
