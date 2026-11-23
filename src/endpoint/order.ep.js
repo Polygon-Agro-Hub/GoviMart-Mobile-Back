@@ -304,7 +304,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     const {
         cartId, paymentMethod, grandTotal, discountAmount, deliveryCharge,
         creditPaid, moneyPaid, isFinalizeImdt, checkoutDetails,
-        checkoutSessionId,
+        checkoutSessionId, paymentId, transactionId,
     } = value;
 
     const {
@@ -533,13 +533,46 @@ exports.createOrder = asyncHandler(async (req, res) => {
     const isFullyPaidByCredit =
         effectiveCredit > 0 && effectiveCredit >= calculatedGrandTotal - 0.01;
 
+    // Determine effective payment/checkout identifier
+    const effectivePaymentId = paymentId || (typeof checkoutSessionId === "string" && checkoutSessionId.startsWith("pay_") ? checkoutSessionId : null);
+    const effectiveCheckoutId = (typeof checkoutSessionId === "string" && !checkoutSessionId.startsWith("pay_")) ? checkoutSessionId : null;
+    let resolvedTransactionId = transactionId || effectivePaymentId || null;
+
     if (isFullyPaidByCredit) {
         serverVerifiedIsPaid = 1;
-    } else if (isCardPayment && checkoutSessionId) {
+    } else if (isCardPayment && effectivePaymentId) {
+        // Direct saved card 1-click charge verification
+        try {
+            const strategy = paymentGatewayFactory.getGateway("payments_lk");
+            const { isCompleted, payment } = await strategy.verifyPayment(effectivePaymentId);
+            if (isCompleted) {
+                const paidAmountCents = payment?.amountCents || 0;
+                const paidAmountLkr = paidAmountCents / 100;
+                if (
+                    Math.abs(paidAmountLkr - expectedCardAmount) <= 1.0 ||
+                    Math.abs(paidAmountLkr - calculatedGrandTotal) <= 1.0
+                ) {
+                    serverVerifiedIsPaid = 1;
+                    resolvedTransactionId = payment.id || effectivePaymentId;
+                    console.log(`✅ [createOrder] Verified saved card payment ${effectivePaymentId} for user ${userId}: Rs. ${paidAmountLkr}`);
+                } else {
+                    console.warn(
+                        `⚠️ [createOrder] Payment amount mismatch for user ${userId}: ` +
+                        `gateway=${paidAmountLkr}, expectedCard=${expectedCardAmount}, order=${calculatedGrandTotal}. Setting isPaid=0.`
+                    );
+                }
+            } else {
+                console.warn(`⚠️ [createOrder] Gateway reports payment NOT completed for paymentId ${effectivePaymentId}.`);
+            }
+        } catch (verifyErr) {
+            console.warn("⚠️ [createOrder] Direct payment verification failed:", verifyErr.message);
+            serverVerifiedIsPaid = 0;
+        }
+    } else if (isCardPayment && effectiveCheckoutId) {
         try {
             const strategy = paymentGatewayFactory.getGateway("payments_lk");
             const { isCompleted, checkout } = await strategy.verifyAndSyncCheckout(
-                checkoutSessionId,
+                effectiveCheckoutId,
                 userId,
             );
             if (isCompleted) {
@@ -552,6 +585,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     Math.abs(paidAmountLkr - calculatedGrandTotal) <= 1.0
                 ) {
                     serverVerifiedIsPaid = 1;
+                    resolvedTransactionId = checkout?.payment?.id || effectiveCheckoutId;
                 } else {
                     console.warn(
                         `⚠️ [createOrder] Gateway amount mismatch for user ${userId}: ` +
@@ -561,7 +595,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
             } else {
                 console.warn(
                     `⚠️ [createOrder] Gateway reports payment NOT completed for user ${userId}, ` +
-                    `checkoutSessionId=${checkoutSessionId}. Order will be created as unpaid.`,
+                    `checkoutSessionId=${effectiveCheckoutId}. Order will be created as unpaid.`,
                 );
             }
         } catch (verifyErr) {
@@ -573,8 +607,8 @@ exports.createOrder = asyncHandler(async (req, res) => {
             );
             serverVerifiedIsPaid = 0;
         }
-    } else if (isCardPayment && !checkoutSessionId && Number(req.body.isPaid) === 1) {
-        // Saved card or direct card charge (already charged server-side)
+    } else if (isCardPayment && !checkoutSessionId && !paymentId && Number(req.body.isPaid) === 1) {
+        // Direct card charge (already charged server-side)
         serverVerifiedIsPaid = 1;
     } else if (!isCardPayment) {
         serverVerifiedIsPaid = 0; // cash is never paid up front; full credit is handled above
@@ -797,6 +831,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                         const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
                             orderId,
+                            transactionId: isFirstOrder ? resolvedTransactionId : null,
                             paymentMethod: paymentMethod || (isFirstOrder ? "Card" : "Cash"),
                             isPaid: isFirstOrder ? clientIsPaid : 0,
                             amount: rowAmount,
@@ -835,6 +870,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                     const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
                         orderId,
+                        transactionId: resolvedTransactionId,
                         paymentMethod,
                         isPaid: clientIsPaid,
                         amount: oneTimeAmount,

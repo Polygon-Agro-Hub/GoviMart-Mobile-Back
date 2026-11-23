@@ -21,6 +21,8 @@ exports.createOrderSchema = Joi.object({
     isFinalizeImdt: Joi.number().valid(0, 1).default(0),
     //session ID passed from frontend so server can verify payment directly with gateway
     checkoutSessionId: Joi.string().allow('', null).optional(),
+    paymentId: Joi.string().allow('', null).optional(),
+    transactionId: Joi.string().allow('', null).optional(),
     checkoutDetails: Joi.object({
         deliveryMethod: Joi.string().valid('home', 'pickup').required(),
         title: Joi.string().allow('', null).optional(),
