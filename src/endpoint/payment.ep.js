@@ -210,6 +210,12 @@ exports.handlePaymentsLkWebhook = asyncHandler(async (req, res) => {
       );
 
       let resolvedUserId = event.userId || null;
+      if (!resolvedUserId && event.orderId) {
+        const parts = String(event.orderId).split("_");
+        if (parts.length >= 2 && !isNaN(parts[1])) {
+          resolvedUserId = Number(parts[1]);
+        }
+      }
       if (!resolvedUserId && customerEmail) {
         try {
           const userRow = await customerDao.getCustomerByEmailDao(customerEmail);
