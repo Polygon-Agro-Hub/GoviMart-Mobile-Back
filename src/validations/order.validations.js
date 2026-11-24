@@ -10,13 +10,18 @@ exports.couponValidationSchema = Joi.object({
 // ─── Order Creation Validation ────────────────────────────────────────────────
 exports.createOrderSchema = Joi.object({
     cartId: Joi.number().integer().allow(0, null).optional(),
-    paymentMethod: Joi.string().valid('cash', 'card', 'Cash', 'Card', 'payhere', 'PayHere').required(),
+    paymentMethod: Joi.string().valid('cash', 'card', 'Cash', 'Card', 'payhere', 'PayHere', 'credit', 'Credit').required(),
     grandTotal: Joi.number().positive().required(),
     discountAmount: Joi.number().min(0).default(0),
     deliveryCharge: Joi.number().min(0).default(0),
     creditPaid: Joi.number().min(0).default(0),
     moneyPaid: Joi.number().min(0).default(0),
+    isPaid: Joi.number().valid(0, 1).optional(),
+    amount: Joi.number().min(0).optional(),
     isFinalizeImdt: Joi.number().valid(0, 1).default(0),
+    //session ID passed from frontend so server can verify payment directly with gateway
+    checkoutSessionId: Joi.string().allow('', null).optional(),
+    paymentId: Joi.string().allow('', null).optional(),
     checkoutDetails: Joi.object({
         deliveryMethod: Joi.string().valid('home', 'pickup').required(),
         title: Joi.string().allow('', null).optional(),

@@ -2,12 +2,14 @@ const Joi = require("joi");
 
 // Login Schema
 const loginSchema = Joi.object({
-  identifier: Joi.string().trim().required().messages({
+  identifier: Joi.string().trim().pattern(/^\S+$/).required().messages({
     "string.empty": "Mobile number or email is required",
+    "string.pattern.base": "Mobile number or email cannot contain spaces",
     "any.required": "Mobile number or email is required",
   }),
-  password: Joi.string().trim().required().messages({
+  password: Joi.string().pattern(/^\S+$/).required().messages({
     "string.empty": "Password is required",
+    "string.pattern.base": "Password cannot contain spaces",
     "any.required": "Password is required",
   }),
 });
@@ -15,21 +17,50 @@ const loginSchema = Joi.object({
 // Signup Schema
 const signupSchema = Joi.object({
   title: Joi.string().trim().required(),
-  firstName: Joi.string().trim().required(),
-  lastName: Joi.string().trim().required(),
-  phoneCode: Joi.string().trim().required(),
-  phoneNumber: Joi.string().trim().required(),
-  buyerType: Joi.string().valid("Retail", "Wholesale").required(),
-  email: Joi.string().email().trim().required(),
-  nic: Joi.string().trim().pattern(/^(?:\d{9}[vVxX]|\d{12})$/).required().messages({
-    "string.empty": "NIC Number is required",
-    "string.pattern.base": "Invalid NIC Number format",
-    "any.required": "NIC Number is required",
+  firstName: Joi.string().trim().pattern(/^\S+$/).required().messages({
+    "string.pattern.base": "First name cannot contain spaces",
   }),
-  password: Joi.string().required(),
+  lastName: Joi.string().trim().required().messages({
+    "string.empty": "Last name is required",
+    "any.required": "Last name is required",
+  }),
+  phoneCode: Joi.string().trim().required(),
+  phoneNumber: Joi.string().trim().pattern(/^\S+$/).required().messages({
+    "string.pattern.base": "Mobile number cannot contain spaces",
+  }),
+  buyerType: Joi.string().valid("Retail", "Wholesale").required(),
+  email: Joi.string()
+    .trim()
+    .pattern(/^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/)
+    .required()
+    .messages({
+      "string.empty": "Email is required",
+      "string.pattern.base": "Invalid email address format",
+      "any.required": "Email is required",
+    }),
+  docType: Joi.string().valid("NIC", "PASS").optional(),
+  nic: Joi.when("docType", {
+    is: "PASS",
+    then: Joi.string().trim().max(12).required().messages({
+      "string.empty": "Passport ID is required",
+      "string.max": "Passport ID cannot exceed 12 characters",
+      "any.required": "Passport ID is required",
+    }),
+    otherwise: Joi.string().trim().pattern(/^(?:\d{9}[vVxX]|\d{12})$/).required().messages({
+      "string.empty": "NIC number is required",
+      "string.pattern.base": "Invalid NIC number format",
+      "any.required": "NIC number is required",
+    }),
+  }),
+  brImg: Joi.string().allow("", null).optional(),
+  password: Joi.string().pattern(/^\S+$/).required().messages({
+    "string.pattern.base": "Password cannot contain spaces",
+  }),
   agreeToMarketing: Joi.boolean().optional(),
   agreeToTerms: Joi.boolean().required(),
-  confirmPassword: Joi.string().required().valid(Joi.ref("password")),
+  confirmPassword: Joi.string().pattern(/^\S+$/).required().valid(Joi.ref("password")).messages({
+    "string.pattern.base": "Confirm password cannot contain spaces",
+  }),
   city: Joi.string().allow("", null).optional(),
   cityId: Joi.number().allow(null).optional(),
   companyName: Joi.when("buyerType", {
@@ -47,6 +78,7 @@ const signupSchema = Joi.object({
     then: Joi.string().trim().required(),
     otherwise: Joi.string().allow("", null).optional(),
   }),
+  allowRestore: Joi.boolean().optional(),
 });
 
 module.exports = {

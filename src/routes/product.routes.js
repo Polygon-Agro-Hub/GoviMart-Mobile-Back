@@ -8,6 +8,7 @@ router.get("/all-product", productEp.getAllProduct);
 router.get("/by-category", productEp.getProductsByCategory);
 
 router.get("/package-details/:packageId", productEp.getPackageDetails);
+router.get("/by-product-type/:productTypeId", productEp.getProductsByProductType);
 
 //Get all banners
 router.get("/slides", productEp.getAllSlides);
@@ -15,4 +16,12 @@ router.get("/slides", productEp.getAllSlides);
 // Check availability of cart items (products + packages) by their IDs
 router.post("/check-availability", productEp.checkAvailability);
 
-module.exports = router;
+// Webhook endpoint to broadcast package updates to all connected mobile clients
+router.post("/notify-update", productEp.notifyPackageUpdate);
+
+router.get(
+    "/package-item-products/:productTypeId",
+    productEp.getPackageItemProducts,
+);
+
+module.exports = router;

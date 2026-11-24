@@ -3,10 +3,32 @@ const router = express.Router();
 const authMiddleware = require("../middlewares/auth.middleware");
 const paymentEp = require("../endpoint/payment.ep");
 
-// Initiate PayHere Payment (Authenticated)
-router.post("/payhere/initiate", authMiddleware, paymentEp.initiatePayHere);
+// 1. Unified Payment Initiation (Strategy & Factory Pattern)
+router.post("/initiate", authMiddleware, paymentEp.initiatePayment);
 
-// PayHere Notify Webhook (Public Callback, Signature Verified)
-router.post("/payhere/notify", express.urlencoded({ extended: true }), paymentEp.handlePayHereNotify);
+// 2. Active Gateway Info
+router.get("/active-gateway", authMiddleware, paymentEp.getActiveGateway);
+
+// 3. Payments.lk Dedicated Routes
+router.post("/payments-lk/initiate", authMiddleware, (req, res, next) => {
+  req.body.gatewayName = "payments_lk";
+  paymentEp.initiatePayment(req, res, next);
+});
+router.post("/payments-lk/webhook", paymentEp.handlePaymentsLkWebhook);
+
+// 4. PayHere Legacy Dedicated Routes
+router.post("/payhere/initiate", authMiddleware, paymentEp.initiatePayHere);
+router.post(
+  "/payhere/notify",
+  express.urlencoded({ extended: true }),
+  paymentEp.handlePayHereNotify
+);
+
+// 5. Saved Cards & 1-Click Payments (Local File Storage - Real Data)
+router.get("/cards", authMiddleware, paymentEp.getSavedCards);
+router.post("/cards", authMiddleware, paymentEp.saveCardLocally);
+router.post("/sync-checkout", authMiddleware, paymentEp.syncCheckout);
+router.delete("/cards/:cardId", authMiddleware, paymentEp.deleteSavedCard);
+router.post("/charge-saved-card", authMiddleware, paymentEp.chargeSavedCard);
 
 module.exports = router;

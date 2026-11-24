@@ -5,6 +5,14 @@ const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
 const asyncHandler = require("express-async-handler");
 const uploadFileToS3 = require("../middlewares/s3upload");
+const crypto = require("crypto");
+const {
+  addAddressSchema,
+  updateAddressSchema,
+} = require("../validations/customer.validations");
+
+// Brute force lockout for phone change OTP (Risk 4.B)
+const phoneOtpAttempts = new Map();
 
 exports.getCustomerProfile = asyncHandler(async (req, res) => {
   try {
@@ -15,7 +23,7 @@ exports.getCustomerProfile = asyncHandler(async (req, res) => {
     }
     return res.status(200).json({ status: true, data: results[0] });
   } catch (error) {
-    console.error("Profile fetch error:", error);
+    console.error("❌ Profile fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -29,7 +37,7 @@ exports.getSuggestions = asyncHandler(async (req, res) => {
       items: results,
     });
   } catch (error) {
-    console.error("Suggestions fetch error:", error);
+    console.error("❌ Suggestions fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -43,7 +51,7 @@ exports.getIncludeItems = asyncHandler(async (req, res) => {
       items: results,
     });
   } catch (error) {
-    console.error("Include items fetch error:", error);
+    console.error("❌ Include items fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -62,7 +70,7 @@ exports.addIncludeItems = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Included items saved successfully" });
   } catch (error) {
-    console.error("Include items save error:", error);
+    console.error("❌ Include items save error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -81,7 +89,7 @@ exports.deleteIncluded = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Included items deleted successfully" });
   } catch (error) {
-    console.error("Include items delete error:", error);
+    console.error("❌ Include items delete error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -95,7 +103,7 @@ exports.getExcludeItems = asyncHandler(async (req, res) => {
       items: results,
     });
   } catch (error) {
-    console.error("Exclude items fetch error:", error);
+    console.error("❌ Exclude items fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -114,7 +122,7 @@ exports.addExcludeItems = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Excluded items saved successfully" });
   } catch (error) {
-    console.error("Exclude items save error:", error);
+    console.error("❌ Exclude items save error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -133,7 +141,7 @@ exports.deleteExcluded = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Excluded items deleted successfully" });
   } catch (error) {
-    console.error("Exclude items delete error:", error);
+    console.error("❌ Exclude items delete error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -148,7 +156,7 @@ exports.updateUserStatus = asyncHandler(async (req, res) => {
       result,
     });
   } catch (error) {
-    console.error("Update status error:", error);
+    console.error("❌ Update status error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -182,7 +190,7 @@ exports.getSavedAddresses = asyncHandler(async (req, res) => {
       result: addresses,
     });
   } catch (error) {
-    console.error("Error fetching saved addresses:", error);
+    console.error("❌ Error fetching saved addresses:", error);
     return res.status(500).json({
       status: false,
       message: "Internal server error",
@@ -201,7 +209,7 @@ exports.getAccountDetails = asyncHandler(async (req, res) => {
     }
     return res.status(200).json({ status: true, data: results[0] });
   } catch (error) {
-    console.error("Account details fetch error:", error);
+    console.error("❌ Account details fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -210,20 +218,30 @@ exports.getAccountDetails = asyncHandler(async (req, res) => {
 exports.addAddress = asyncHandler(async (req, res) => {
   try {
     const customerId = req.user.id;
-    const { buildingType } = req.body;
 
-    if (!buildingType || !["Apartment", "House"].includes(buildingType)) {
-      return res
-        .status(400)
-        .json({ status: false, message: "Valid buildingType is required" });
+    const { error, value } = addAddressSchema.validate(req.body, {
+      abortEarly: true,
+      stripUnknown: true,
+    });
+    if (error) {
+      return res.status(400).json({
+        status: false,
+        message: error.details[0].message,
+      });
     }
 
-    const result = await customerDao.addAddressDao(customerId, req.body);
+    const result = await customerDao.addAddressDao(customerId, value);
     return res
       .status(201)
       .json({ status: true, message: "Address added successfully", result });
   } catch (error) {
-    console.error("Add address error:", error);
+    if (error.code === "DUPLICATE_SAVE_AS") {
+      return res.status(409).json({
+        status: false,
+        message: "An address with this name already exists. Please use a different name.",
+      });
+    }
+    console.error("❌ Add address error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -233,18 +251,22 @@ exports.updateAddress = asyncHandler(async (req, res) => {
   try {
     const customerId = req.user.id;
     const { addressId } = req.params;
-    const { buildingType } = req.body;
 
-    if (!buildingType || !["Apartment", "House"].includes(buildingType)) {
-      return res
-        .status(400)
-        .json({ status: false, message: "Valid buildingType is required" });
+    const { error, value } = updateAddressSchema.validate(req.body, {
+      abortEarly: true,
+      stripUnknown: true,
+    });
+    if (error) {
+      return res.status(400).json({
+        status: false,
+        message: error.details[0].message,
+      });
     }
 
     const result = await customerDao.updateAddressDao(
       addressId,
       customerId,
-      req.body,
+      value,
     );
 
     if (result.affectedRows === 0) {
@@ -257,7 +279,13 @@ exports.updateAddress = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Address updated successfully" });
   } catch (error) {
-    console.error("Update address error:", error);
+    if (error.code === "DUPLICATE_SAVE_AS") {
+      return res.status(409).json({
+        status: false,
+        message: "An address with this name already exists. Please use a different name.",
+      });
+    }
+    console.error("❌ Update address error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -291,7 +319,7 @@ exports.deleteAddress = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Address deleted successfully" });
   } catch (error) {
-    console.error("Delete address error:", error);
+    console.error("❌ Delete address error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -304,13 +332,56 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
     if (req.body.nic) {
       const isNicTaken = await customerDao.isNicTakenDao(userId, req.body.nic);
       if (isNicTaken) {
-        return res.status(400).json({ status: false, message: "NIC Number already exists" });
+        return res.status(400).json({ status: false, message: "NIC or Passport number already exists" });
+      }
+    }
+
+    if (req.body.email) {
+      const cleanEmail = String(req.body.email).trim();
+      const emailRegex =
+        /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
+      if (
+        cleanEmail.includes(" ") ||
+        cleanEmail.includes("..") ||
+        cleanEmail.startsWith(".") ||
+        cleanEmail.endsWith(".") ||
+        !emailRegex.test(cleanEmail)
+      ) {
+        return res.status(400).json({ status: false, message: "Invalid email address" });
+      }
+
+      const isEmailTaken = await customerDao.isEmailTakenDao(userId, cleanEmail);
+      if (isEmailTaken) {
+        return res.status(400).json({ status: false, message: "Email already exists" });
+      }
+    }
+
+    if (req.body.image !== undefined) {
+      const existingUser = await customerDao.getCustomerProfileDao(userId);
+      const oldImage = existingUser?.[0]?.image;
+      const newImage =
+        req.body.image && typeof req.body.image === "string" ? req.body.image.trim() : null;
+      if (oldImage && oldImage !== newImage) {
+        try {
+          const deleteFromR2 = require("../middlewares/s3delete");
+          await deleteFromR2(oldImage);
+        } catch (delErr) {
+          console.warn(" ⚠️ Failed to delete old profile image from R2:", delErr.message);
+        }
       }
     }
 
     const result = await customerDao.updateUserDetailsDao(userId, req.body);
 
     if (result.affectedRows === 0) {
+      // In MySQL, affectedRows is 0 when matching rows already have identical values
+      const existingUser = await customerDao.getCustomerProfileDao(userId);
+      if (existingUser && existingUser.length > 0) {
+        return res.status(200).json({
+          status: true,
+          message: "No changes were made to your account details.",
+        });
+      }
       return res.status(404).json({ status: false, message: "User not found" });
     }
 
@@ -318,7 +389,19 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "User details updated successfully" });
   } catch (error) {
-    console.error("Update user details error:", error);
+    console.error("❌ Update user details error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+});
+
+// ---------- Get Delete Account Status ----------
+exports.getDeleteAccountStatus = asyncHandler(async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const statusData = await customerDao.getDeleteAccountStatusDao(userId);
+    return res.status(200).json({ status: true, data: statusData });
+  } catch (error) {
+    console.error("❌ Get delete account status error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -327,6 +410,22 @@ exports.updateUserDetails = asyncHandler(async (req, res) => {
 exports.deleteUserAccount = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
+    const statusData = await customerDao.getDeleteAccountStatusDao(userId);
+
+    if (statusData.hasNegativeCredit) {
+      return res.status(400).json({
+        status: false,
+        message: "You have a negative Polygon Wallet on your account. Please clear the outstanding balance before deleting your account.",
+      });
+    }
+
+    if (statusData.hasProcessingOrders) {
+      return res.status(400).json({
+        status: false,
+        message: "You have processing orders. Once all of them are completed, you may delete your account.",
+      });
+    }
+
     const result = await customerDao.deleteUserAccountDao(userId);
 
     if (result.affectedRows === 0) {
@@ -337,7 +436,7 @@ exports.deleteUserAccount = asyncHandler(async (req, res) => {
       .status(200)
       .json({ status: true, message: "Account deleted successfully" });
   } catch (error) {
-    console.error("Delete account error:", error);
+    console.error("❌ Delete account error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -355,7 +454,7 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
     }
 
     const normalizedPhone = String(phoneNumber).replace(/[^0-9]/g, "");
-    if (normalizedPhone.length < 9 || normalizedPhone.length > 10) {
+    if (normalizedPhone.length < 8 || normalizedPhone.length > 10) {
       return res
         .status(400)
         .json({ status: false, message: "Invalid phone number." });
@@ -366,33 +465,116 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
     if (taken) {
       return res.status(400).json({
         status: false,
-        message: "This phone number is already in use by another account.",
+        message: "This phone number is already registered to another account.",
       });
     }
 
-    // Generate 5-digit OTP
-    const otp = Math.floor(10000 + Math.random() * 90000).toString();
+    const emailRegex =
+      /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
+
+    // Resolve target email from body, req.user, or database
+    let targetEmail = (req.body.email && String(req.body.email).trim().toLowerCase()) || null;
+    if (!targetEmail && req.user?.email) {
+      targetEmail = String(req.user.email).trim().toLowerCase();
+    }
+    if (!targetEmail) {
+      const profile = await customerDao.getCustomerProfileDao(userId);
+      if (profile && profile.length > 0 && profile[0].email) {
+        targetEmail = String(profile[0].email).trim().toLowerCase();
+      }
+    }
+
+    if (req.body.email) {
+      const cleanEmail = String(req.body.email).trim();
+      if (
+        cleanEmail.includes(" ") ||
+        cleanEmail.includes("..") ||
+        cleanEmail.startsWith(".") ||
+        cleanEmail.endsWith(".") ||
+        !emailRegex.test(cleanEmail)
+      ) {
+        return res.status(400).json({ status: false, message: "Invalid email address" });
+      }
+
+      const isEmailTaken = await customerDao.isEmailTakenDao(userId, cleanEmail);
+      if (isEmailTaken) {
+        return res.status(400).json({ status: false, message: "Email already exists" });
+      }
+    }
+
+    // Determine method: SMS for Sri Lanka (+94), email for all other countries
+    const method = phoneCode === "+94" ? "sms" : "email";
+
+    if (method === "email") {
+      if (!targetEmail || !emailRegex.test(targetEmail)) {
+        return res.status(400).json({
+          status: false,
+          message: "A valid email address is required to receive verification code for overseas numbers.",
+        });
+      }
+    }
+
+    const lockoutKeys = userAuthEp.getSignupLockoutKeys(
+      targetEmail || req.user?.email,
+      phoneCode,
+      normalizedPhone
+    );
+    const lockoutStatus = userAuthEp.checkSignupLockout(lockoutKeys);
+    if (lockoutStatus.locked) {
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: lockoutStatus.remainingSec,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+
+    // Generate 5-digit OTP (Risk 4.B)
+    const otp = crypto.randomInt(10000, 100000).toString();
     const referenceId = uuidv4();
+    phoneOtpAttempts.delete(referenceId);
     const expiresAt = new Date(Date.now() + 4 * 60 * 1000); // 4 minutes
 
-    await authDao.saveOtpDao(referenceId, req.user.email || null, otp, expiresAt);
+    await authDao.saveOtpDao(referenceId, targetEmail || req.user?.email || null, otp, expiresAt);
 
-    // Stateless session token carrying the intended new phone
+    // Stateless session token carrying the intended new phone and email
     const phoneChangeToken = jwt.sign(
-      { userId, phoneCode, phoneNumber: normalizedPhone },
+      { userId, phoneCode, phoneNumber: normalizedPhone, email: targetEmail },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "1h" }
     );
 
-    const method = "sms";
-    try {
-      const fullPhone = `${phoneCode}${normalizedPhone}`
-        .replace(/\+/g, "")
-        .replace(/\s+/g, "");
-      await userAuthEp.sendShoutoutSms(fullPhone, otp);
-      console.log(`[SMS] Phone change OTP sent to ${fullPhone}`);
-    } catch (smsErr) {
-      console.error("Failed to send Shoutout SMS for phone change:", smsErr.message);
+    if (method === "sms") {
+      try {
+        const cleanDigits = String(normalizedPhone).replace(/^0+/, "");
+        const fullPhone = `+${phoneCode.replace(/\+/g, "")}${cleanDigits}`;
+        console.log(`[Phone Change OTP] Generated OTP for user ${userId} (${fullPhone}): ${otp}`);
+        await userAuthEp.sendShoutoutSms(fullPhone, otp);
+        console.log(`[SMS] Phone change OTP sent to ${fullPhone}`);
+      } catch (smsErr) {
+        console.error("❌ Failed to send Shoutout SMS for phone change:", smsErr.message);
+        return res.status(500).json({
+          status: false,
+          message: "Failed to send SMS verification code. Please try again later.",
+        });
+      }
+    } else {
+      try {
+        await userAuthEp.sendEmailOtp(targetEmail, otp, {
+          title: "Verify Your Mobile Number",
+          subject: "Polygon Mobile Number Update Verification",
+          introText: "You recently requested to update your mobile number for your Polygon account.",
+          actionText: "To verify and complete this mobile number update, please use the following One-Time Password (OTP):",
+          instructionText: "Enter this OTP in the Polygon app to verify and update your mobile number.",
+        });
+        console.log(`[Email] Phone change OTP sent to ${targetEmail}`);
+      } catch (emailErr) {
+        console.error("❌ Failed to send email OTP for phone change:", emailErr.message);
+        return res.status(500).json({
+          status: false,
+          message: "Failed to send verification email. Please try again later.",
+        });
+      }
     }
 
     return res.status(200).json({
@@ -400,10 +582,12 @@ exports.sendPhoneChangeOtp = asyncHandler(async (req, res) => {
       method,
       referenceId,
       signupToken: phoneChangeToken,
-      message: "Verification code has been sent to your new mobile number.",
+      message: method === "sms"
+        ? "Verification code has been sent to your new mobile number."
+        : "Verification code has been sent to your email address.",
     });
   } catch (error) {
-    console.error("Send phone change OTP error:", error);
+    console.error("❌ Send phone change OTP error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -420,18 +604,6 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
       });
     }
 
-    const otpRecord = await authDao.getOtpDao(referenceId);
-    if (!otpRecord) {
-      return res.status(400).json({ status: false, message: "Invalid verification code." });
-    }
-    if (new Date() > new Date(otpRecord.expiresAt)) {
-      await authDao.deleteOtpDao(referenceId);
-      return res.status(400).json({ status: false, message: "Verification code has expired." });
-    }
-    if (otpRecord.otp !== code) {
-      return res.status(400).json({ status: false, message: "Incorrect verification code." });
-    }
-
     let decoded;
     try {
       decoded = jwt.verify(signupToken, process.env.JWT_SECRET);
@@ -442,7 +614,40 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
       });
     }
 
-    const { userId, phoneCode, phoneNumber } = decoded;
+    const { userId, phoneCode, phoneNumber, email: tokenEmail } = decoded;
+    const lockoutKeys = userAuthEp.getSignupLockoutKeys(
+      tokenEmail || req.user?.email,
+      phoneCode,
+      phoneNumber
+    );
+
+    const lockoutStatus = userAuthEp.checkSignupLockout(lockoutKeys);
+    if (lockoutStatus.locked) {
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: lockoutStatus.remainingSec,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+
+    const otpRecord = await authDao.getOtpDao(referenceId);
+    if (!otpRecord) {
+      return res.status(400).json({ status: false, message: "Invalid verification code." });
+    }
+    if (new Date() > new Date(otpRecord.expiresAt)) {
+      await authDao.deleteOtpDao(referenceId);
+      return res.status(400).json({ status: false, message: "Verification code has expired." });
+    }
+    if (otpRecord.otp !== code) {
+      return res.status(400).json({
+        status: false,
+        message: "Incorrect verification code. Please try again.",
+      });
+    }
+
+    phoneOtpAttempts.delete(referenceId);
+    userAuthEp.clearSignupLockout(lockoutKeys);
 
     const updateResult = await customerDao.updateUserPhoneDao(
       userId,
@@ -455,6 +660,25 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
 
     // Apply the rest of the edited account details (name, email, company, etc.)
     if (accountDetails && typeof accountDetails === "object") {
+      accountDetails.title = accountDetails.title || "Mr";
+      if (accountDetails.email) {
+        const cleanEmail = String(accountDetails.email).trim();
+        const emailRegex =
+          /^[a-zA-Z0-9]+([._%+-][a-zA-Z0-9]+)*@([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.)*[a-zA-Z0-9][a-zA-Z0-9-]{1,}[a-zA-Z0-9]\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
+        if (
+          cleanEmail.includes(" ") ||
+          cleanEmail.includes("..") ||
+          cleanEmail.startsWith(".") ||
+          cleanEmail.endsWith(".") ||
+          !emailRegex.test(cleanEmail)
+        ) {
+          return res.status(400).json({ status: false, message: "Invalid email address" });
+        }
+        const isEmailTaken = await customerDao.isEmailTakenDao(userId, cleanEmail);
+        if (isEmailTaken) {
+          return res.status(400).json({ status: false, message: "Email already exists" });
+        }
+      }
       await customerDao.updateUserDetailsDao(userId, accountDetails);
     }
 
@@ -465,7 +689,7 @@ exports.verifyPhoneChange = asyncHandler(async (req, res) => {
       message: "Your mobile number has been updated successfully.",
     });
   } catch (error) {
-    console.error("Verify phone change error:", error);
+    console.error("❌ Verify phone change error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -489,38 +713,98 @@ exports.resendPhoneChangeOtp = asyncHandler(async (req, res) => {
       });
     }
 
-    const { userId, phoneCode, phoneNumber } = decoded;
+    const { userId, phoneCode, phoneNumber, email: tokenEmail } = decoded;
 
-    const otp = Math.floor(10000 + Math.random() * 90000).toString();
-    const referenceId = uuidv4();
-    const expiresAt = new Date(Date.now() + 4 * 60 * 1000);
+    let targetEmail = tokenEmail || (req.user?.email ? String(req.user.email).trim().toLowerCase() : null);
+    if (!targetEmail) {
+      const profile = await customerDao.getCustomerProfileDao(userId);
+      if (profile && profile.length > 0 && profile[0].email) {
+        targetEmail = String(profile[0].email).trim().toLowerCase();
+      }
+    }
 
-    await authDao.saveOtpDao(referenceId, req.user?.email || null, otp, expiresAt);
-
-    const newSignupToken = jwt.sign(
-      { userId, phoneCode, phoneNumber },
-      process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+    const lockoutKeys = userAuthEp.getSignupLockoutKeys(
+      targetEmail || req.user?.email,
+      phoneCode,
+      phoneNumber
     );
 
-    try {
-      const fullPhone = `${phoneCode}${phoneNumber}`
-        .replace(/\+/g, "")
-        .replace(/\s+/g, "");
-      await userAuthEp.sendShoutoutSms(fullPhone, otp);
-      console.log(`[SMS] Phone change OTP resent to ${fullPhone}`);
-    } catch (smsErr) {
-      console.error("Failed to send Shoutout SMS on phone change resend:", smsErr.message);
+    const lockoutStatus = userAuthEp.checkSignupLockout(lockoutKeys);
+    if (lockoutStatus.locked) {
+      return res.status(429).json({
+        status: false,
+        isRateLimited: true,
+        retryAfter: lockoutStatus.remainingSec,
+        message: "Too many verification attempts. Please try again after 15 minutes.",
+      });
+    }
+
+    const method = phoneCode === "+94" ? "sms" : "email";
+
+    if (method === "email" && !targetEmail) {
+      return res.status(400).json({
+        status: false,
+        message: "A valid email address is required to receive verification code for overseas numbers.",
+      });
+    }
+
+    const otp = crypto.randomInt(10000, 100000).toString();
+    const referenceId = uuidv4();
+    phoneOtpAttempts.delete(referenceId);
+    const expiresAt = new Date(Date.now() + 4 * 60 * 1000);
+
+    await authDao.saveOtpDao(referenceId, targetEmail || req.user?.email || null, otp, expiresAt);
+
+    const newSignupToken = jwt.sign(
+      { userId, phoneCode, phoneNumber, email: targetEmail },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    if (method === "sms") {
+      try {
+        const cleanDigits = String(phoneNumber).replace(/[^0-9]/g, "").replace(/^0+/, "");
+        const fullPhone = `+${phoneCode.replace(/\+/g, "")}${cleanDigits}`;
+        console.log(`[Phone Change OTP Resend] Generated OTP for user ${userId} (${fullPhone}): ${otp}`);
+        await userAuthEp.sendShoutoutSms(fullPhone, otp);
+        console.log(`[SMS] Phone change OTP resent to ${fullPhone}`);
+      } catch (smsErr) {
+        console.error("❌ Failed to send Shoutout SMS on phone change resend:", smsErr.message);
+        return res.status(500).json({
+          status: false,
+          message: "Failed to resend SMS verification code. Please try again later.",
+        });
+      }
+    } else {
+      try {
+        await userAuthEp.sendEmailOtp(targetEmail, otp, {
+          title: "Verify Your Mobile Number",
+          subject: "Polygon Mobile Number Update Verification",
+          introText: "You recently requested to update your mobile number for your Polygon account.",
+          actionText: "To verify and complete this mobile number update, please use the following One-Time Password (OTP):",
+          instructionText: "Enter this OTP in the Polygon app to verify and update your mobile number.",
+        });
+        console.log(`[Email] Phone change OTP resent to ${targetEmail}`);
+      } catch (emailErr) {
+        console.error("❌ Failed to send email OTP on phone change resend:", emailErr.message);
+        return res.status(500).json({
+          status: false,
+          message: "Failed to resend verification email. Please try again later.",
+        });
+      }
     }
 
     return res.status(200).json({
       status: true,
+      method,
       referenceId,
       signupToken: newSignupToken,
-      message: "Verification code has been resent to your new mobile number.",
+      message: method === "sms"
+        ? "Verification code has been resent to your new mobile number."
+        : "Verification code has been resent to your email address.",
     });
   } catch (error) {
-    console.error("Resend phone change OTP error:", error);
+    console.error("❌ Resend phone change OTP error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -554,7 +838,7 @@ exports.updateCreditBalance = asyncHandler(async (req, res) => {
       data: result,
     });
   } catch (error) {
-    console.error("Update credit balance error:", error);
+    console.error("❌ Update credit balance error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });
@@ -577,6 +861,17 @@ exports.uploadProfileImage = asyncHandler(async (req, res) => {
       "profile-images"
     );
 
+    try {
+      const existingUser = await customerDao.getCustomerProfileDao(userId);
+      const oldImage = existingUser?.[0]?.image;
+      if (oldImage && oldImage !== imageUrl) {
+        const deleteFromR2 = require("../middlewares/s3delete");
+        await deleteFromR2(oldImage);
+      }
+    } catch (delErr) {
+      console.warn(" ⚠️ Failed to delete previous profile image from R2:", delErr.message);
+    }
+
     await customerDao.updateProfileImageDao(userId, imageUrl);
 
     return res.status(200).json({
@@ -587,7 +882,22 @@ exports.uploadProfileImage = asyncHandler(async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Profile image upload error:", error);
+    console.error("❌ Profile image upload error:", error);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+});
+
+exports.getDeliveryEligibility = asyncHandler(async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const result = await customerDao.getDeliveryEligibilityDao(userId);
+    return res.status(200).json({
+      status: true,
+      hasDeliveredOrder: result.hasDeliveredOrder,
+      nearestCity: result.nearestCity,
+    });
+  } catch (error) {
+    console.error("❌ Delivery eligibility fetch error:", error);
     return res.status(500).json({ status: false, message: error.message });
   }
 });

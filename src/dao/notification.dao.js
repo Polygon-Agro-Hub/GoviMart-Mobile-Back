@@ -1,11 +1,48 @@
 const db = require("../startup/database");
-const { emitNotificationToUser } = require("../socket/socket");
+const { emitNotificationToUser, emitUnreadCountToUser } = require("../socket/socket");
+
+/**
+ * Builds the "effective" return reason and fixes the message text.
+ */
+const formatNotificationMessage = (rawMessage, returnReason, returnNote) => {
+  let msg = rawMessage || "";
+  const effectiveReason =
+    returnReason && returnReason.toLowerCase() === "other" && returnNote
+      ? returnNote
+      : returnNote ||
+      (returnReason && returnReason.toLowerCase() !== "other" ? returnReason : "");
+
+  if (effectiveReason) {
+    msg = msg.replace(
+      /Reason\s*:\s*[“"'\`\u201C\u201D\u2018\u2019]?Other[”"'\`\u201C\u201D\u2018\u2019]?/gi,
+      `Reason : “${effectiveReason}”`
+    );
+  }
+
+  // Move Reason section to a second line (newline)
+  msg = msg.replace(/([^\n\r])\s*(?:[.]\s*)?(Reason\s*[:：])/gi, (match, prefix, reasonTag) => {
+    const trimmedPrefix = prefix.trimEnd();
+    const hasPunctuation = /[.!?]$/.test(trimmedPrefix);
+    return trimmedPrefix + (hasPunctuation ? "" : ".") + "\n" + reasonTag;
+  });
+
+  return { message: msg, effectiveReason };
+};
+
+const buildRoleFilter = (buyerType) => {
+  const isWholesale = buyerType && String(buyerType).toLowerCase() === "wholesale";
+  return isWholesale
+    ? "AND LOWER(n.Title) NOT LIKE '%package finalization review%' AND LOWER(n.Title) NOT LIKE '%package review%'"
+    : "";
+};
 
 /**
  * Fetch all notifications for a given user.
  */
-exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
+exports.getUserNotificationsDao = (userId, limit = 50, offset = 0, buyerType = "Retail") => {
   return new Promise((resolve, reject) => {
+    const roleFilter = buildRoleFilter(buyerType);
+
     const sql = `
       SELECT 
         n.id,
@@ -19,21 +56,46 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
         po.amount,
         po.sheduleDate,
         po.status AS orderStatus,
-        o.delivaryMethod
+        po.isFinalized,
+        po.isConfirmed,
+        o.delivaryMethod,
+        rr.rsnEnglish AS returnReason,
+        dro.note AS returnNote
       FROM ordernotfication n
       JOIN processorders po ON n.orderId = po.id
       JOIN orders o ON po.orderId = o.id
+      LEFT JOIN driverorders do_item ON do_item.orderId = po.id
+      LEFT JOIN driverreturnorders dro ON dro.drvOrderId = do_item.id
+      LEFT JOIN returnreason rr ON rr.id = dro.returnReasonId
       WHERE o.userId = ?
+        ${roleFilter}
       ORDER BY n.createdAt DESC, n.id DESC
       LIMIT ? OFFSET ?
     `;
 
     db.collectionofficer.query(sql, [userId, Number(limit), Number(offset)], (err, results) => {
       if (err) {
-        console.error("Error fetching user notifications:", err);
+        console.error("❌ Error fetching user notifications:", err);
         return reject(err);
       }
-      resolve(results || []);
+
+      const formatted = (results || []).map((row) => {
+        const { message, effectiveReason } = formatNotificationMessage(
+          row.message,
+          row.returnReason,
+          row.returnNote
+        );
+        return {
+          ...row,
+          // always send real numbers so the app can trust these flags
+          isFinalized: Number(row.isFinalized) === 1 ? 1 : 0,
+          isConfirmed: Number(row.isConfirmed) === 1 ? 1 : 0,
+          returnReason: effectiveReason || row.returnReason,
+          message,
+        };
+      });
+
+      resolve(formatted);
     });
   });
 };
@@ -41,19 +103,22 @@ exports.getUserNotificationsDao = (userId, limit = 50, offset = 0) => {
 /**
  * Count unread notifications for a user.
  */
-exports.getUnreadCountDao = (userId) => {
+exports.getUnreadCountDao = (userId, buyerType = "Retail") => {
   return new Promise((resolve, reject) => {
+    const roleFilter = buildRoleFilter(buyerType);
+
     const sql = `
       SELECT COUNT(*) AS unreadCount
       FROM ordernotfication n
       JOIN processorders po ON n.orderId = po.id
       JOIN orders o ON po.orderId = o.id
       WHERE o.userId = ? AND n.isRead = 0
+        ${roleFilter}
     `;
 
     db.collectionofficer.query(sql, [userId], (err, results) => {
       if (err) {
-        console.error("Error fetching unread count:", err);
+        console.error("❌ Error fetching unread count:", err);
         return reject(err);
       }
       resolve(results[0]?.unreadCount || 0);
@@ -74,11 +139,17 @@ exports.markAsReadDao = (notificationId, userId) => {
       WHERE n.id = ? AND o.userId = ?
     `;
 
-    db.collectionofficer.query(sql, [notificationId, userId], (err, result) => {
+    db.collectionofficer.query(sql, [notificationId, userId], async (err, result) => {
       if (err) {
-        console.error("Error marking notification as read:", err);
+        console.error("❌ Error marking notification as read:", err);
         return reject(err);
       }
+
+      try {
+        const unreadCount = await exports.getUnreadCountDao(userId);
+        emitUnreadCountToUser(userId, unreadCount);
+      } catch (_) { }
+
       resolve(result.affectedRows > 0);
     });
   });
@@ -99,9 +170,11 @@ exports.markAllAsReadDao = (userId) => {
 
     db.collectionofficer.query(sql, [userId], (err, result) => {
       if (err) {
-        console.error("Error marking all notifications as read:", err);
+        console.error("❌ Error marking all notifications as read:", err);
         return reject(err);
       }
+
+      emitUnreadCountToUser(userId, 0);
       resolve(result.affectedRows);
     });
   });
@@ -110,7 +183,18 @@ exports.markAllAsReadDao = (userId) => {
 /**
  * Create a new notification in DB and emit via Socket.IO.
  */
-exports.createNotificationDao = ({ orderId, title, message }) => {
+exports.createNotificationDao = (arg1, arg2, arg3) => {
+  let orderId, title, message;
+  if (typeof arg1 === "object" && arg1 !== null) {
+    orderId = arg1.orderId;
+    title = arg1.title;
+    message = arg1.message;
+  } else {
+    orderId = arg1;
+    title = arg2;
+    message = arg3;
+  }
+
   return new Promise((resolve, reject) => {
     const insertSql = `
       INSERT INTO ordernotfication (orderId, Title, message, isRead)
@@ -119,7 +203,7 @@ exports.createNotificationDao = ({ orderId, title, message }) => {
 
     db.collectionofficer.query(insertSql, [orderId, title, message], (err, result) => {
       if (err) {
-        console.error("Error creating notification:", err);
+        console.error("❌ Error creating notification:", err);
         return reject(err);
       }
 
@@ -139,23 +223,72 @@ exports.createNotificationDao = ({ orderId, title, message }) => {
           po.amount,
           po.sheduleDate,
           po.status AS orderStatus,
+          po.isFinalized,
+          po.isConfirmed,
           o.userId,
-          o.delivaryMethod
+          o.delivaryMethod,
+          rr.rsnEnglish AS returnReason,
+          dro.note AS returnNote
         FROM ordernotfication n
         JOIN processorders po ON n.orderId = po.id
         JOIN orders o ON po.orderId = o.id
+        LEFT JOIN driverorders do_item ON do_item.orderId = po.id
+        LEFT JOIN driverreturnorders dro ON dro.drvOrderId = do_item.id
+        LEFT JOIN returnreason rr ON rr.id = dro.returnReasonId
         WHERE n.id = ?
       `;
 
-      db.collectionofficer.query(fetchSql, [newId], (err2, rows) => {
+      db.collectionofficer.query(fetchSql, [newId], async (err2, rows) => {
         if (err2 || !rows.length) {
           return resolve({ id: newId, orderId, title, message, isRead: 0 });
         }
 
         const notifData = rows[0];
+        const { message: fixedMessage, effectiveReason } = formatNotificationMessage(
+          notifData.message,
+          notifData.returnReason,
+          notifData.returnNote
+        );
+        notifData.message = fixedMessage;
+        if (effectiveReason) notifData.returnReason = effectiveReason;
+        notifData.isFinalized = Number(notifData.isFinalized) === 1 ? 1 : 0;
+        notifData.isConfirmed = Number(notifData.isConfirmed) === 1 ? 1 : 0;
+
         // Emit in real-time via Socket.IO
         if (notifData.userId) {
-          emitNotificationToUser(notifData.userId, notifData);
+          try {
+            const unreadCount = await exports.getUnreadCountDao(notifData.userId);
+            notifData.unreadCount = unreadCount;
+
+            // Sync with in-memory node-cache
+            try {
+              const notificationCache = require("../services/notification-cache");
+              notificationCache.setUnreadCount(notifData.userId, unreadCount);
+            } catch (_) { }
+
+            emitNotificationToUser(notifData.userId, notifData);
+            emitUnreadCountToUser(notifData.userId, unreadCount);
+          } catch (_) {
+            emitNotificationToUser(notifData.userId, notifData);
+          }
+
+          // Send remote Push Notification (Expo / FCM) so user receives it when app is in background or closed
+          try {
+            const { sendPushToUser } = require("../services/pushNotificationService");
+            sendPushToUser(notifData.userId, {
+              title: notifData.title,
+              body: notifData.message,
+              data: {
+                ...notifData,
+                orderId: notifData.orderId || notifData.processOrderId,
+                invNo: notifData.invNo,
+              },
+            }).catch((err) => {
+              console.warn("⚠️ [NotificationDao] Failed to send push notification:", err.message);
+            });
+          } catch (e) {
+            console.warn("⚠️ [NotificationDao] Error calling sendPushToUser:", e.message);
+          }
         }
 
         resolve(notifData);
@@ -272,14 +405,14 @@ exports.seedDummyNotificationsForUserDao = (userId) => {
           },
           {
             title: "Order Cancelled",
-            message: `Your order #${defaultInvNo}, has been cancelled. Reason : “The customer did not respond to the package review confirmation within the required time.” If you have already made a payment for this order, the total amount will be added to your credit balance. You can use this credit toward your next order.`,
+            message: `Your order #${defaultInvNo}, has been cancelled. Reason : “The customer did not respond to the package review confirmation within the required time.” If you have already made a payment for this order, the total amount will be added to your Polygon Wallet. You can use this credit toward your next order.`,
             minutesAgo: 8640,
             isRead: 1,
           },
         ];
 
         // Insert each dummy template with timestamp
-        const insertPromises = dummyTemplates.map((item, idx) => {
+        const insertPromises = dummyTemplates.map((item) => {
           return new Promise((res, rej) => {
             const createdAt = new Date(Date.now() - item.minutesAgo * 60 * 1000);
             const sql = `
@@ -304,5 +437,69 @@ exports.seedDummyNotificationsForUserDao = (userId) => {
     } catch (e) {
       reject(e);
     }
+  });
+};
+
+/**
+ * Resolve customer userId and processOrderId from orderId (handles both processorders.id and orders.id).
+ * Now also returns isFinalized, isConfirmed and orderStatus.
+ */
+exports.resolveOrderCustomerDetailsDao = (orderId) => {
+  return new Promise((resolve) => {
+    // 1. Check if orderId matches processorders.id
+    const sql1 = `
+      SELECT po.id AS processOrderId, po.invNo, po.isFinalized, po.isConfirmed,
+             po.status AS orderStatus, o.id AS orderId, o.userId
+      FROM processorders po
+      JOIN orders o ON po.orderId = o.id
+      WHERE po.id = ?
+      LIMIT 1
+    `;
+    db.collectionofficer.query(sql1, [orderId], (err1, rows1) => {
+      if (!err1 && rows1 && rows1.length > 0) {
+        return resolve(rows1[0]);
+      }
+
+      // 2. Check if orderId matches orders.id
+      const sql2 = `
+        SELECT po.id AS processOrderId, po.invNo, po.isFinalized, po.isConfirmed,
+               po.status AS orderStatus, o.id AS orderId, o.userId
+        FROM orders o
+        JOIN processorders po ON po.orderId = o.id
+        WHERE o.id = ?
+        ORDER BY po.id DESC
+        LIMIT 1
+      `;
+      db.collectionofficer.query(sql2, [orderId], (err2, rows2) => {
+        if (!err2 && rows2 && rows2.length > 0) {
+          return resolve(rows2[0]);
+        }
+        resolve(null);
+      });
+    });
+  });
+};
+
+/**
+ * Get latest process order and invoice number for a given user.
+ * Now also returns isFinalized, isConfirmed and orderStatus.
+ */
+exports.getLatestProcessOrderForUserDao = (userId) => {
+  return new Promise((resolve) => {
+    const sql = `
+      SELECT po.id AS processOrderId, po.invNo, po.isFinalized, po.isConfirmed,
+             po.status AS orderStatus, o.id AS orderId, o.userId
+      FROM processorders po
+      JOIN orders o ON po.orderId = o.id
+      WHERE o.userId = ?
+      ORDER BY po.id DESC
+      LIMIT 1
+    `;
+    db.collectionofficer.query(sql, [userId], (err, rows) => {
+      if (!err && rows && rows.length > 0) {
+        return resolve(rows[0]);
+      }
+      resolve(null);
+    });
   });
 };

@@ -7,36 +7,54 @@ exports.loginUser = async (identifier, password) => {
     let phone1 = identifier;
     let phone2 = identifier;
     let phone3 = identifier;
+    let phone4 = identifier;
 
-    // Normalise Sri Lankan mobile numbers
+    // Normalise mobile numbers for all supported countries
+    // (Cambodia +855, Vietnam +84, Bangladesh +880, India +91, Netherlands +31, Sri Lanka +94)
     if (/^[0-9+]+$/.test(identifier)) {
       const cleanNum = identifier.replace(/[^0-9]/g, ""); // Keep only numbers
-      if (cleanNum.length === 9 && cleanNum.startsWith("7")) {
-        phone1 = cleanNum;
-        phone2 = "0" + cleanNum;
-        phone3 = "+94" + cleanNum;
-      } else if (cleanNum.length === 10 && cleanNum.startsWith("07")) {
+
+      const prefixes = ["880", "855", "94", "84", "91", "31"];
+      let matchedPrefix = null;
+      for (const p of prefixes) {
+        if (cleanNum.startsWith(p) && cleanNum.length > p.length + 6) {
+          matchedPrefix = p;
+          break;
+        }
+      }
+
+      if (matchedPrefix) {
+        const localNum = cleanNum.substring(matchedPrefix.length);
+        phone1 = localNum;
+        phone2 = "0" + localNum;
+        phone3 = "+" + matchedPrefix + localNum;
+        phone4 = matchedPrefix + localNum;
+      } else if (cleanNum.startsWith("0")) {
         const suffix = cleanNum.substring(1);
         phone1 = suffix;
         phone2 = cleanNum;
         phone3 = "+94" + suffix;
-      } else if (cleanNum.length === 11 && cleanNum.startsWith("947")) {
-        const suffix = cleanNum.substring(2);
-        phone1 = suffix;
-        phone2 = "0" + suffix;
-        phone3 = "+" + cleanNum;
+        phone4 = "94" + suffix;
+      } else {
+        phone1 = cleanNum;
+        phone2 = "0" + cleanNum;
+        phone3 = "+94" + cleanNum;
+        phone4 = "94" + cleanNum;
       }
     }
 
     const sql = `
       SELECT 
         id, 
+        cusId,
+        title,
         firstName, 
         lastName, 
         email, 
         phoneNumber, 
         password, 
         nic,
+        docType,
         image, 
         isMarketPlaceUser,
         firstTimeUser,
@@ -47,19 +65,27 @@ exports.loginUser = async (identifier, password) => {
       WHERE (email = ? 
         OR phoneNumber = ? 
         OR phoneNumber = ? 
-        OR phoneNumber = ?)
+        OR phoneNumber = ?
+        OR phoneNumber = ?
+        OR CONCAT(phoneCode, phoneNumber) = ?
+        OR CONCAT(REPLACE(phoneCode, '+', ''), phoneNumber) = ?)
         AND (isMarketPlaceUser = 1 OR isDashUser = 1)
+        AND isActive = 1
+      ORDER BY id DESC
     `;
 
     const [results] = await db.collectionofficer.promise().query(sql, [
       identifier, // email
-      phone1,     // phone normalized 1
-      phone2,     // phone normalized 2
-      phone3      // phone normalized 3
+      phone1,     // phone normalized 1 (local)
+      phone2,     // phone normalized 2 (with 0)
+      phone3,     // phone normalized 3 (with +prefix)
+      phone4,     // phone normalized 4 (with prefix without +)
+      phone3,     // CONCAT(phoneCode, phoneNumber)
+      phone4      // CONCAT(REPLACE(phoneCode, '+', ''), phoneNumber)
     ]);
 
     if (results.length === 0) {
-      throw new Error("Invalid mobile number/email or password");
+      throw new Error("Invalid mobile number or email address");
     }
 
     const user = results[0];
@@ -76,13 +102,8 @@ exports.loginUser = async (identifier, password) => {
       // Ignored
     }
 
-    // Fallback: Plain-text password check
-    if (!isPasswordValid && password === user.password) {
-      isPasswordValid = true;
-    }
-
     if (!isPasswordValid) {
-      throw new Error("Invalid mobile number/email or password");
+      throw new Error("The password you entered is incorrect.\nPlease check and re-enter.");
     }
 
     return {
@@ -132,7 +153,7 @@ exports.searchCitiesDao = async (searchTerm) => {
       isAvailable: row.isAvailable === 1 || row.isAvailable === true,
     }));
   } catch (err) {
-    console.error("Database error in searchCitiesDao:", err);
+    console.error("❌ Database error in searchCitiesDao:", err);
     throw new Error("Database error while searching cities: " + err.message);
   }
 };
@@ -162,7 +183,7 @@ exports.getAllCitiesDao = async () => {
       isAvailable: row.isAvailable === 1 || row.isAvailable === true,
     }));
   } catch (err) {
-    console.error("Database error in getAllCitiesDao:", err);
+    console.error("❌ Database error in getAllCitiesDao:", err);
     throw new Error("Database error while fetching all cities: " + err.message);
   }
 };
@@ -183,12 +204,9 @@ exports.updateCityAvailabilityDao = async (cityId, isAvailable, companyCenterId 
     }
 
     const updatedCities = await exports.getAllCitiesDao();
-    const { emitCityAvailabilityUpdate } = require("../socket/socket");
-    emitCityAvailabilityUpdate(updatedCities);
-
     return updatedCities;
   } catch (err) {
-    console.error("Database error in updateCityAvailabilityDao:", err);
+    console.error("❌ Database error in updateCityAvailabilityDao:", err);
     throw new Error("Database error while updating city availability: " + err.message);
   }
 };
@@ -206,7 +224,7 @@ exports.getMarketPlaceUserLastCusIdDao = async () => {
     const [results] = await db.collectionofficer.promise().query(sql);
     return results[0] ? results[0].cusId : null;
   } catch (err) {
-    console.error("Database error in getMarketPlaceUserLastCusIdDao:", err);
+    console.error("❌ Database error in getMarketPlaceUserLastCusIdDao:", err);
     throw err;
   }
 };
@@ -214,62 +232,121 @@ exports.getMarketPlaceUserLastCusIdDao = async () => {
 // Get User By Email
 exports.getUserByEmailDao = async (email) => {
   try {
-    const sql = "SELECT * FROM marketplaceusers WHERE email = ?";
+    const sql = `
+      SELECT * FROM marketplaceusers
+      WHERE email = ?
+        AND isActive = 1
+        AND (isMarketPlaceUser = 1 OR isDashUser = 1)
+      ORDER BY id DESC
+      LIMIT 1
+    `;
     const [results] = await db.collectionofficer.promise().query(sql, [email]);
     return results[0] || null;
   } catch (err) {
-    console.error("Database error in getUserByEmailDao:", err);
+    console.error("❌ Database error in getUserByEmailDao:", err);
     throw err;
   }
 };
 
-// Get User By Phone across phoneNumber, phoneNumber2, and companyPhone
+
 exports.getUserByPhoneDao = async (phoneCode, phoneNumber) => {
   try {
     const raw = String(phoneNumber || "").trim();
     if (!raw) return null;
+
     const cleanNum = raw.replace(/[^0-9]/g, "");
+    if (!cleanNum) return null;
+
+
+    const codeDigits = String(phoneCode || "").replace(/[^0-9]/g, "");
+    const isSriLanka = codeDigits === "94";
+
     const candidates = new Set([raw, cleanNum]);
 
-    if (phoneCode === "+94" || cleanNum.startsWith("7") || cleanNum.startsWith("07") || cleanNum.startsWith("947")) {
-      if (cleanNum.length === 9 && cleanNum.startsWith("7")) {
-        candidates.add(cleanNum);
-        candidates.add("0" + cleanNum);
-        candidates.add("+94" + cleanNum);
-        candidates.add("94" + cleanNum);
-      } else if (cleanNum.length === 10 && cleanNum.startsWith("07")) {
-        const suffix = cleanNum.substring(1);
-        candidates.add(suffix);
-        candidates.add(cleanNum);
-        candidates.add("+94" + suffix);
-        candidates.add("94" + suffix);
-      } else if (cleanNum.length === 11 && cleanNum.startsWith("947")) {
-        const suffix = cleanNum.substring(2);
-        candidates.add(suffix);
-        candidates.add("0" + suffix);
-        candidates.add("+" + cleanNum);
-        candidates.add(cleanNum);
+    // Strip leading zeros for any country (e.g. 0771234567 -> 771234567)
+    const localNum = cleanNum.replace(/^0+/, "");
+    const localWithZero = "0" + localNum;
+
+    if (localNum) {
+      candidates.add(localNum);
+      candidates.add(localWithZero);
+      if (codeDigits) {
+        candidates.add(`+${codeDigits}${localNum}`);
+        candidates.add(`${codeDigits}${localNum}`);
+        candidates.add(`+${codeDigits}${localWithZero}`);
+        candidates.add(`${codeDigits}${localWithZero}`);
+      }
+    }
+
+    // Normalise if number contains country code prefix for supported countries
+    const prefixes = ["880", "855", "94", "84", "91", "31"];
+    for (const p of prefixes) {
+      if (cleanNum.startsWith(p) && cleanNum.length > p.length + 6) {
+        const subLocal = cleanNum.substring(p.length).replace(/^0+/, "");
+        candidates.add(subLocal);
+        candidates.add("0" + subLocal);
+        candidates.add("+" + p + subLocal);
+        candidates.add(p + subLocal);
+        break;
+      }
+    }
+
+    // Sri Lankan formatting variants only for +94
+    if (isSriLanka && localNum) {
+      const local = localNum.startsWith("94") && localNum.length === 11
+        ? localNum.substring(2)
+        : localNum;
+      if (local.length === 9 && local.startsWith("7")) {
+        candidates.add(local);
+        candidates.add("0" + local);
+        candidates.add("94" + local);
+        candidates.add("+94" + local);
       }
     }
 
     const phoneList = Array.from(candidates).filter(Boolean);
     if (phoneList.length === 0) return null;
-    const placeholders = phoneList.map(() => "?").join(", ");
+
+    const numPlaceholders = phoneList.map(() => "?").join(", ");
+
+    // Stored code may be "+94" or "94"; legacy rows may have NULL/empty code
+    // (treated as a possible match to stay safe).
+    const codeCond = (col) =>
+      codeDigits
+        ? `REPLACE(TRIM(COALESCE(${col}, '')), '+', '') IN ('', ?)`
+        : `1 = 1`;
+
+    const group = (codeCol, numCol) => ({
+      sql: `(${codeCond(codeCol)} AND ${numCol} IN (${numPlaceholders}))`,
+      params: codeDigits ? [codeDigits, ...phoneList] : [...phoneList],
+    });
+
+    const groups = [
+      group("phoneCode", "phoneNumber"),
+      group("phoneCode2", "phoneNumber2"),
+      group("companyPhoneCode", "companyPhone"),
+    ];
+
     const sql = `
-      SELECT * FROM marketplaceusers 
-      WHERE phoneNumber IN (${placeholders}) 
-         OR phoneNumber2 IN (${placeholders}) 
-         OR companyPhone IN (${placeholders}) 
+      SELECT * FROM marketplaceusers
+      WHERE ${groups.map((g) => g.sql).join("\n         OR ")}
+         OR CONCAT(phoneCode, phoneNumber) IN (${numPlaceholders})
+         OR CONCAT(REPLACE(phoneCode, '+', ''), phoneNumber) IN (${numPlaceholders})
+        AND isActive = 1
+        AND (isMarketPlaceUser = 1 OR isDashUser = 1)
+      ORDER BY id DESC
       LIMIT 1
     `;
-    const [results] = await db.collectionofficer.promise().query(sql, [
+    const params = [
+      ...groups.flatMap((g) => g.params),
       ...phoneList,
       ...phoneList,
-      ...phoneList,
-    ]);
+    ];
+
+    const [results] = await db.collectionofficer.promise().query(sql, params);
     return results[0] || null;
   } catch (err) {
-    console.error("Database error in getUserByPhoneDao:", err);
+    console.error("❌ Database error in getUserByPhoneDao:", err);
     throw err;
   }
 };
@@ -288,21 +365,88 @@ exports.getUserByNicDao = async (nic) => {
     const [results] = await db.collectionofficer.promise().query(sql, candidates);
     return results[0] || null;
   } catch (err) {
-    console.error("Database error in getUserByNicDao:", err);
+    console.error("❌ Database error in getUserByNicDao:", err);
     throw err;
   }
 };
 
-// Sign Up User
-exports.signupUserDao = async (user, hashedPassword, nextId) => {
+// Sign Up or Restore User
+exports.signupUserDao = async (user, hashedPassword, nextId = null, existingUserId = null) => {
   try {
-    const sql = `
+    const docType = String(user.docType || "").toUpperCase() === "PASS" ? "PASS" : "NIC";
+
+    if (existingUserId) {
+      // Restore existing deleted account
+      const updateSql = `
+        UPDATE marketplaceusers
+        SET 
+          title = ?,
+          firstName = ?,
+          lastName = ?,
+          phoneCode = ?,
+          phoneNumber = ?,
+          phoneCode2 = ?,
+          phoneNumber2 = ?,
+          buyerType = ?,
+          email = ?,
+          nic = ?,
+          docType = ?,
+          password = ?,
+          isMarketPlaceUser = 1,
+          isSubscribe = 0,
+          companyName = ?,
+          companyPhoneCode = ?,
+          companyPhone = ?,
+          nearesCity = ?,
+          creditBalance = 0,
+          creditLimit = DEFAULT(creditLimit),
+          isActive = 1
+        WHERE id = ?
+      `;
+
+      const updateValues = [
+        user.title,
+        user.firstName,
+        user.lastName,
+        user.phoneCode,
+        user.phoneNumber,
+        user.phoneCode2 || null,
+        user.phoneNumber2 || null,
+        user.buyerType,
+        user.email,
+        user.nic,
+        docType,
+        hashedPassword,
+        user.companyName || null,
+        user.companyPhoneCode || null,
+        user.companyPhoneNumber || null,
+        user.city || null,
+        existingUserId,
+      ];
+
+      const [results] = await db.collectionofficer.promise().query(updateSql, updateValues);
+      if (results.affectedRows >= 1) {
+        return {
+          status: true,
+          message: "User account restored successfully.",
+          data: { userId: existingUserId },
+        };
+      } else {
+        return {
+          status: false,
+          message: "Failed to restore user account.",
+        };
+      }
+    }
+
+    // Insert brand new user
+    const insertSql = `
       INSERT INTO marketplaceusers 
-      (title, firstName, lastName, phoneCode, phoneNumber, phoneCode2, phoneNumber2, buyerType, email, nic, password, isMarketPlaceUser, isSubscribe, companyName, companyPhoneCode, companyPhone, cusId, nearesCity) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (title, firstName, lastName, phoneCode, phoneNumber, phoneCode2, phoneNumber2, buyerType, email, nic, docType, password, isMarketPlaceUser, isSubscribe, companyName, companyPhoneCode, companyPhone, cusId, nearesCity) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
-    const values = [
+    const insertValues = [
       user.title,
       user.firstName,
       user.lastName,
@@ -313,6 +457,7 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
       user.buyerType,
       user.email,
       user.nic,
+      docType,
       hashedPassword,
       1,
       0,
@@ -323,7 +468,7 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
       user.city || null,
     ];
 
-    const [results] = await db.collectionofficer.promise().query(sql, values);
+    const [results] = await db.collectionofficer.promise().query(insertSql, insertValues);
 
     if (results.affectedRows === 1) {
       return {
@@ -338,7 +483,41 @@ exports.signupUserDao = async (user, hashedPassword, nextId) => {
       };
     }
   } catch (err) {
-    console.error("Database error in signupUserDao:", err);
+    console.error("❌ Database error in signupUserDao:", err);
+    throw err;
+  }
+};
+
+// Get Deleted Account Summary / Stats
+exports.getDeletedAccountStatsDao = async (userId, userRecord) => {
+  try {
+    const ordersSql = `
+      SELECT COUNT(DISTINCT o.id) AS pastOrdersCount
+      FROM orders o
+      WHERE o.userId = ?
+    `;
+    const [ordersResult] = await db.collectionofficer.promise().query(ordersSql, [userId]);
+    const pastOrdersCount = Number(ordersResult[0]?.pastOrdersCount || 0);
+
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    const formatMonthYear = (dateVal) => {
+      if (!dateVal) return "N/A";
+      const d = new Date(dateVal);
+      if (isNaN(d.getTime())) return "N/A";
+      return `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+    };
+
+    const memberSince = formatMonthYear(userRecord.created_at);
+    const deletedOn = formatMonthYear(userRecord.deletedAt);
+
+    return {
+      pastOrdersCount,
+      memberSince,
+      deletedOn,
+    };
+  } catch (err) {
+    console.error("❌ Database error in getDeletedAccountStatsDao:", err);
     throw err;
   }
 };
@@ -356,7 +535,7 @@ exports.saveOtpDao = async (referenceId, email, otp, expiresAt) => {
     const [result] = await db.collectionofficer.promise().query(sql, [referenceId, otp, email, expiresAt]);
     return result;
   } catch (err) {
-    console.error("Database error in saveOtpDao:", err);
+    console.error("❌ Database error in saveOtpDao:", err);
     throw err;
   }
 };
@@ -371,7 +550,7 @@ exports.getOtpDao = async (referenceId) => {
     const [results] = await db.collectionofficer.promise().query(sql, [referenceId]);
     return results.length > 0 ? results[0] : null;
   } catch (err) {
-    console.error("Database error in getOtpDao:", err);
+    console.error("❌ Database error in getOtpDao:", err);
     throw err;
   }
 };
@@ -382,7 +561,7 @@ exports.deleteOtpDao = async (referenceId) => {
     const [result] = await db.collectionofficer.promise().query(sql, [referenceId]);
     return result;
   } catch (err) {
-    console.error("Database error in deleteOtpDao:", err);
+    console.error("❌ Database error in deleteOtpDao:", err);
     throw err;
   }
 };
@@ -393,7 +572,7 @@ exports.getUserPasswordByIdDao = async (userId) => {
     const [results] = await db.collectionofficer.promise().query(sql, [userId]);
     return results[0] || null;
   } catch (err) {
-    console.error("Database error in getUserPasswordByIdDao:", err);
+    console.error("❌ Database error in getUserPasswordByIdDao:", err);
     throw err;
   }
 };
@@ -404,7 +583,45 @@ exports.updatePasswordDao = async (userId, hashedPassword) => {
     const [result] = await db.collectionofficer.promise().query(sql, [hashedPassword, userId]);
     return result.affectedRows === 1;
   } catch (err) {
-    console.error("Database error in updatePasswordDao:", err);
+    console.error("❌ Database error in updatePasswordDao:", err);
     throw err;
   }
 };
+
+// Wholesale pending verification status
+exports.getPendingWholesaleUserDao = async (userId) => {
+  try {
+    const sql = `
+      SELECT id, userId, approveStatus, brImg, approvedBy, approvedAt, createdAt
+      FROM pendingwholesaleusers
+      WHERE userId = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `;
+    const [results] = await db.collectionofficer.promise().query(sql, [userId]);
+    return results.length > 0 ? results[0] : null;
+  } catch (err) {
+    console.error("❌ Database error in getPendingWholesaleUserDao:", err);
+    throw err;
+  }
+};
+
+exports.resubmitPendingWholesaleBRDao = async (userId, brImgUrl) => {
+  try {
+    // Delete previous record(s) so a completely new record is created with 'To Review' status
+    const deleteSql = "DELETE FROM pendingwholesaleusers WHERE userId = ?";
+    await db.collectionofficer.promise().query(deleteSql, [userId]);
+
+    // Insert new clean record
+    const insertSql = `
+      INSERT INTO pendingwholesaleusers (userId, approveStatus, brImg, createdAt)
+      VALUES (?, 'To Review', ?, NOW())
+    `;
+    const [insertResult] = await db.collectionofficer.promise().query(insertSql, [userId, brImgUrl]);
+    return { id: insertResult.insertId, userId, approveStatus: "To Review", brImg: brImgUrl };
+  } catch (err) {
+    console.error("❌ Database error in resubmitPendingWholesaleBRDao:", err);
+    throw err;
+  }
+};
+

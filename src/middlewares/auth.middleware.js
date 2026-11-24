@@ -46,18 +46,19 @@ const authMiddleware = (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
+
     // Add decoded token info to request
     req.user = {
       id: decoded.id,
       userId: decoded.id, // For compatibility with getIncludedSuggestionsItems
       email: decoded.email,
       phoneNumber: decoded.phoneNumber,
+      buyerType: decoded.buyerType || "Retail",
     };
-    
+
     next();
   } catch (error) {
-    console.error("Token verification failed:", error.message);
+    console.error("❌ Token verification failed:", error.message);
     return res.status(401).json({
       status: false,
       message: "Token is not valid.",

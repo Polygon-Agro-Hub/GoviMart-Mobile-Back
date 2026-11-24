@@ -1,6 +1,6 @@
 const db = require("../startup/database");
 
-// Get All Complain Categories for App ID 9
+// Get All Complain Categories for appName = 'Polygon'
 exports.getComplainCategoriesDao = async () => {
   try {
     const sql = `
@@ -13,21 +13,59 @@ exports.getComplainCategoriesDao = async () => {
         cc.categoryTamil,
         cc.modifyBy
       FROM agro_world_admin.complaincategory cc
-      WHERE cc.appId = 9
+      JOIN agro_world_admin.systemapplications sa ON sa.id = cc.appId
+      WHERE sa.appName = 'GoViMart'
       ORDER BY cc.categoryEnglish ASC
     `;
 
     const [results] = await db.admin.promise().query(sql);
     return results;
   } catch (err) {
-    console.error("Database error in getComplainCategoriesDao:", err);
+    console.error("❌ Database error in getComplainCategoriesDao:", err);
     throw new Error(
       "Database error while fetching complain categories: " + err.message,
     );
   }
 };
 
-// Get Last Complain Ref ID
+// Get User cusId from marketplaceusers
+exports.getUserCusIdDao = async (userId) => {
+  try {
+    const sql = `
+      SELECT cusId 
+      FROM marketplaceusers 
+      WHERE id = ? 
+      LIMIT 1
+    `;
+    const [results] = await db.collectionofficer.promise().query(sql, [userId]);
+    return results[0] && results[0].cusId ? results[0].cusId : null;
+  } catch (err) {
+    console.error("❌ Database error in getUserCusIdDao:", err);
+    throw err;
+  }
+};
+
+// Get Last Complain Ref ID for a specific user and cusId prefix
+exports.getLastComplainRefIdByUserDao = async (userId, cusId) => {
+  try {
+    const sql = `
+      SELECT refId
+      FROM marcketplacecomplain
+      WHERE userId = ? AND refId LIKE ?
+      ORDER BY id DESC
+      LIMIT 1
+    `;
+    const [results] = await db.collectionofficer
+      .promise()
+      .query(sql, [userId, `${cusId}%`]);
+    return results[0] ? results[0].refId : null;
+  } catch (err) {
+    console.error("❌ Database error in getLastComplainRefIdByUserDao:", err);
+    throw err;
+  }
+};
+
+// Get Last Complain Ref ID (fallback legacy)
 exports.getLastComplainRefIdDao = async () => {
   try {
     const sql = `
@@ -40,7 +78,7 @@ exports.getLastComplainRefIdDao = async () => {
     const [results] = await db.collectionofficer.promise().query(sql);
     return results[0] ? results[0].refId : null;
   } catch (err) {
-    console.error("Database error in getLastComplainRefIdDao:", err);
+    console.error("❌ Database error in getLastComplainRefIdDao:", err);
     throw err;
   }
 };
@@ -60,10 +98,10 @@ exports.createComplainDao = async (
     `;
     const [result] = await db.collectionofficer
       .promise()
-      .query(sql, [userId, complaicategoryId, refId, complain, "Pending"]);
+      .query(sql, [userId, complaicategoryId, refId, complain, "Opened"]);
     return result.insertId;
   } catch (err) {
-    console.error("Database error in createComplainDao:", err);
+    console.error("❌ Database error in createComplainDao:", err);
     throw err;
   }
 };
@@ -80,7 +118,7 @@ exports.addComplainImageDao = async (complainId, imageUrl) => {
       .query(sql, [complainId, imageUrl]);
     return result;
   } catch (err) {
-    console.error("Database error in addComplainImageDao:", err);
+    console.error("❌ Database error in addComplainImageDao:", err);
     throw err;
   }
 };
@@ -123,7 +161,7 @@ exports.getComplainByIdDao = async (complainId) => {
       images: imageResults,
     };
   } catch (err) {
-    console.error("Database error in getComplainByIdDao:", err);
+    console.error("❌ Database error in getComplainByIdDao:", err);
     throw new Error("Database error while fetching complain: " + err.message);
   }
 };
@@ -133,6 +171,7 @@ exports.getComplainsByUserIdDao = async (userId) => {
     const complainSql = `
       SELECT 
         c.id,
+        c.userId,
         c.complaicategoryId,
         cc.categoryEnglish,
         cc.categorySinhala,
@@ -175,7 +214,7 @@ exports.getComplainsByUserIdDao = async (userId) => {
         })),
     }));
   } catch (err) {
-    console.error("Database error in getComplainsByUserIdDao:", err);
+    console.error("❌ Database error in getComplainsByUserIdDao:", err);
     throw new Error(
       "Database error while fetching user complains: " + err.message,
     );

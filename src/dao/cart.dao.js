@@ -41,10 +41,13 @@ exports.getCartProductsDao = (cartId) => {
         mi.displayName AS name,
         mi.normalPrice,
         mi.discountedPrice,
+        mi.comPrice,
         mi.startValue,
         mi.changeby,
         mi.unitType,
+        mi.maxQuantity,
         mi.isEnable,
+        mi.category AS productBuyerType,
         cv.image,
         cg.category
       FROM cartadditionalitems cai
@@ -52,7 +55,7 @@ exports.getCartProductsDao = (cartId) => {
       JOIN plant_care.cropvariety cv ON mi.varietyId = cv.id
       JOIN plant_care.cropgroup cg ON cv.cropGroupId = cg.id
       WHERE cai.cartId = ?
-      ORDER BY cai.createdAt DESC
+      ORDER BY cai.id ASC
     `;
     db.collectionofficer.query(sql, [cartId], (err, results) => {
       if (err) return reject(err);
@@ -76,11 +79,13 @@ exports.getCartPackagesDao = (cartId) => {
         mp.image,
         (mp.productPrice + mp.packingFee + mp.serviceFee) AS price,
         mp.status,
-        mp.isValid
+        mp.isValid,
+        mp.packageType,
+        DATE_FORMAT(mp.endDate, '%Y-%m-%d') AS endDate
       FROM cartpackage cp
       JOIN marketplacepackages mp ON cp.packageId = mp.id
       WHERE cp.cartId = ?
-      ORDER BY cp.createdAt DESC
+      ORDER BY cp.id ASC
     `;
     db.collectionofficer.query(sql, [cartId], (err, results) => {
       if (err) return reject(err);
@@ -197,6 +202,40 @@ exports.removePackageFromCartDao = (cartId, packageId) => {
 };
 
 /**
+ * Remove product item across all carts belonging to a user
+ */
+exports.removeProductFromUserCartsDao = (userId, productId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      DELETE cai FROM cartadditionalitems cai
+      JOIN cart c ON cai.cartId = c.id
+      WHERE c.userId = ? AND cai.productId = ?
+    `;
+    db.collectionofficer.query(sql, [userId, productId], (err, results) => {
+      if (err) return reject(err);
+      resolve(results);
+    });
+  });
+};
+
+/**
+ * Remove package item across all carts belonging to a user
+ */
+exports.removePackageFromUserCartsDao = (userId, packageId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      DELETE cp FROM cartpackage cp
+      JOIN cart c ON cp.cartId = c.id
+      WHERE c.userId = ? AND cp.packageId = ?
+    `;
+    db.collectionofficer.query(sql, [userId, packageId], (err, results) => {
+      if (err) return reject(err);
+      resolve(results);
+    });
+  });
+};
+
+/**
  * Clear all items and delete cart row
  */
 exports.clearCartDao = (cartId) => {
@@ -213,3 +252,84 @@ exports.clearCartDao = (cartId) => {
     });
   });
 };
+
+/**
+ * Clear all cart rows and items for a user
+ */
+exports.clearCartByUserIdDao = (userId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `SELECT id FROM cart WHERE userId = ?`;
+    db.collectionofficer.query(sql, [userId], (err, carts) => {
+      if (err) return reject(err);
+      if (!carts || carts.length === 0) return resolve(true);
+
+      const cartIds = carts.map((c) => c.id);
+      db.collectionofficer.query(
+        `DELETE FROM cartadditionalitems WHERE cartId IN (?)`,
+        [cartIds],
+        (err1) => {
+          if (err1) return reject(err1);
+          db.collectionofficer.query(
+            `DELETE FROM cartpackage WHERE cartId IN (?)`,
+            [cartIds],
+            (err2) => {
+              if (err2) return reject(err2);
+              db.collectionofficer.query(
+                `DELETE FROM cart WHERE id IN (?)`,
+                [cartIds],
+                (err3, results) => {
+                  if (err3) return reject(err3);
+                  resolve(results);
+                }
+              );
+            }
+          );
+        }
+      );
+    });
+  });
+};
+
+/**
+ * Remove items from cart that do not match the expected buyerType ('Retail' or 'Wholesale')
+ */
+exports.removeMismatchedCartProductsDao = (cartId, expectedBuyerType) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      DELETE cai
+      FROM cartadditionalitems cai
+      JOIN marketplaceitems mi ON cai.productId = mi.id
+      WHERE cai.cartId = ? AND LOWER(mi.category) != LOWER(?)
+    `;
+    db.collectionofficer.query(sql, [cartId, expectedBuyerType], (err, results) => {
+      if (err) return reject(err);
+      resolve(results);
+    });
+  });
+};
+
+/**
+ * Remove all packages from a cart (e.g. for Wholesale users)
+ */
+exports.clearCartPackagesDao = (cartId) => {
+  return new Promise((resolve, reject) => {
+    db.collectionofficer.query(`DELETE FROM cartpackage WHERE cartId = ?`, [cartId], (err, results) => {
+      if (err) return reject(err);
+      resolve(results);
+    });
+  });
+};
+
+/**
+ * Get category/buyerType of a product
+ */
+exports.getProductBuyerTypeDao = (productId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `SELECT category FROM marketplaceitems WHERE id = ?`;
+    db.collectionofficer.query(sql, [productId], (err, results) => {
+      if (err) return reject(err);
+      resolve(results.length > 0 ? results[0].category : null);
+    });
+  });
+};
+

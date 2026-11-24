@@ -2,11 +2,17 @@ const asyncHandler = require("express-async-handler");
 const RetailOrderDao = require("../dao/order.dao");
 const cartDao = require("../dao/cart.dao");
 const customerDao = require("../dao/customer.dao");
+const orderSmsService = require("../services/sms/order-sms.service");
+// Risk 4-C: server-side payment verification via gateway (do not trust client isPaid)
+const paymentGatewayFactory = require("../services/payment/payment.factory");
 
 const {
     couponValidationSchema,
     createOrderSchema,
 } = require("../validations/order.validations");
+
+// In-flight concurrency lock to prevent duplicate order creation (Risk 3.A)
+const activeOrderLocks = new Set();
 exports.getRetailOrderHistory = async (req, res) => {
     try {
         const { userId } = req.user;
@@ -19,7 +25,7 @@ exports.getRetailOrderHistory = async (req, res) => {
             orderHistory,
         });
     } catch (err) {
-        console.error("Error fetching order history:", err);
+        console.error("❌ Error fetching order history:", err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch order history.",
@@ -30,10 +36,12 @@ exports.getRetailOrderHistory = async (req, res) => {
 exports.getRetailOrderById = async (req, res) => {
     try {
         const { orderId } = req.params;
+        const processOrderId = req.query?.processOrderId;
         const { userId } = req.user;
-        console.log("Received orderId:", orderId, "for userId:", userId); // Debug log
+        const targetId = processOrderId || orderId;
 
-        const order = await RetailOrderDao.getRetailOrderByIdDao(orderId, userId);
+
+        const order = await RetailOrderDao.getRetailOrderByIdDao(targetId, userId, processOrderId);
 
         res.status(200).json({
             status: true,
@@ -41,7 +49,7 @@ exports.getRetailOrderById = async (req, res) => {
             order,
         });
     } catch (err) {
-        console.error("Error fetching order for orderId:", req.params.orderId, err);
+        console.error("❌ Error fetching order for orderId:", req.params.orderId, err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch order.",
@@ -61,7 +69,7 @@ exports.getOrderPackages = async (req, res) => {
             data: packages
         });
     } catch (error) {
-        console.error('Error in getPackagesByOrderId:', error);
+        console.error('❌ Error in getPackagesByOrderId:', error);
         res.status(500).json({
             status: false,
             message: error?.toString() || 'Unknown server error'
@@ -72,8 +80,9 @@ exports.getOrderPackages = async (req, res) => {
 exports.getOrderAdditionalItems = async (req, res) => {
     try {
         const { orderId } = req.params;
+        const { processOrderId } = req.query;
 
-        const additionalItems = await RetailOrderDao.getOrderAdditionalItemsDao(orderId);
+        const additionalItems = await RetailOrderDao.getOrderAdditionalItemsDao(orderId, processOrderId);
 
         res.json({
             status: true,
@@ -81,13 +90,33 @@ exports.getOrderAdditionalItems = async (req, res) => {
             data: additionalItems
         });
 
-        console.log("getOrderAdditionalItems executed for orderId:", orderId);
-        console.log("Additional items:", additionalItems);
+
     } catch (error) {
-        console.error('Error in getOrderAdditionalItems:', error);
+        console.error('❌ Error in getOrderAdditionalItems:', error);
         res.status(500).json({
             status: false,
             message: error?.toString() || 'Unknown server error'
+        });
+    }
+};
+
+exports.getOrderCancelAdditionalItems = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { processOrderId } = req.query;
+
+        const additionalItems = await RetailOrderDao.getOrderCancelAdditionalItemsDao(orderId, processOrderId);
+
+        res.json({
+            status: true,
+            message: "Cancel order additional items fetched successfully",
+            data: additionalItems
+        });
+    } catch (error) {
+        console.error("❌ Error in getOrderCancelAdditionalItems:", error);
+        res.status(500).json({
+            status: false,
+            message: error?.toString() || "Unknown server error"
         });
     }
 };
@@ -97,7 +126,7 @@ exports.checkCouponAvalability = async (req, res) => {
         const { userId } = req.user;
         const { coupon, deliveryMethod } = await couponValidationSchema.validateAsync(req.body);
 
-        console.log('coupon detailsss', req.body);
+
 
         const currentDate = new Date();
         let discount = 0;
@@ -105,15 +134,13 @@ exports.checkCouponAvalability = async (req, res) => {
         // Helper function to format numbers with thousand separators
         const formatPrice = (price) => {
             return parseFloat(price).toLocaleString('en-US', {
-                minimumFractionDigits: 0,
+                minimumFractionDigits: 2,
                 maximumFractionDigits: 2
             });
         };
 
         const couponData = await RetailOrderDao.getCouponDetailsDao(coupon);
-        console.log("Coupon data:", couponData);
-        const startDate = new Date(couponData.startDate);
-        const endDate = new Date(couponData.endDate);
+
 
         if (!couponData || couponData === null) {
             return res.status(404).json({
@@ -142,9 +169,12 @@ exports.checkCouponAvalability = async (req, res) => {
             });
         }
 
-        console.log(currentDate, startDate);
+        const startDate = couponData.startDate ? new Date(couponData.startDate) : null;
+        const endDate = couponData.endDate ? new Date(couponData.endDate) : null;
 
-        if (currentDate < startDate) {
+
+
+        if (startDate && !isNaN(startDate.getTime()) && currentDate < startDate) {
             return res.status(400).json({
                 status: false,
                 message: `This coupon will be valid from ${startDate.toLocaleDateString()}`,
@@ -152,7 +182,7 @@ exports.checkCouponAvalability = async (req, res) => {
             });
         }
 
-        if (currentDate > endDate) {
+        if (endDate && !isNaN(endDate.getTime()) && currentDate > endDate) {
             return res.status(400).json({
                 status: false,
                 message: `This coupon has expired on ${endDate.toLocaleDateString()}`,
@@ -220,13 +250,13 @@ exports.checkCouponAvalability = async (req, res) => {
         res.status(200).json({
             status: true,
             message: "Coupon is valid.",
-            discount: parseFloat(discount) || 0,
+            discount: parseFloat(Number(discount).toFixed(2)) || 0,
             discountFormatted: formatPrice(discount),
             type: couponData.type,
             code: couponData.code,
         });
     } catch (err) {
-        console.error("Error validating coupon:", err);
+        console.error("❌ Error validating coupon:", err);
         res.status(500).json({
             status: false,
             message: err?.message || "Invalid coupon code",
@@ -243,7 +273,7 @@ exports.getAvailableCoupons = async (req, res) => {
             data: coupons,
         });
     } catch (err) {
-        console.error("Error fetching available coupons:", err);
+        console.error("❌ Error fetching available coupons:", err);
         res.status(500).json({
             status: false,
             message: "Failed to fetch available coupons.",
@@ -263,7 +293,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 1. Validate request payload ──────────────────────────────────────────
     const { error, value } = createOrderSchema.validate(req.body, { abortEarly: false });
     if (error) {
-        console.error("[createOrder] Validation error:", error.details.map((d) => d.message));
+        console.error("❌ [createOrder] Validation error:", error.details.map((d) => d.message));
         return res.status(400).json({
             status: false,
             message: "Validation failed: " + error.details.map((d) => d.message).join("; "),
@@ -274,6 +304,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     const {
         cartId, paymentMethod, grandTotal, discountAmount, deliveryCharge,
         creditPaid, moneyPaid, isFinalizeImdt, checkoutDetails,
+        checkoutSessionId, paymentId,
     } = value;
 
     const {
@@ -298,6 +329,21 @@ exports.createOrder = asyncHandler(async (req, res) => {
         });
     }
 
+    // In-flight concurrency lock to prevent duplicate order creation (Risk 3.A)
+    const lockKey = `${userId}_${effectiveCartId}`;
+    if (activeOrderLocks.has(lockKey)) {
+        return res.status(429).json({
+            status: false,
+            message: "An order creation request is already in progress for this cart. Please wait.",
+        });
+    }
+    activeOrderLocks.add(lockKey);
+
+    const safeRespond = (statusCode, body) => {
+        activeOrderLocks.delete(lockKey);
+        return res.status(statusCode).json(body);
+    };
+
     // Resolve user details fallback if empty (e.g. pickup flow)
     let resolvedTitle = title;
     let resolvedFullName = (fullName && fullName !== "Customer") ? fullName : null;
@@ -315,7 +361,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
             resolvedPhone1 = resolvedPhone1 || userProfile.phoneNumber || req.user.phoneNumber || "";
         }
     } catch (e) {
-        console.warn("[createOrder] Profile lookup fallback failed:", e.message);
+        console.warn(" ⚠️ [createOrder] Profile lookup fallback failed:", e.message);
     }
     resolvedTitle = resolvedTitle || "Mr";
     resolvedFullName = resolvedFullName || "Customer";
@@ -324,16 +370,45 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 2. Verify cart ownership ──────────────────────────────────────────────
     const cartBelongsToUser = await RetailOrderDao.validateCartDao(effectiveCartId, userId);
     if (!cartBelongsToUser) {
-        return res.status(403).json({
+        // High-latency safety: Check if this user's cart was already converted to an order recently (e.g. earlier in-flight request succeeded and cleared cart)
+        try {
+            const recentOrder = await RetailOrderDao.getRecentOrderByUserDao(userId, 15);
+            if (recentOrder) {
+
+                return safeRespond(200, {
+                    status: true,
+                    message: "Order was already placed successfully",
+                    data: {
+                        orderId: recentOrder.orderId,
+                        processOrderId: recentOrder.processOrderId,
+                        invoiceNumber: recentOrder.invoiceNumber,
+                        total: recentOrder.total,
+                    },
+                });
+            }
+        } catch (recentErr) {
+            console.warn(" ⚠️ [createOrder] Error checking recent order fallback:", recentErr.message);
+        }
+
+        return safeRespond(403, {
             status: false,
             message: "Cart does not belong to the current user",
         });
     }
 
+    // Buyer type (from DB, not client) – drives SMS date gap
+    let buyerType = null;
+    try {
+        const cartRow = await cartDao.getCartByUserIdDao(userId);
+        buyerType = cartRow?.buyerType || null;
+    } catch (e) {
+        console.warn(" ⚠️ [createOrder] buyerType lookup failed:", e.message);
+    }
+
     // ── 3. Check item availability ────────────────────────────────────────────
     const availability = await RetailOrderDao.checkCartItemsAvailabilityDao(effectiveCartId);
     if (availability.hasUnavailableItems) {
-        return res.status(409).json({
+        return safeRespond(409, {
             status: false,
             code: "ITEMS_UNAVAILABLE",
             message: "Some cart items are no longer available. Please review your cart.",
@@ -345,7 +420,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     // ── 4. Fetch cart items ───────────────────────────────────────────────────
     const cartItems = await RetailOrderDao.getCartItemsForOrderDao(effectiveCartId);
     if (!cartItems.length) {
-        return res.status(400).json({
+        return safeRespond(400, {
             status: false,
             message: "Cart is empty",
         });
@@ -353,6 +428,188 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
     const hasPackages = cartItems.some((i) => i.itemType === "package");
     const isHomeDelivery = deliveryMethod === "home";
+
+    // Recalculate item prices server-side (Risk 1.A)
+    const [cartProducts, cartPackages] = await Promise.all([
+        cartDao.getCartProductsDao(effectiveCartId),
+        cartDao.getCartPackagesDao(effectiveCartId),
+    ]);
+
+    let calculatedNormalItemsTotal = 0;
+    let calculatedDiscountedItemsTotal = 0;
+    for (const p of cartProducts) {
+        const pQty = parseFloat(p.quantity) || 0;
+        const normPrice = Number(p.normalPrice || 0);
+        const discPrice = (p.discountedPrice != null && p.discountedPrice !== "" && !isNaN(Number(p.discountedPrice)) && Number(p.discountedPrice) > 0 && Number(p.discountedPrice) < normPrice)
+            ? Number(p.discountedPrice)
+            : normPrice;
+        const pUnit = (p.unit || p.unitType || "g").toLowerCase();
+        const weightMultiplier = pUnit === "kg" ? pQty : pQty / 1000;
+        calculatedNormalItemsTotal += Math.round(normPrice * weightMultiplier * 100) / 100;
+        calculatedDiscountedItemsTotal += Math.round(discPrice * weightMultiplier * 100) / 100;
+    }
+    for (const pkg of cartPackages) {
+        const pkgQty = parseFloat(pkg.quantity) || 0;
+        const pkgPrice = parseFloat(pkg.price) || 0;
+        const pkgSubtotal = Math.round(pkgPrice * pkgQty * 100) / 100;
+        calculatedNormalItemsTotal += pkgSubtotal;
+        calculatedDiscountedItemsTotal += pkgSubtotal;
+    }
+
+    const isFreeDeliveryCoupon = Boolean(
+        isCoupon && couponType && (
+            String(couponType).toLowerCase().includes("free") ||
+            String(couponType).toLowerCase().includes("delivery")
+        )
+    );
+    const finalCouponValue = isFreeDeliveryCoupon ? 0 : (parseFloat(couponValue) || 0);
+    const finalDeliveryCharge = isFreeDeliveryCoupon ? 0 : (isHomeDelivery ? (parseFloat(deliveryCharge) || 0) : 0);
+
+    const clientProvidedDiscount = parseFloat(discountAmount) || 0;
+    const clientGrandTotal = parseFloat(grandTotal) || 0;
+
+    const finalProductDiscount = Math.max(0, parseFloat((calculatedNormalItemsTotal - calculatedDiscountedItemsTotal).toFixed(2)));
+    const effectiveProductDiscount = clientProvidedDiscount > 0 ? clientProvidedDiscount : finalProductDiscount;
+    const finalDiscount = Math.min(effectiveProductDiscount + finalCouponValue, calculatedNormalItemsTotal);
+
+    const expectedDiscountedGrandTotal = Math.max(0, parseFloat((calculatedDiscountedItemsTotal + finalDeliveryCharge - finalCouponValue).toFixed(2)));
+    const expectedNormalMinusDiscountGrandTotal = Math.max(0, parseFloat((calculatedNormalItemsTotal + finalDeliveryCharge - finalDiscount).toFixed(2)));
+    const expectedNormalGrandTotal = Math.max(0, parseFloat((calculatedNormalItemsTotal + finalDeliveryCharge - finalCouponValue).toFixed(2)));
+
+    let calculatedGrandTotal = clientGrandTotal;
+    let isMatch = false;
+
+    if (Math.abs(clientGrandTotal - expectedDiscountedGrandTotal) <= 1.0) {
+        isMatch = true;
+        calculatedGrandTotal = expectedDiscountedGrandTotal;
+    } else if (Math.abs(clientGrandTotal - expectedNormalMinusDiscountGrandTotal) <= 1.0) {
+        isMatch = true;
+        calculatedGrandTotal = expectedNormalMinusDiscountGrandTotal;
+    } else if (Math.abs(clientGrandTotal - expectedNormalGrandTotal) <= 1.0) {
+        isMatch = true;
+        calculatedGrandTotal = expectedNormalGrandTotal;
+    }
+
+    // Verify grandTotal from client against server-calculated grandTotal
+    if (!isMatch) {
+        console.warn(`⚠️ [createOrder] Price manipulation detected for user ${userId}. Client: ${grandTotal}, Expected Discounted: ${expectedDiscountedGrandTotal}, Expected Normal-Discount: ${expectedNormalMinusDiscountGrandTotal}`);
+        return safeRespond(400, {
+            status: false,
+            code: "ORDER_TOTAL_MISMATCH",
+            message: `Order total mismatch. Expected Rs. ${expectedDiscountedGrandTotal.toFixed(2)}, but received Rs. ${Number(grandTotal).toFixed(2)}.`,
+            expectedTotal: expectedDiscountedGrandTotal,
+            clientTotal: Number(grandTotal),
+        });
+    }
+
+    // ── Risk 4-C: Server-side payment verification ────────────────────────────
+    // For card orders: verify payment status directly with the gateway.
+    // Never trust isPaid=1 from the client — a malicious actor could send it
+    // without completing the actual payment (deep-link hijacking).
+    // For cash/credit orders: use the client-supplied value as before (no gateway).
+    const isCardPayment = String(paymentMethod || "").toLowerCase() === "card";
+    let serverVerifiedIsPaid = 0;
+
+    // Verify user credit balance if paying with credit
+    const requestedCredit = parseFloat(creditPaid) || 0;
+    if (requestedCredit > 0) {
+        const userProfile = await customerDao.getCustomerProfileDao(userId);
+        const availableCredit = parseFloat(userProfile?.[0]?.creditBalance || 0);
+        if (requestedCredit > availableCredit + 0.01) {
+            return safeRespond(400, {
+                status: false,
+                message: `Insufficient credit balance. Available: Rs. ${availableCredit.toFixed(2)}, requested: Rs. ${requestedCredit.toFixed(2)}.`,
+            });
+        }
+    }
+
+    // Never apply more credit than the order total
+    const effectiveCredit = Math.min(requestedCredit, calculatedGrandTotal);
+
+    // Expected card money amount (order total minus wallet credit applied)
+    const expectedCardAmount = Math.max(0, calculatedGrandTotal - effectiveCredit);
+
+    // Whole order covered by wallet credit (server-verified balance, no gateway needed)
+    const isFullyPaidByCredit =
+        effectiveCredit > 0 && effectiveCredit >= calculatedGrandTotal - 0.01;
+
+    // Determine effective payment/checkout identifier
+    const effectivePaymentId = paymentId || (typeof checkoutSessionId === "string" && checkoutSessionId.startsWith("pay_") ? checkoutSessionId : null);
+    const effectiveCheckoutId = (typeof checkoutSessionId === "string" && !checkoutSessionId.startsWith("pay_")) ? checkoutSessionId : null;
+
+    if (isFullyPaidByCredit) {
+        serverVerifiedIsPaid = 1;
+    } else if (isCardPayment && effectivePaymentId) {
+        // Direct saved card 1-click charge verification
+        try {
+            const strategy = paymentGatewayFactory.getGateway("payments_lk");
+            const { isCompleted, payment } = await strategy.verifyPayment(effectivePaymentId);
+            if (isCompleted) {
+                const paidAmountCents = payment?.amountCents || 0;
+                const paidAmountLkr = paidAmountCents / 100;
+                if (
+                    Math.abs(paidAmountLkr - expectedCardAmount) <= 1.0 ||
+                    Math.abs(paidAmountLkr - calculatedGrandTotal) <= 1.0
+                ) {
+                    serverVerifiedIsPaid = 1;
+                    console.log(`✅ [createOrder] Verified saved card payment ${effectivePaymentId} for user ${userId}: Rs. ${paidAmountLkr}`);
+                } else {
+                    console.warn(
+                        `⚠️ [createOrder] Payment amount mismatch for user ${userId}: ` +
+                        `gateway=${paidAmountLkr}, expectedCard=${expectedCardAmount}, order=${calculatedGrandTotal}. Setting isPaid=0.`
+                    );
+                }
+            } else {
+                console.warn(`⚠️ [createOrder] Gateway reports payment NOT completed for paymentId ${effectivePaymentId}.`);
+            }
+        } catch (verifyErr) {
+            console.warn("⚠️ [createOrder] Direct payment verification failed:", verifyErr.message);
+            serverVerifiedIsPaid = 0;
+        }
+    } else if (isCardPayment && effectiveCheckoutId) {
+        try {
+            const strategy = paymentGatewayFactory.getGateway("payments_lk");
+            const { isCompleted, checkout } = await strategy.verifyAndSyncCheckout(
+                effectiveCheckoutId,
+                userId,
+            );
+            if (isCompleted) {
+                // Double-check: gateway-reported amount must match the expected card amount
+                // (or full grand total if no credit was applied) with Rs. 1 tolerance
+                const paidAmountCents = checkout?.payment?.amountCents || 0;
+                const paidAmountLkr = paidAmountCents / 100;
+                if (
+                    Math.abs(paidAmountLkr - expectedCardAmount) <= 1.0 ||
+                    Math.abs(paidAmountLkr - calculatedGrandTotal) <= 1.0
+                ) {
+                    serverVerifiedIsPaid = 1;
+                } else {
+                    console.warn(
+                        `⚠️ [createOrder] Gateway amount mismatch for user ${userId}: ` +
+                        `gateway=${paidAmountLkr}, expectedCard=${expectedCardAmount}, order=${calculatedGrandTotal}. Setting isPaid=0.`,
+                    );
+                }
+            } else {
+                console.warn(
+                    `⚠️ [createOrder] Gateway reports payment NOT completed for user ${userId}, ` +
+                    `checkoutSessionId=${effectiveCheckoutId}. Order will be created as unpaid.`,
+                );
+            }
+        } catch (verifyErr) {
+            // Non-fatal: if the gateway is unreachable, create the order as unpaid.
+            // The webhook/reconcile job will update isPaid once the gateway confirms.
+            console.warn(
+                "⚠️ [createOrder] Gateway verification failed (non-fatal, isPaid=0):",
+                verifyErr.message,
+            );
+            serverVerifiedIsPaid = 0;
+        }
+    } else if (isCardPayment && !checkoutSessionId && !paymentId && Number(req.body.isPaid) === 1) {
+        // Direct card charge (already charged server-side)
+        serverVerifiedIsPaid = 1;
+    } else if (!isCardPayment) {
+        serverVerifiedIsPaid = 0; // cash is never paid up front; full credit is handled above
+    }
 
     // Normalize schedule fields
     let normScheduleType = "One Time";
@@ -368,9 +625,48 @@ exports.createOrder = asyncHandler(async (req, res) => {
     const parseScheduleDate = (rawDate) => {
         if (!rawDate) return null;
         if (rawDate instanceof Date) return rawDate;
+
+        const m = String(rawDate).match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+
         const parsed = new Date(rawDate);
-        if (!isNaN(parsed.getTime())) return parsed;
-        return null;
+        return isNaN(parsed.getTime()) ? null : parsed;
+    };
+
+    // ── Auto-confirm rule (EPSD) ──────────────────────────────────────────────
+    // processorders.isConfirmed = 1 when:
+    //   (ala carte only  OR  package with isFinalizeImdt = 1)
+    //   AND the schedule date is the Earliest Possible Schedule Date (EPSD)
+    const padN = (n) => (n < 10 ? `0${n}` : `${n}`);
+    const toDateStr = (d) => {
+        if (!d) return null;
+        const dt = d instanceof Date ? d : new Date(d);
+        return isNaN(dt.getTime())
+            ? null
+            : `${dt.getFullYear()}-${padN(dt.getMonth() + 1)}-${padN(dt.getDate())}`;
+    };
+
+    let earliestDateObj = checkoutDetails?.earliestDeliveryDate
+        ? parseScheduleDate(checkoutDetails.earliestDeliveryDate)
+        : null;
+    if (!earliestDateObj) {
+        earliestDateObj = new Date();
+        earliestDateObj.setDate(earliestDateObj.getDate() + 3);
+    }
+    const earliestDateStr = toDateStr(earliestDateObj);
+
+    // ala carte only OR package + isFinalizeImdt = 1
+    const isAutoConfirmType = !hasPackages || Number(isFinalizeImdt) === 1;
+
+    // Mirrors client: no EPSD available / package unavailable on EPSD
+    const isEarliestBlocked =
+        checkoutDetails?.earliestDeliveryDate === null ||
+        Boolean(checkoutDetails?.hasPackageUnavailableOnEarliest);
+
+    const shouldAutoConfirm = (scheduleDate) => {
+        if (!isAutoConfirmType || isEarliestBlocked) return 0;
+        const s = toDateStr(scheduleDate);
+        return s && earliestDateStr && s <= earliestDateStr ? 1 : 0;
     };
 
     // ── 5. Begin transaction ──────────────────────────────────────────────────
@@ -378,7 +674,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
     db.collectionofficer.getConnection((connErr, connection) => {
         if (connErr) {
-            return res.status(500).json({
+            return safeRespond(500, {
                 status: false,
                 message: "Database connection error",
             });
@@ -387,7 +683,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
         connection.beginTransaction(async (txErr) => {
             if (txErr) {
                 connection.release();
-                return res.status(500).json({
+                return safeRespond(500, {
                     status: false,
                     message: "Transaction error",
                 });
@@ -407,16 +703,15 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     phonecode2: phoneCode2 || null,
                     phone2: phone2 || null,
                     isCoupon: isCoupon || false,
-                    couponValue: couponValue || 0,
+                    couponValue: finalCouponValue,
                     couponType: couponType || null,
-                    total: grandTotal,
-                    fullTotal: grandTotal,
-                    discount: discountAmount || 0,
-                    deliveryCharge: isHomeDelivery ? (deliveryCharge || 0) : 0,
+                    total: parseFloat(calculatedNormalItemsTotal.toFixed(2)),
+                    fullTotal: calculatedGrandTotal,
+                    discount: effectiveProductDiscount,
+                    deliveryCharge: finalDeliveryCharge,
                     sheduleType: normScheduleType,
                     validityPeriod: effValidityPeriod,
                     selectedDays: effRecurringDays,
-                    sheduleDate: null,
                     sheduleTime: timeSlot || null,
                     isPackage: hasPackages ? 1 : 0,
                     isFinalizeImdt: isFinalizeImdt || 0,
@@ -445,19 +740,48 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 // ── 5c. Create process order(s) ───────────────────────────────
                 let primaryProcessOrderId = null;
                 let primaryInvNo = null;
+                let primaryScheduledDate = null;
                 const createdProcessOrders = [];
 
-                if (normScheduleType === "Twice a Week") {
-                    // Special condition: 2 individual rows in processorders for the 2 days
-                    let date1 = null;
-                    let date2 = null;
+                // Financial fields for 1st processorder (coupon applied if any)
+                const firstOrderFinancials = {
+                    isCoupon: isCoupon ? 1 : 0,
+                    couponType: isCoupon ? couponType || null : null,
+                    couponValue: finalCouponValue,
+                    total: parseFloat((calculatedGrandTotal + effectiveProductDiscount).toFixed(2)),
+                    fullTotal: calculatedGrandTotal,
+                    discount: effectiveProductDiscount,
+                    deliveryCharge: finalDeliveryCharge,
+                };
 
-                    if (Array.isArray(calculatedOrders) && calculatedOrders.length >= 2) {
-                        date1 = parseScheduleDate(calculatedOrders[0]?.date || calculatedOrders[0]?.dateStr);
-                        date2 = parseScheduleDate(calculatedOrders[1]?.date || calculatedOrders[1]?.dateStr);
+                // Normal financial fields for subsequent recurring processorders (orders 2..N: NO coupon applied)
+                const normalDeliveryCharge = isHomeDelivery
+                    ? (parseFloat(checkoutDetails?.normalDeliveryCharge || deliveryCharge) || 0)
+                    : 0;
+                const normalGrandTotal = Math.max(0, parseFloat((calculatedDiscountedItemsTotal + normalDeliveryCharge).toFixed(2)));
+                const normalOrderFinancials = {
+                    isCoupon: 0,
+                    couponType: null,
+                    couponValue: 0.0,
+                    total: parseFloat((normalGrandTotal + effectiveProductDiscount).toFixed(2)),
+                    fullTotal: normalGrandTotal,
+                    discount: effectiveProductDiscount,
+                    deliveryCharge: normalDeliveryCharge,
+                };
+
+                const isRecurring = normScheduleType === "Once a Week" || normScheduleType === "Twice a Week";
+
+                if (isRecurring) {
+                    // Resolve all recurring order dates from calculatedOrders or by generating them
+                    const targetDates = [];
+                    if (Array.isArray(calculatedOrders) && calculatedOrders.length > 0) {
+                        for (const orderItem of calculatedOrders) {
+                            const d = parseScheduleDate(orderItem.date || orderItem.dateStr);
+                            if (d) targetDates.push(d);
+                        }
                     }
 
-                    if (!date1 || !date2) {
+                    if (targetDates.length === 0) {
                         const DAY_MAP = { Mo: 1, Tu: 2, We: 3, Th: 4, Fr: 5, Sa: 6, Su: 0 };
                         const minDate = new Date();
                         minDate.setDate(minDate.getDate() + 3);
@@ -465,83 +789,97 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                         const daysArr = Array.isArray(effRecurringDays) && effRecurringDays.length > 0
                             ? effRecurringDays
-                            : ["Tu", "Sa"];
+                            : normScheduleType === "Twice a Week" ? ["Tu", "Sa"] : ["Tu"];
 
-                        const computedDates = daysArr.map((d) => {
+                        const numWeeks = parseInt(effValidityPeriod, 10) || 4;
+                        const allComputed = [];
+
+                        daysArr.forEach((d) => {
                             const targetDay = DAY_MAP[d] !== undefined ? DAY_MAP[d] : 2;
-                            const dt = new Date(minDate);
-                            while (dt.getDay() !== targetDay) {
-                                dt.setDate(dt.getDate() + 1);
+                            const firstDate = new Date(minDate);
+                            while (firstDate.getDay() !== targetDay) {
+                                firstDate.setDate(firstDate.getDate() + 1);
                             }
-                            return dt;
-                        }).sort((a, b) => a.getTime() - b.getTime());
+                            for (let w = 0; w < numWeeks; w++) {
+                                const nextDate = new Date(firstDate);
+                                nextDate.setDate(firstDate.getDate() + w * 7);
+                                allComputed.push(nextDate);
+                            }
+                        });
 
-                        date1 = date1 || computedDates[0];
-                        date2 = date2 || computedDates[1] || computedDates[0];
+                        allComputed.sort((a, b) => a.getTime() - b.getTime());
+                        targetDates.push(...allComputed);
                     }
 
-                    // Insert 1st process order
-                    const proc1 = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
-                        orderId,
-                        paymentMethod,
-                        isPaid: 0,
-                        amount: grandTotal,
-                        creditPaid: creditPaid || 0,
-                        moneyPaid: moneyPaid || 0,
-                        status: "Ordered",
-                        sheduleDate: date1,
-                    });
-                    createdProcessOrders.push(proc1);
+                    // Create an individual processorders row for each scheduled date
+                    // use serverVerifiedIsPaid (gateway-verified) instead of raw client claim
+                    const clientIsPaid = serverVerifiedIsPaid;
 
-                    // Insert 2nd process order
-                    const proc2 = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
-                        orderId,
-                        paymentMethod,
-                        isPaid: 0,
-                        amount: grandTotal,
-                        creditPaid: creditPaid || 0,
-                        moneyPaid: moneyPaid || 0,
-                        status: "Ordered",
-                        sheduleDate: date2,
-                    });
-                    createdProcessOrders.push(proc2);
+                    for (let i = 0; i < targetDates.length; i++) {
+                        const sDate = targetDates[i];
+                        const isFirstOrder = i === 0;
 
-                    primaryProcessOrderId = proc1.insertId;
-                    primaryInvNo = proc1.invNo;
+                        // Only the 1st order collects the payment today if paying up front; subsequent orders are pending
+                        const rowCreditPaid = isFirstOrder ? effectiveCredit : 0;
+                        const rowMoneyPaid = (isFirstOrder && clientIsPaid === 1)
+                            ? Math.max(0, calculatedGrandTotal - effectiveCredit) : 0;
+                        const rowAmount = (isFirstOrder && clientIsPaid === 1) ? calculatedGrandTotal : 0;
+                        const rowFinancials = isFirstOrder ? firstOrderFinancials : normalOrderFinancials;
 
-                    // ── 5d. Save order items for both process orders ───────────
-                    // Additional items link to orderId and processOrderId
-                    const additionalItems = cartItems.filter((i) => i.itemType === "additional");
-                    for (const item of additionalItems) {
-                        await RetailOrderDao.saveOrderAdditionalItemWithTransactionDao(connection, orderId, item, proc1.insertId);
-                    }
+                        const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
+                            orderId,
+                            paymentMethod: paymentMethod || (isFirstOrder ? "Card" : "Cash"),
+                            isPaid: isFirstOrder ? clientIsPaid : 0,
+                            amount: rowAmount,
+                            creditPaid: rowCreditPaid,
+                            moneyPaid: rowMoneyPaid,
+                            status: "Ordered",
+                            sheduleDate: sDate,
+                            isConfirmed: shouldAutoConfirm(sDate), // <-- EPSD auto-confirm
+                            ...rowFinancials,
+                        });
 
-                    // Packages link to each processOrderId
-                    const packageItems = cartItems.filter((i) => i.itemType === "package");
-                    for (const pkg of packageItems) {
-                        await RetailOrderDao.saveOrderPackageWithTransactionDao(connection, proc1.insertId, pkg);
-                        await RetailOrderDao.saveOrderPackageWithTransactionDao(connection, proc2.insertId, pkg);
+                        createdProcessOrders.push(proc);
+
+                        if (isFirstOrder) {
+                            primaryProcessOrderId = proc.insertId;
+                            primaryInvNo = proc.invNo;
+                            primaryScheduledDate = sDate;
+                        }
+
+                        // ── 5d. Save order items for each process order ────────
+                        await RetailOrderDao.saveOrderItemsWithTransactionDao(
+                            connection, orderId, proc.insertId, cartItems
+                        );
                     }
                 } else {
-                    // One Time or Once a Week: 1 process order row
+                    // One Time: 1 process order row
                     let targetDate = parseScheduleDate(deliveryDate);
                     if (!targetDate && Array.isArray(calculatedOrders) && calculatedOrders.length > 0) {
                         targetDate = parseScheduleDate(calculatedOrders[0]?.date || calculatedOrders[0]?.dateStr);
                     }
 
+                    //use serverVerifiedIsPaid (gateway-verified) instead of raw client claim
+                    const clientIsPaid = serverVerifiedIsPaid;
+                    const oneTimeMoneyPaid = clientIsPaid === 1 ? Math.max(0, calculatedGrandTotal - effectiveCredit) : 0;
+                    const oneTimeAmount = clientIsPaid === 1 ? calculatedGrandTotal : 0;
+
                     const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
                         orderId,
                         paymentMethod,
-                        isPaid: 0,
-                        amount: grandTotal,
-                        creditPaid: creditPaid || 0,
-                        moneyPaid: moneyPaid || 0,
+                        isPaid: clientIsPaid,
+                        amount: oneTimeAmount,
+                        creditPaid: effectiveCredit,
+                        moneyPaid: oneTimeMoneyPaid,
                         status: "Ordered",
                         sheduleDate: targetDate,
+                        isConfirmed: shouldAutoConfirm(targetDate), // <-- EPSD auto-confirm
+                        ...firstOrderFinancials,
                     });
                     createdProcessOrders.push(proc);
                     primaryProcessOrderId = proc.insertId;
                     primaryInvNo = proc.invNo;
+                    primaryScheduledDate = targetDate;
 
                     // ── 5d. Save all order items ──────────────────────────────
                     await RetailOrderDao.saveOrderItemsWithTransactionDao(
@@ -549,23 +887,96 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     );
                 }
 
-                // ── 5e. Commit ────────────────────────────────────────────────
+                // ── 5e. Deduct credit balance from marketplaceusers if used ────
+                if (effectiveCredit > 0) {
+                    await RetailOrderDao.deductUserCreditBalanceWithTransactionDao(
+                        connection,
+                        userId,
+                        effectiveCredit
+                    );
+
+                }
+
+                // ── 5f. Commit ────────────────────────────────────────────────
                 connection.commit((commitErr) => {
                     if (commitErr) {
                         return connection.rollback(() => {
                             connection.release();
-                            res.status(500).json({ status: false, message: "Commit failed" });
+                            safeRespond(500, { status: false, message: "Commit failed" });
                         });
                     }
 
                     connection.release();
 
-                    // ── 5f. Clear cart (best-effort, after commit) ────────────
+                    // ── Clear cart (best-effort, after commit) ────────────
                     RetailOrderDao.clearCartAfterOrderDao(effectiveCartId).catch((clearErr) => {
-                        console.error("[createOrder] Cart clear failed (non-fatal):", clearErr);
+                        console.error("❌ [createOrder] Cart clear failed (non-fatal):", clearErr);
                     });
 
-                    return res.status(201).json({
+                    // ── Refresh marketplaceusers.creditLimit (best-effort, after commit) ──
+                    RetailOrderDao.recalculateAndPersistCreditLimitDao(userId).catch((limitErr) => {
+                        console.error("❌ [createOrder] creditLimit recalculation failed (non-fatal):", limitErr);
+                    });
+
+                    // ── ShoutOUT SMS Dispatch (best-effort, after commit) ──
+                    (async () => {
+                        try {
+                            // reuses toDateStr + earliestDateStr defined above
+                            const scheduledDateStr = toDateStr(primaryScheduledDate);
+                            const isType1 = Boolean(
+                                scheduledDateStr && earliestDateStr && scheduledDateStr <= earliestDateStr
+                            );
+
+                            // Package + isFinalizeImdt = 0 -> review/accept flow (no EPSD check)
+                            const isPackagePayToConfirmFlow = !Number(isFinalizeImdt) && hasPackages;
+
+                            // A la carte only OR package with isFinalizeImdt = 1
+                            const isAlaCarteOrFinalizedPackage = !hasPackages || Number(isFinalizeImdt) === 1;
+
+                            console.log(
+                                `[createOrder SMS] scheduled: ${scheduledDateStr}, earliest: ${earliestDateStr}, isType1: ${isType1}, isFinalizeImdt: ${isFinalizeImdt}, hasPackages: ${hasPackages}, packageFlow: ${isPackagePayToConfirmFlow}, alaCarteOrFinalized: ${isAlaCarteOrFinalizedPackage}, fullCredit: ${isFullyPaidByCredit}`
+                            );
+
+                            if (isPackagePayToConfirmFlow) {
+                                // Shows delivery - 2 (18 -> 16)
+                                await orderSmsService.sendOrderPlacedPayToConfirmSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    deliveryDate: scheduledDateStr,
+                                });
+                            } else if (isType1) {
+                                // Delivery on earliest date
+                                await orderSmsService.sendOrderConfirmedSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    invNo: primaryInvNo,
+                                });
+                            } else if (isAlaCarteOrFinalizedPackage && isFullyPaidByCredit) {
+                                // Delivery after EPSD, a la carte / finalized package, fully paid with credit
+                                // Shows delivery - 3 (18 -> 15) for retail, delivery - 2 (18 -> 16) for wholesale
+                                await orderSmsService.sendOrderPlacedAfterEpsdCreditSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    deliveryDate: scheduledDateStr,
+                                    buyerType,
+                                });
+                            } else {
+                                // Delivery after earliest date (shows delivery - 3, 18 -> 15 for retail, delivery - 2, 18 -> 16 for wholesale)
+                                const isCard = String(paymentMethod).toLowerCase() === "card";
+                                await orderSmsService.sendOrderPlacedAfterEpsdSms({
+                                    userId,
+                                    phone: resolvedPhone1,
+                                    deliveryDate: scheduledDateStr,
+                                    isCardPayment: isCard,
+                                    buyerType,
+                                });
+                            }
+                        } catch (smsErr) {
+                            console.error("❌ [createOrder] ShoutOUT SMS dispatch error (non-fatal):", smsErr.message);
+                        }
+                    })();
+
+                    return safeRespond(201, {
                         status: true,
                         message: "Order created successfully",
                         data: {
@@ -574,7 +985,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                             processOrderIds: createdProcessOrders.map((p) => p.insertId),
                             invoiceNumber: primaryInvNo,
                             invoiceNumbers: createdProcessOrders.map((p) => p.invNo),
-                            total: grandTotal,
+                            total: calculatedGrandTotal,
                         },
                     });
                 });
@@ -584,15 +995,15 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 });
 
                 if (err.code === "ITEMS_UNAVAILABLE") {
-                    return res.status(409).json({
+                    return safeRespond(409, {
                         status: false,
                         code: "ITEMS_UNAVAILABLE",
                         message: err.message,
                     });
                 }
 
-                console.error("[createOrder] Transaction error:", err);
-                return res.status(500).json({
+                console.error("❌ [createOrder] Transaction error:", err);
+                return safeRespond(500, {
                     status: false,
                     message: "Order creation failed. Please try again.",
                 });
@@ -636,8 +1047,12 @@ exports.getDeliveryCities = asyncHandler(async (req, res) => {
 exports.getInvoiceByOrderId = asyncHandler(async (req, res) => {
     const { orderId } = req.params;
     const { userId } = req.user;
+    const { processOrderId, invNo } = req.query;
 
-    const result = await RetailOrderDao.getInvoiceByOrderIdDao(orderId, userId);
+    const result = await RetailOrderDao.getInvoiceByOrderIdDao(orderId, userId, {
+        processOrderId,
+        invNo,
+    });
 
     if (!result || !result.invoice) {
         return res.status(404).json({
@@ -650,5 +1065,73 @@ exports.getInvoiceByOrderId = asyncHandler(async (req, res) => {
         status: true,
         message: "Invoice fetched successfully",
         invoice: result.invoice,
+    });
+});
+
+exports.getDeliveredOrdersTotal = async (req, res) => {
+    try {
+        const userId = req.params.userId;
+        if (!userId || isNaN(parseInt(userId))) {
+            return res.status(400).json({ success: false, message: "Invalid user ID" });
+        }
+        // Authorization check: ensure users can only access their own order totals
+        if (parseInt(userId) !== parseInt(req.user.id)) {
+            return res.status(403).json({ success: false, message: "Forbidden: Access denied to user data" });
+        }
+        const result = await RetailOrderDao.getDeliveredOrdersTotal(userId);
+        return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+        console.error("❌ Error in getDeliveredOrdersTotal:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch delivered orders total",
+            error: error.message,
+        });
+    }
+};
+
+// Returns YYYY-MM-DD for (today in Sri Lanka + N days)
+const getColomboDatePlus = (days) => {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Colombo" });
+    const d = new Date(`${today}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+};
+
+/**
+ * GET /api/order/schedule-orders/:sheduleDate?
+ * Default sheduleDate:
+ *   - Wholesale: today + 2 days (2-day gap: today 12 -> 14)
+ *   - Retail:    today + 3 days (3-day gap: today 12 -> 15)
+ */
+exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
+    const userId = req.user?.id || req.user?.userId;
+
+    let buyerType = req.query.buyerType || req.user?.buyerType;
+    if (!buyerType || String(buyerType).toLowerCase() !== "wholesale") {
+        try {
+            const profile = await customerDao.getCustomerProfileDao(userId);
+            if (profile && profile.length > 0 && profile[0].buyerType) {
+                buyerType = profile[0].buyerType;
+            }
+        } catch (e) {
+            // keep existing buyerType
+        }
+    }
+
+    const isWholesale = String(buyerType || "").trim().toLowerCase() === "wholesale";
+    const defaultGap = isWholesale ? 2 : 3;
+    const sheduleDate =
+        req.query.sheduleDate || req.params.sheduleDate || getColomboDatePlus(defaultGap);
+
+    const result = await RetailOrderDao.getOrdersForSheduleDate(sheduleDate, userId);
+
+    return res.status(200).json({
+        status: true,
+        sheduleDate: result.sheduleDate,
+        orderDate: result.orderDate,
+        count: result.count,
+        order: result.orders.length > 0 ? result.orders[0] : null,
+        orders: result.orders,
     });
 });

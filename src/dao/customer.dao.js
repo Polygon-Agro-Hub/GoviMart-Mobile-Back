@@ -2,9 +2,19 @@ const db = require("../startup/database");
 
 exports.getCustomerProfileDao = async (userId) => {
   const query =
-    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, email, buyerType, companyName, creditBalance, image FROM marketplaceusers WHERE id = ?";
-  const [results] = await db.marketPlace.promise().query(query, [userId]);
+    "SELECT id, cusId, title, firstName, lastName, phoneCode, phoneNumber, nic, docType, email, buyerType, companyName, creditBalance, image FROM marketplaceusers WHERE id = ?";
+  const [results] = await db.collectionofficer.promise().query(query, [userId]);
   return results;
+};
+
+/**
+ * Looks up a marketplace user by email address.
+ * Used by the Payments.lk card.saved webhook to resolve customerEmail → userId.
+ */
+exports.getCustomerByEmailDao = async (email) => {
+  const query = "SELECT id FROM marketplaceusers WHERE email = ? LIMIT 1";
+  const [results] = await db.collectionofficer.promise().query(query, [email]);
+  return results[0] || null;
 };
 
 exports.getSuggestionsDao = async () => {
@@ -224,6 +234,7 @@ exports.getAccountDetailsDao = async (userId) => {
       phoneCode2,
       phoneNumber2,
       nic,
+      docType,
       buyerType,
       email,
       companyPhoneCode,
@@ -244,14 +255,8 @@ exports.addAddressDao = async (customerId, addressData) => {
   const {
     buildingType,
     saveAs,
-    title,
-    fullName,
-    phonecode1,
-    phone1,
-    phonecode2,
-    phone2,
-    longitude,
     latitude,
+    longitude,
     buildingNo,
     buildingName,
     unitNo,
@@ -259,7 +264,41 @@ exports.addAddressDao = async (customerId, addressData) => {
     houseNo,
     streetName,
     city,
+    nearestCity,
   } = addressData;
+
+  const billingTitle = addressData.billingTitle || addressData.title || null;
+  const billingName = addressData.billingName || addressData.fullName || null;
+  const phonecode1 = addressData.billingPhoneCode1 || addressData.phonecode1 || "+94";
+  const phone1 = addressData.billingPhone1 || addressData.phone1 || null;
+
+  const phone2 = addressData.billingPhone2 || addressData.phone2 || null;
+  const phonecode2 = phone2
+    ? addressData.billingPhoneCode2 || addressData.phonecode2 || "+94"
+    : null;
+  const resolvedHouseNo = houseNo || buildingNo || null;
+  const resolvedCity = city || nearestCity || null;
+
+  // 1. Check for duplicate saveAs across both tables for this customer
+  const [[hDup]] = await db.collectionofficer
+    .promise()
+    .query(
+      `SELECT id FROM house WHERE customerId = ? AND LOWER(saveAs) = LOWER(?) LIMIT 1`,
+      [customerId, saveAs]
+    );
+  const [[aDup]] = await db.collectionofficer
+    .promise()
+    .query(
+      `SELECT id FROM apartment WHERE customerId = ? AND LOWER(saveAs) = LOWER(?) LIMIT 1`,
+      [customerId, saveAs]
+    );
+  if (hDup || aDup) {
+    const err = new Error(
+      `An address named "${saveAs}" already exists for this customer.`
+    );
+    err.code = "DUPLICATE_SAVE_AS";
+    throw err;
+  }
 
   if (buildingType === "Apartment") {
     const query = `
@@ -275,21 +314,21 @@ exports.addAddressDao = async (customerId, addressData) => {
       .query(query, [
         customerId,
         saveAs,
-        title,
-        fullName,
+        billingTitle,
+        billingName,
         phonecode1,
         phone1,
         phonecode2,
         phone2,
-        longitude,
-        latitude,
-        buildingNo,
-        buildingName,
-        unitNo,
-        floorNo,
-        houseNo,
-        streetName,
-        city,
+        longitude || null,
+        latitude || null,
+        buildingNo || null,
+        buildingName || null,
+        unitNo || null,
+        floorNo || null,
+        resolvedHouseNo,
+        streetName || null,
+        resolvedCity,
       ]);
     return { insertId: result.insertId, buildingType };
   }
@@ -307,17 +346,17 @@ exports.addAddressDao = async (customerId, addressData) => {
     .query(query, [
       customerId,
       saveAs,
-      title,
-      fullName,
+      billingTitle,
+      billingName,
       phonecode1,
       phone1,
       phonecode2,
       phone2,
-      longitude,
-      latitude,
-      houseNo,
-      streetName,
-      city,
+      longitude || null,
+      latitude || null,
+      resolvedHouseNo,
+      streetName || null,
+      resolvedCity,
     ]);
   return { insertId: result.insertId, buildingType };
 };
@@ -325,15 +364,10 @@ exports.addAddressDao = async (customerId, addressData) => {
 exports.updateAddressDao = async (addressId, customerId, addressData) => {
   const {
     buildingType,
+    originalBuildingType,
     saveAs,
-    title,
-    fullName,
-    phonecode1,
-    phone1,
-    phonecode2,
-    phone2,
-    longitude,
     latitude,
+    longitude,
     buildingNo,
     buildingName,
     unitNo,
@@ -341,8 +375,123 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
     houseNo,
     streetName,
     city,
+    nearestCity,
   } = addressData;
 
+  const billingTitle = addressData.billingTitle || addressData.title || null;
+  const billingName = addressData.billingName || addressData.fullName || null;
+  const phonecode1 = addressData.billingPhoneCode1 || addressData.phonecode1 || "+94";
+  const phone1 = addressData.billingPhone1 || addressData.phone1 || null;
+  const phone2 = addressData.billingPhone2 || addressData.phone2 || null;
+  const phonecode2 = phone2
+    ? addressData.billingPhoneCode2 || addressData.phonecode2 || "+94"
+    : null;
+  const resolvedHouseNo = houseNo || buildingNo || null;
+  const resolvedCity = city || nearestCity || null;
+
+  // Determine actual current building type in database if not provided
+  let currentType = originalBuildingType;
+  if (!currentType) {
+    const [[houseRow]] = await db.collectionofficer
+      .promise()
+      .query(`SELECT id FROM house WHERE id = ? AND customerId = ? LIMIT 1`, [addressId, customerId]);
+    currentType = houseRow ? "House" : "Apartment";
+  }
+
+  // Check for duplicate saveAs across both tables excluding this address
+  const [[hDup]] = await db.collectionofficer
+    .promise()
+    .query(
+      `SELECT id FROM house WHERE customerId = ? AND LOWER(saveAs) = LOWER(?) AND (id != ? OR ? != 'House') LIMIT 1`,
+      [customerId, saveAs, addressId, currentType]
+    );
+  const [[aDup]] = await db.collectionofficer
+    .promise()
+    .query(
+      `SELECT id FROM apartment WHERE customerId = ? AND LOWER(saveAs) = LOWER(?) AND (id != ? OR ? != 'Apartment') LIMIT 1`,
+      [customerId, saveAs, addressId, currentType]
+    );
+  if (hDup || aDup) {
+    const err = new Error(
+      `An address named "${saveAs}" already exists for this customer.`
+    );
+    err.code = "DUPLICATE_SAVE_AS";
+    throw err;
+  }
+
+  // Handle switching building type between House <-> Apartment
+  if (currentType !== buildingType) {
+    if (buildingType === "Apartment") {
+      // Switched from House -> Apartment: delete from house, insert into apartment
+      await db.collectionofficer
+        .promise()
+        .query(`DELETE FROM house WHERE id = ? AND customerId = ?`, [addressId, customerId]);
+
+      const insertQuery = `
+        INSERT INTO apartment (
+          customerId, saveAs, billingTitle, billingName,
+          billingPhoneCode1, billingPhone1, billingPhoneCode2, billingPhone2,
+          longitude, latitude, buildingNo, buildingName, unitNo, floorNo,
+          houseNo, streetName, city
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+      const [insertResult] = await db.collectionofficer
+        .promise()
+        .query(insertQuery, [
+          customerId,
+          saveAs,
+          billingTitle,
+          billingName,
+          phonecode1,
+          phone1,
+          phonecode2,
+          phone2,
+          longitude || null,
+          latitude || null,
+          buildingNo || null,
+          buildingName || null,
+          unitNo || null,
+          floorNo || null,
+          resolvedHouseNo,
+          streetName || null,
+          resolvedCity,
+        ]);
+      return { insertId: insertResult.insertId, buildingType: "Apartment", affectedRows: 1 };
+    } else {
+      // Switched from Apartment -> House: delete from apartment, insert into house
+      await db.collectionofficer
+        .promise()
+        .query(`DELETE FROM apartment WHERE id = ? AND customerId = ?`, [addressId, customerId]);
+
+      const insertQuery = `
+        INSERT INTO house (
+          customerId, saveAs, billingTitle, billingName,
+          billingPhoneCode1, billingPhone1, billingPhoneCode2, billingPhone2,
+          longitude, latitude, houseNo, streetName, city
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+      const [insertResult] = await db.collectionofficer
+        .promise()
+        .query(insertQuery, [
+          customerId,
+          saveAs,
+          billingTitle,
+          billingName,
+          phonecode1,
+          phone1,
+          phonecode2,
+          phone2,
+          longitude || null,
+          latitude || null,
+          resolvedHouseNo,
+          streetName || null,
+          resolvedCity,
+        ]);
+      return { insertId: insertResult.insertId, buildingType: "House", affectedRows: 1 };
+    }
+  }
+
+  // Same building type: regular update
   if (buildingType === "Apartment") {
     const query = `
       UPDATE apartment
@@ -356,21 +505,21 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
       .promise()
       .query(query, [
         saveAs,
-        title,
-        fullName,
+        billingTitle,
+        billingName,
         phonecode1,
         phone1,
         phonecode2,
         phone2,
-        longitude,
-        latitude,
-        buildingNo,
-        buildingName,
-        unitNo,
-        floorNo,
-        houseNo,
-        streetName,
-        city,
+        longitude || null,
+        latitude || null,
+        buildingNo || null,
+        buildingName || null,
+        unitNo || null,
+        floorNo || null,
+        resolvedHouseNo,
+        streetName || null,
+        resolvedCity,
         addressId,
         customerId,
       ]);
@@ -389,17 +538,17 @@ exports.updateAddressDao = async (addressId, customerId, addressData) => {
     .promise()
     .query(query, [
       saveAs,
-      title,
-      fullName,
+      billingTitle,
+      billingName,
       phonecode1,
       phone1,
       phonecode2,
       phone2,
-      longitude,
-      latitude,
-      houseNo,
-      streetName,
-      city,
+      longitude || null,
+      latitude || null,
+      resolvedHouseNo,
+      streetName || null,
+      resolvedCity,
       addressId,
       customerId,
     ]);
@@ -416,55 +565,179 @@ exports.deleteAddressDao = async (addressId, customerId, buildingType) => {
 };
 
 exports.updateUserDetailsDao = async (userId, userData) => {
-  const {
-    title,
-    firstName,
-    lastName,
-    phoneCode,
-    phoneNumber,
-    phoneCode2,
-    phoneNumber2,
-    nic,
-    email,
-    companyPhoneCode,
-    companyPhone,
-    companyName,
-    buyerType,
-  } = userData;
+  const allowedKeys = [
+    "title",
+    "firstName",
+    "lastName",
+    "phoneCode",
+    "phoneNumber",
+    "phoneCode2",
+    "phoneNumber2",
+    "nic",
+    "docType",
+    "email",
+    "companyPhoneCode",
+    "companyPhone",
+    "companyName",
+    "buyerType",
+    "image",
+  ];
 
+  const fieldsToUpdate = [];
+  const values = [];
+
+  for (const key of allowedKeys) {
+    if (userData[key] !== undefined) {
+      fieldsToUpdate.push(`${key} = ?`);
+      let val = userData[key];
+      if (key === "image") {
+        val = val && typeof val === "string" && val.trim() !== "" ? val.trim() : null;
+      }
+      values.push(val);
+    }
+  }
+
+  if (fieldsToUpdate.length === 0) {
+    return { affectedRows: 0 };
+  }
+
+  values.push(userId);
   const query = `
     UPDATE marketplaceusers
-    SET title = ?, firstName = ?, lastName = ?,
-        phoneCode = ?, phoneNumber = ?, phoneCode2 = ?, phoneNumber2 = ?,
-        nic = ?, email = ?, companyPhoneCode = ?, companyPhone = ?,
-        companyName = ?, buyerType = ?
+    SET ${fieldsToUpdate.join(", ")}
     WHERE id = ?
   `;
   const [result] = await db.collectionofficer
     .promise()
-    .query(query, [
-      title,
-      firstName,
-      lastName,
-      phoneCode,
-      phoneNumber,
-      phoneCode2,
-      phoneNumber2,
-      nic,
-      email,
-      companyPhoneCode,
-      companyPhone,
-      companyName,
-      buyerType,
-      userId,
-    ]);
+    .query(query, values);
   return result;
 };
 
 exports.deleteUserAccountDao = async (userId) => {
-  const query = `DELETE FROM marketplaceusers WHERE id = ?`;
-  const [result] = await db.collectionofficer.promise().query(query, [userId]);
-  return result;
+  let connection;
+  try {
+    connection = await db.collectionofficer.promise().getConnection();
+    await connection.beginTransaction();
+
+    // 1. Re-validate credit balance & processing orders within transaction
+    const [userRows] = await connection.query(
+      `SELECT creditBalance FROM marketplaceusers WHERE id = ? FOR UPDATE`,
+      [userId]
+    );
+
+    if (!userRows || userRows.length === 0) {
+      await connection.rollback();
+      return { affectedRows: 0 };
+    }
+
+    const creditBalance = Number(userRows[0].creditBalance || 0);
+    if (creditBalance < 0) {
+      await connection.rollback();
+      const error = new Error(
+        "You have a negative Polygon Wallet on your account. Please clear the outstanding balance before deleting your account."
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const [orderRows] = await connection.query(
+      `SELECT COUNT(o.id) AS processingCount
+       FROM orders o
+       JOIN processorders po ON po.orderId = o.id
+       WHERE o.userId = ?
+         AND (po.status IS NULL OR po.status NOT IN ('Delivered', 'Picked up', 'Return', 'Return Received', 'Cancelled'))`,
+      [userId]
+    );
+
+    const processingCount = Number(orderRows[0]?.processingCount || 0);
+    if (processingCount > 0) {
+      await connection.rollback();
+      const error = new Error(
+        "You have processing orders. Once all of them are completed, you may delete your account."
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // 2. Delete house and apartment records
+    await connection.query(`DELETE FROM house WHERE customerId = ?`, [userId]);
+    await connection.query(`DELETE FROM apartment WHERE customerId = ?`, [userId]);
+
+    // 3. Delete dashuserhouse and dashuserapartment records if applicable
+    try {
+      await connection.query(`DELETE FROM dashuserhouse WHERE userId = ?`, [userId]);
+    } catch (e) {
+      try {
+        await connection.query(`DELETE FROM dashuserhouse WHERE customerId = ?`, [userId]);
+      } catch (err) {
+        // Safe fallback if table/column does not exist
+      }
+    }
+
+    try {
+      await connection.query(`DELETE FROM dashuserapartment WHERE userId = ?`, [userId]);
+    } catch (e) {
+      try {
+        await connection.query(`DELETE FROM dashuserapartment WHERE customerId = ?`, [userId]);
+      } catch (err) {
+        // Safe fallback if table/column does not exist
+      }
+    }
+
+    // 4. Delete preferlist and excludelist records
+    await connection.query(`DELETE FROM preferlist WHERE userId = ?`, [userId]);
+    await connection.query(`DELETE FROM excludelist WHERE userId = ?`, [userId]);
+
+    // 5. Update marketplaceusers record: clear personal data, keep nic, created_at, cusId, id
+    // and update deletedAt = NOW(), isActive = 0
+    const updateQuery = `
+      UPDATE marketplaceusers
+      SET 
+        title = NULL,
+        firstName = NULL,
+        lastName = NULL,
+        phoneCode = NULL,
+        phoneNumber = NULL,
+        phoneCode2 = NULL,
+        phoneNumber2 = NULL,
+        buyerType = NULL,
+        email = NULL,
+        password = NULL,
+        image = NULL,
+        companyName = NULL,
+        companyPhoneCode = NULL,
+        companyPhone = NULL,
+        nearesCity = NULL,
+        creditBalance = 0,
+        creditLimit = 0,
+        creditLimitBonusTier = 0,
+        isMarketPlaceUser = 0,
+        isDashUser = 0,
+        firstTimeUser = 0,
+        isSubscribe = 0,
+        isPswUpdateed = 0,
+        isActive = 0,
+        deletedAt = NOW()
+      WHERE id = ?
+    `;
+    const [updateResult] = await connection.query(updateQuery, [userId]);
+
+    await connection.commit();
+    return updateResult;
+  } catch (err) {
+    if (connection) {
+      try {
+        await connection.rollback();
+      } catch (rollbackErr) {
+        console.error("❌ Error during rollback in deleteUserAccountDao:", rollbackErr);
+      }
+    }
+    throw err;
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
 };
 
 // Check if a phone number already belongs to another user (across phoneNumber, phoneNumber2, companyPhone)
@@ -528,6 +801,19 @@ exports.isNicTakenDao = async (userId, nic) => {
   return results.length > 0;
 };
 
+// Check if an email already belongs to another user
+exports.isEmailTakenDao = async (userId, email) => {
+  if (!email) return false;
+  const rawEmail = String(email).trim().toLowerCase();
+  const query = `
+    SELECT id FROM marketplaceusers
+    WHERE LOWER(TRIM(email)) = ? AND id != ?
+    LIMIT 1
+  `;
+  const [results] = await db.collectionofficer.promise().query(query, [rawEmail, userId]);
+  return results.length > 0;
+};
+
 // Update only the user's phone number (after OTP verification)
 exports.updateUserPhoneDao = async (userId, phoneCode, phoneNumber) => {
   const query = `
@@ -539,11 +825,15 @@ exports.updateUserPhoneDao = async (userId, phoneCode, phoneNumber) => {
   return result;
 };
 
-// Update user credit balance (clear balance or adjust)
+// Update user credit balance (clear negative balance or adjust)
 exports.updateCreditBalanceDao = async (userId, creditBalance) => {
+  // Settle negative credit balance cleanly to 0.00 without overshooting into positive credit on duplicate calls
   const query = `
     UPDATE marketplaceusers
-    SET creditBalance = creditBalance + ?
+    SET creditBalance = CASE 
+      WHEN creditBalance < 0 THEN LEAST(0.00, creditBalance + ?)
+      ELSE creditBalance 
+    END
     WHERE id = ?
   `;
   const [result] = await db.collectionofficer.promise().query(query, [creditBalance, userId]);
@@ -570,6 +860,58 @@ exports.updateProfileImageDao = async (userId, imageUrl) => {
     SET image = ?
     WHERE id = ?
   `;
-  const [result] = await db.marketPlace.promise().query(query, [imageUrl, userId]);
+  const [result] = await db.collectionofficer.promise().query(query, [imageUrl, userId]);
   return result;
+};
+
+// Check delete account eligibility (credit balance and processing orders)
+exports.getDeleteAccountStatusDao = async (userId) => {
+  const userQuery = `SELECT creditBalance FROM marketplaceusers WHERE id = ?`;
+  const [userResults] = await db.collectionofficer.promise().query(userQuery, [userId]);
+  const creditBalance = userResults.length > 0 ? Number(userResults[0].creditBalance || 0) : 0;
+
+  const ordersQuery = `
+    SELECT COUNT(o.id) AS processingCount
+    FROM orders o
+    JOIN processorders po ON po.orderId = o.id
+    WHERE o.userId = ?
+      AND (po.status IS NULL OR po.status NOT IN ('Delivered', 'Picked up','Return','Return Received','Cancelled'))
+  `;
+  const [ordersResults] = await db.collectionofficer.promise().query(ordersQuery, [userId]);
+  const processingCount = ordersResults.length > 0 ? Number(ordersResults[0].processingCount || 0) : 0;
+
+  return {
+    creditBalance,
+    hasNegativeCredit: creditBalance < 0,
+    processingCount,
+    hasProcessingOrders: processingCount > 0,
+  };
+};
+
+
+exports.getDeliveryEligibilityDao = async (userId) => {
+  const deliveredQuery = `
+    SELECT COUNT(*) AS deliveredCount
+    FROM orders o
+    JOIN processorders po ON po.orderId = o.id
+    WHERE o.userId = ? AND po.status = 'Delivered'
+    LIMIT 1
+  `;
+  const [[deliveredResult]] = await db.collectionofficer
+    .promise()
+    .query(deliveredQuery, [userId]);
+
+  const userQuery = `
+    SELECT nearesCity AS nearestCity
+    FROM marketplaceusers
+    WHERE id = ?
+  `;
+  const [[userResult]] = await db.collectionofficer
+    .promise()
+    .query(userQuery, [userId]);
+
+  return {
+    hasDeliveredOrder: Number(deliveredResult?.deliveredCount || 0) > 0,
+    nearestCity: userResult?.nearestCity || null,
+  };
 };

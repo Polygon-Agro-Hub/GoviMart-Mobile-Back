@@ -14,16 +14,16 @@ const createPool = (database) => {
     database: database,
     charset: "utf8mb4",
     waitForConnections: true,
-    connectionLimit: 10,
-    maxIdle: 6,
+    connectionLimit: parseInt(process.env.DB_CONNECTION_LIMIT || "30", 10),
+    maxIdle: parseInt(process.env.DB_MAX_IDLE || "15", 10),
     queueLimit: 0,
     enableKeepAlive: true,
     keepAliveInitialDelay: 0,
   });
-  
+
   // Track the pool for cleanup
   pools.push(pool);
-  
+
   return pool;
 };
 
@@ -38,13 +38,13 @@ const closeAllPools = async () => {
     return new Promise((resolve) => {
       pool.end((err) => {
         if (err) {
-          console.error('Error closing database pool:', err);
+          console.error('❌ Error closing database pool:', err);
         }
         resolve();
       });
     });
   });
-  
+
   await Promise.all(closePromises);
   // Clear the pools array
   pools.length = 0;
@@ -55,7 +55,7 @@ const closePool = async (pool) => {
   return new Promise((resolve) => {
     pool.end((err) => {
       if (err) {
-        console.error('Error closing pool:', err);
+        console.error('❌ Error closing pool:', err);
       }
       // Remove from pools array
       const index = pools.indexOf(pool);
@@ -67,9 +67,9 @@ const closePool = async (pool) => {
   });
 };
 
-module.exports = { 
-  plantcare, 
-  collectionofficer, 
+module.exports = {
+  plantcare,
+  collectionofficer,
   admin,
   closeAllPools,
   closePool

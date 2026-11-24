@@ -57,6 +57,9 @@ router.delete("/delete-address/:addressId", authMiddleware, customerEp.deleteAdd
 // Update User Details
 router.put("/update-details", authMiddleware, customerEp.updateUserDetails);
 
+// Get Delete Account Status (Credit Balance & Active Orders)
+router.get("/delete-account-status", authMiddleware, customerEp.getDeleteAccountStatus);
+
 // Delete User Account
 router.delete("/delete-account", authMiddleware, customerEp.deleteUserAccount);
 
@@ -71,5 +74,8 @@ router.post("/resend-phone-change-otp", authMiddleware, customerEp.resendPhoneCh
 
 // Update / Clear Credit Balance
 router.put("/update-credit-balance", authMiddleware, customerEp.updateCreditBalance);
+
+// Check if user has a delivered order
+router.get("/delivery-eligibility", authMiddleware, customerEp.getDeliveryEligibility);
 
 module.exports = router;

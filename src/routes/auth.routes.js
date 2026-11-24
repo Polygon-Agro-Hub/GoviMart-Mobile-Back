@@ -3,6 +3,7 @@ const router = express.Router();
 const userAuthEp = require('../endpoint/auth.ep');
 const loginRateLimiter = require('../middlewares/rateLimiter.middleware');
 const authMiddleware = require('../middlewares/auth.middleware');
+const { brUpload } = require('../middlewares/brUpload.middleware');
 
 /**
  * @openapi
@@ -38,6 +39,8 @@ const authMiddleware = require('../middlewares/auth.middleware');
  *         description: Unauthorized / Invalid credentials.
  */
 router.post('/login', loginRateLimiter, userAuthEp.login);
+router.post('/resubmit-wholesale-br', brUpload.single('brDocument'), userAuthEp.resubmitWholesaleBR);
+router.post('/upload-wholesale-br', brUpload.single('brDocument'), userAuthEp.uploadWholesaleBR);
 
 /**
  * @openapi
@@ -132,7 +135,7 @@ router.post('/city-availability', userAuthEp.updateCityAvailability);
  *                 example: "+94"
  *               phoneNumber:
  *                 type: string
- *                 example: "770111999"
+ *                 example: "114313433"
  *               buyerType:
  *                 type: string
  *                 enum: [Retail, Wholesale]
@@ -322,7 +325,11 @@ router.post('/logout', userAuthEp.logout);
  *       401:
  *         description: Invalid or expired refresh token.
  */
-router.post('/refresh-token', userAuthEp.refreshToken);
+// Forgot Password Routes
+router.post('/forgot-password/request-otp', userAuthEp.forgotPasswordRequestOtp);
+router.post('/forgot-password/resend-otp', userAuthEp.forgotPasswordResendOtp);
+router.post('/forgot-password/verify-otp', userAuthEp.forgotPasswordVerifyOtp);
+router.post('/forgot-password/reset-password', userAuthEp.forgotPasswordReset);
 
 // Update / Clear Credit Balance (matches Web API /api/auth/update-credit-balance)
 const customerEp = require('../endpoint/customer.ep');

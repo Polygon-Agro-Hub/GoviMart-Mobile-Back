@@ -9,17 +9,20 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
         m.normalPrice,
         m.discountedPrice,
         m.discount,
+        m.pkgBasePrice,
         m.comPrice,
         m.promo,
         m.unitType,
         m.startValue,
         m.changeby,
+        m.maxQuantity,
         m.displayType,
         m.tags,
         v.varietyNameEnglish,
         v.varietyNameSinhala,
         v.varietyNameTamil,
         v.image,
+        v.bgColor,
         c.cropNameEnglish,
         c.cropNameSinhala,
         c.cropNameTamil,
@@ -28,6 +31,7 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
       JOIN plant_care.cropvariety v ON m.varietyId = v.id
       JOIN plant_care.cropgroup c ON v.cropGroupId = c.id
       WHERE LOWER(m.category) = LOWER(?)
+        AND m.isEnable = 1
     `;
 
     const params = [buyerType || "Retail"];
@@ -71,16 +75,20 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
       } else {
         // Format the results to handle discount price formatting and calculate discount percentage
         const formattedResults = results.map((item) => {
-          // Calculate discount percentage
+          // Calculate discount percentage using numeric float parsing (avoiding string comparison)
           let discountPercentage = null;
+          const normalPrice = parseFloat(item.normalPrice);
+          const discountedPrice = parseFloat(item.discountedPrice);
+
           if (
-            item.normalPrice &&
-            item.discountedPrice &&
-            item.normalPrice > item.discountedPrice
+            !isNaN(normalPrice) &&
+            !isNaN(discountedPrice) &&
+            normalPrice > 0 &&
+            discountedPrice > 0 &&
+            normalPrice > discountedPrice
           ) {
             const discount =
-              ((item.normalPrice - item.discountedPrice) / item.normalPrice) *
-              100;
+              ((normalPrice - discountedPrice) / normalPrice) * 100;
             // Format percentage: if whole number, show as integer; if decimal, show with decimals
             discountPercentage =
               discount % 1 === 0
@@ -88,11 +96,14 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
                 : Math.round(discount * 100) / 100;
           }
 
+          const parsedDiscounted = parseFloat(item.discountedPrice);
           return {
             ...item,
             discountedPrice:
-              item.discountedPrice % 1 === 0
-                ? parseInt(item.discountedPrice)
+              !isNaN(parsedDiscounted)
+                ? parsedDiscounted % 1 === 0
+                  ? parseInt(parsedDiscounted, 10)
+                  : parsedDiscounted
                 : item.discountedPrice,
             discount: discountPercentage,
           };
@@ -106,7 +117,7 @@ exports.getProductsByCategoryDao = (category, search, buyerType = "Retail") => {
 exports.getAllSlidesDao = () => {
   return new Promise((resolve, reject) => {
     db.collectionofficer.query(
-      "SELECT * FROM banners  ORDER BY createdAt DESC",
+      "SELECT * FROM banners ORDER BY COALESCE(indexId, 999999) ASC, createdAt DESC",
       (err, results) => {
         if (err) return reject(err);
         resolve(results);
@@ -123,7 +134,8 @@ exports.getProductsByCategoryDaoWholesale = (category, search) => {
 exports.getAllProductDao = (search) => {
   return new Promise((resolve, reject) => {
     let sql = `
-        SELECT mp.id, mp.displayName, mp.image, (mp.productPrice + mp.packingFee + mp.serviceFee) AS subTotal
+        SELECT mp.id, mp.displayName, mp.image, (mp.productPrice + mp.packingFee + mp.serviceFee) AS subTotal,
+               mp.packageType, DATE_FORMAT(mp.endDate, '%Y-%m-%d') AS endDate
         FROM marketplacepackages mp
         LEFT JOIN definepackage dp ON mp.id = dp.packageId
         WHERE mp.status = 'Enabled' 
@@ -138,7 +150,7 @@ exports.getAllProductDao = (search) => {
     }
 
     sql += ` 
-    GROUP BY mp.id, mp.displayName, mp.image
+    GROUP BY mp.id, mp.displayName, mp.image, mp.packageType, mp.endDate
     ORDER BY mp.displayName ASC`;
 
     db.collectionofficer.query(sql, params, (err, results) => {
@@ -203,17 +215,17 @@ exports.checkAvailabilityDao = (productIds, packageIds) => {
 exports.getAllPackageItemsDao = (packageId) => {
   return new Promise((resolve, reject) => {
     const sql = `
-        SELECT 
-            pd.id, 
-            pd.packageId, 
-            pd.qty as quantity, 
-            pt.typeName as displayName,
-            pt.shortCode,
-            pd.productTypeId,
-            pd.createdAt
+        SELECT
+            pd.id,
+            pd.packageId,
+            pd.qty AS quantity,
+            pt.typeName AS displayName,
+            pt.typeName AS itemName,
+            pd.productTypeId
         FROM packagedetails pd
-        LEFT JOIN producttypes pt ON pd.productTypeId = pt.id
-        WHERE pd.packageId = ?;
+        LEFT JOIN producttypes pt ON pt.id = pd.productTypeId
+        WHERE pd.packageId = ?
+        ORDER BY pt.typeName ASC;
         `;
     db.collectionofficer.query(sql, [packageId], (err, results) => {
       if (err) {
@@ -224,3 +236,130 @@ exports.getAllPackageItemsDao = (packageId) => {
     });
   });
 };
+
+exports.getPackageDetailsByIdDao = (packageId) => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT
+        id,
+        displayName,
+        image,
+        description,
+        packageType,
+        DATE_FORMAT(startDate, '%Y-%m-%d') AS startDate,
+        DATE_FORMAT(endDate, '%Y-%m-%d') AS endDate,
+        (productPrice + packingFee + serviceFee) AS subTotal
+      FROM marketplacepackages
+      WHERE id = ?
+    `;
+    db.collectionofficer.query(sql, [packageId], (err, results) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(results[0] || null);
+      }
+    });
+  });
+};
+
+/**
+ * Get products filtered by productTypeId using producttypes table
+ */
+exports.getProductsByProductTypeDao = (productTypeId, buyerType = "Retail") => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT 
+        m.id,
+        m.displayName,
+        m.normalPrice,
+        m.discountedPrice,
+        m.discount,
+        m.pkgBasePrice,
+        m.comPrice,
+        m.promo,
+        m.unitType,
+        m.startValue,
+        m.changeby,
+        m.maxQuantity,
+        m.displayType,
+        m.tags,
+        m.isEnable,
+        m.category AS marketplaceCategory,
+        m.productTypeId,
+        pt.id AS typeId,
+        pt.typeName AS productTypeName,
+        pt.shortCode AS productTypeShortCode,
+        v.varietyNameEnglish,
+        v.image,
+        c.cropNameEnglish,
+        c.category
+      FROM marketplaceitems m
+      INNER JOIN producttypes pt ON m.productTypeId = pt.id
+      LEFT JOIN plant_care.cropvariety v ON m.varietyId = v.id
+      LEFT JOIN plant_care.cropgroup c ON v.cropGroupId = c.id
+      WHERE (m.productTypeId = ? OR pt.typeName = ? OR pt.shortCode = ?)
+        AND (m.isEnable = 1 OR m.isEnable IS NULL)
+        AND LOWER(m.category) = LOWER(?)
+      ORDER BY m.displayName ASC
+    `;
+    db.collectionofficer.query(
+      sql,
+      [productTypeId, productTypeId, productTypeId, buyerType || "Retail"],
+      (err, results) => {
+        if (err) return reject(err);
+        resolve(results || []);
+      }
+    );
+  });
+};
+
+/**
+ * Get all product types from producttypes table
+ */
+exports.getProductTypesDao = () => {
+  return new Promise((resolve, reject) => {
+    const sql = `SELECT id, typeName, shortCode FROM producttypes ORDER BY id ASC`;
+    db.collectionofficer.query(sql, [], (err, results) => {
+      if (err) return reject(err);
+      resolve(results || []);
+    });
+  });
+};
+
+/**
+ * Enabled marketplace items that belong to a product type.
+ * Used by the package "what's included" popup.
+ */
+exports.getEnabledItemsByProductTypeDao = (productTypeId, buyerType = "Retail") => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT
+        m.id,
+        m.displayName
+      FROM marketplaceitems m
+      WHERE m.productTypeId = ?
+        AND m.isEnable = 1
+        AND LOWER(m.category) = LOWER(?)
+      ORDER BY m.displayName ASC
+    `;
+    db.collectionofficer.query(
+      sql,
+      [productTypeId, buyerType || "Retail"],
+      (err, results) => {
+        if (err) return reject(err);
+
+        // remove duplicate display names
+        const seen = new Set();
+        const unique = (results || []).filter((r) => {
+          const key = String(r.displayName || "").trim().toLowerCase();
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        resolve(unique);
+      },
+    );
+  });
+};
+

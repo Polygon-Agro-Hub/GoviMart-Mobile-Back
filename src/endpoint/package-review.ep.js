@@ -1,0 +1,417 @@
+const asyncHandler = require("express-async-handler");
+const packageReviewDao = require("../dao/package-review.dao");
+const orderSmsService = require("../services/sms/order-sms.service");
+
+// Package-review features (replace/reset/confirm-review/packing-limit/cancel-order)
+// are Retail-only. The two order-confirmation endpoints (/confirm-order,
+// /cancel-before-confirm) are shared by both Retail and Wholesale.
+const ensureRetailUser = (req, res) => {
+    const buyerType = req.user?.buyerType;
+    if (!buyerType || buyerType.toLowerCase() !== "retail") {
+        res.status(403).json({
+            status: false,
+            message: "Package review feature is only available for Retail users.",
+        });
+        return false;
+    }
+    return true;
+};
+
+// The auth middleware may expose the id as `userId` or `id`; accept both.
+const getUserId = (req) => req.user?.userId ?? req.user?.id;
+
+/**
+ * GET /api/order/package/review/:orderId
+ * Fetches the complete package review data for an order or process order.
+ */
+exports.getOrderPackageReview = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
+    const { orderId } = req.params;
+    const userId = getUserId(req);
+
+    if (!orderId) {
+        return res.status(400).json({
+            status: false,
+            message: "Order ID is required",
+        });
+    }
+
+    const reviewData = await packageReviewDao.getOrderPackageReviewDao(orderId, userId);
+
+    if (!reviewData) {
+        return res.status(404).json({
+            status: false,
+            message: "Order package details not found for review",
+        });
+    }
+
+    return res.status(200).json({
+        status: true,
+        message: "Package review details fetched successfully",
+        data: reviewData,
+    });
+});
+
+/**
+ * POST /api/order/package/replace-item
+ * Replaces an item in an order package.
+ */
+exports.replacePackageItem = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
+    const userId = getUserId(req);
+    const { orderPackageId, replceId, newProductId, productType, newQty, newPrice } = req.body;
+
+    if (!orderPackageId || !newProductId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderPackageId and newProductId are required",
+        });
+    }
+
+    try {
+        const result = await packageReviewDao.replacePackageItemDao({
+            orderPackageId,
+            userId,
+            replceId,
+            newProductId,
+            productType,
+            newQty: parseFloat(newQty) || 1,
+            newPrice: parseFloat(newPrice) || 0,
+        });
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+            data: result,
+        });
+    } catch (err) {
+        console.error("❌ Replace package item error:", err);
+        return res.status(400).json({
+            status: false,
+            message: err.message || "Failed to replace package item",
+        });
+    }
+});
+
+/**
+ * POST /api/order/package/reset-item
+ * Resets a replaced item back to its default baseline state.
+ */
+exports.resetPackageItem = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
+    const userId = getUserId(req);
+    const { orderPackageId, replceId, originalBaselineId } = req.body;
+
+    if (!orderPackageId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderPackageId is required",
+        });
+    }
+
+    try {
+        const result = await packageReviewDao.resetPackageItemDao({
+            orderPackageId,
+            userId,
+            replceId,
+            originalBaselineId,
+        });
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+        });
+    } catch (err) {
+        console.error("❌ Reset package item error:", err);
+        return res.status(400).json({
+            status: false,
+            message: err.message || "Failed to reset package item",
+        });
+    }
+});
+
+/**
+ * POST /api/order/package/confirm-review
+ * Finalizes review: syncs package items, applies replacements, deletes removed
+ * ala carte rows, UPDATES edited existing ala carte rows (qty/unit/normalPrice/
+ * price/discount), inserts/merges newly added ala carte items, locks packages
+ * and updates order totals / credit.
+ */
+exports.confirmPackageReview = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
+    const userId = getUserId(req);
+    const {
+        orderId,
+        processOrderId,
+        lockNow = false,
+        additionalAmount = 0,
+        newScheduleDate = null,
+        paymentMethod = null,
+        isPaid = null,
+        newTotal = null,
+        creditToAdd = 0,
+        replacements = [],
+        additionalItems = [],
+        updatedAdditionalItems = [],
+        deletedAdditionalItemIds = [],
+        packages = [],
+        packageReviewValues = [],
+    } = req.body;
+
+    if (!orderId && !processOrderId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderId or processOrderId is required",
+        });
+    }
+
+    try {
+        // Validate remaining packing slots count: if 0, return error
+        try {
+            const slotInfo = await packageReviewDao.getPackingSlotAvailabilityDao(
+                newScheduleDate || null,
+                processOrderId || orderId,
+            );
+            if (slotInfo && slotInfo.remaining <= 0) {
+                return res.status(400).json({
+                    status: false,
+                    message: "Sorry, no packing slots are available for this schedule date. We cannot accept any more orders.",
+                });
+            }
+        } catch (valErr) {
+            console.warn("⚠️ [confirmPackageReview Endpoint] Slot validation check error:", valErr.message);
+        }
+
+        const result = await packageReviewDao.confirmPackageReviewDao({
+            orderId,
+            processOrderId,
+            userId,
+            lockNow,
+            additionalAmount,
+            newScheduleDate,
+            paymentMethod,
+            isPaid,
+            newTotal,
+            creditToAdd,
+            replacements,
+            additionalItems,
+            updatedAdditionalItems,
+            deletedAdditionalItemIds,
+            packages,
+            packageReviewValues, 
+        });
+
+        // "Order confirmed" SMS after the review is committed. Best-effort:
+        // runs in the background and can never fail the review response.
+        (async () => {
+            try {
+                const resolved = await orderSmsService.resolveOrderDetails(
+                    processOrderId || orderId,
+                    userId,
+                );
+                const invNo = resolved.invNo;
+
+                if (!invNo) {
+                    console.warn("⚠️ [confirmPackageReview] No invoice number, SMS skipped");
+                    return;
+                }
+
+                const smsRes = await orderSmsService.sendOrderConfirmedSms({
+                    userId,
+                    invNo,
+                });
+                console.log(`[confirmPackageReview] Confirmed SMS for ${invNo}:`, smsRes);
+            } catch (smsErr) {
+                console.warn("⚠️ [confirmPackageReview] Confirmation SMS error:", smsErr.message);
+            }
+        })();
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+        });
+    } catch (err) {
+        console.error("❌ [confirmPackageReview Endpoint] Error finalize package review:", err);
+        return res.status(500).json({
+            status: false,
+            message: err.message || "Failed to finalize package review",
+        });
+    }
+});
+
+/**
+ * GET /api/order/package/packing-limit
+ * Returns current packing target limit and remaining available order slots.
+ */
+exports.getPackingTargetSlots = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
+    const { date, processOrderId } = req.query;
+
+    const data = await packageReviewDao.getPackingSlotAvailabilityDao(date, processOrderId);
+
+    return res.status(200).json({
+        status: true,
+        message: "Packing slot availability fetched successfully",
+        data,
+    });
+});
+
+/**
+ * POST /api/order/package/cancel-order
+ * Cancel order and refund paid amount as credit balance.
+ */
+exports.cancelPackageOrder = asyncHandler(async (req, res) => {
+    if (!ensureRetailUser(req, res)) return;
+
+    const userId = getUserId(req);
+    const { orderId, processOrderId } = req.body;
+
+    if (!userId) {
+        return res.status(401).json({
+            status: false,
+            message: "Unauthorized",
+        });
+    }
+
+    if (!orderId && !processOrderId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderId or processOrderId is required",
+        });
+    }
+
+    try {
+        const result = await packageReviewDao.cancelOrderDao({
+            orderId,
+            processOrderId,
+            userId,
+        });
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+            data: result,
+        });
+    } catch (error) {
+        console.error("❌ [cancelPackageOrder] Error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to cancel order",
+        });
+    }
+});
+
+/**
+ * POST /api/order/confirm-order
+ * Available to BOTH Retail and Wholesale users.
+ * Confirms order with live marketplace prices, updating orderadditionalitems,
+ * processorders (fullTotal, total, discount, amount, moneyPaid), and orders (fullTotal, total, discount).
+ */
+exports.confirmOrderWithLivePrices = asyncHandler(async (req, res) => {
+    // Open to both Retail and Wholesale users – no ensureRetailUser check here.
+    const userId = getUserId(req);
+    const { orderId, processOrderId, newTotal, isPaid = null, amount = null, moneyPaid = null } = req.body;
+
+    if (!orderId && !processOrderId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderId or processOrderId is required",
+        });
+    }
+
+    try {
+        const result = await packageReviewDao.confirmOrderWithLivePricesDao({
+            orderId,
+            processOrderId,
+            userId,
+            newTotal: amount || moneyPaid || newTotal,
+            isPaid,
+        });
+
+        // "Order confirmed" SMS: sent ONLY here, right after the customer accepts
+        // (processorders.isConfirmed = 1 has just been committed). Best-effort.
+        (async () => {
+            try {
+                // Use the exact invoice that was confirmed (returned by the DAO)
+                let invNo = result.invNo;
+
+                // Fallback lookup only if the DAO did not return it
+                if (!invNo) {
+                    const resolved = await orderSmsService.resolveOrderDetails(
+                        result.processOrderId || processOrderId || orderId,
+                        userId
+                    );
+                    invNo = resolved.invNo;
+                }
+
+                if (!invNo) {
+                    console.warn("⚠️ [confirmOrderWithLivePrices] No invoice number, SMS skipped");
+                    return;
+                }
+
+                const smsRes = await orderSmsService.sendOrderConfirmedSms({ userId, invNo });
+                console.log(`[confirmOrderWithLivePrices] Confirmed SMS for ${invNo}:`, smsRes);
+            } catch (smsErr) {
+                console.warn("⚠️ [confirmOrderWithLivePrices] Confirmation SMS error:", smsErr.message);
+            }
+        })();
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+            data: result,
+        });
+    } catch (error) {
+        console.error("❌ [confirmOrderWithLivePrices] Error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to confirm order with live prices",
+        });
+    }
+});
+
+
+exports.cancelOrderBeforeConfirm = asyncHandler(async (req, res) => {
+    // Open to both Retail and Wholesale users – no ensureRetailUser check here.
+    const userId = getUserId(req);
+    const { orderId, processOrderId } = req.body;
+
+    if (!userId) {
+        return res.status(401).json({
+            status: false,
+            message: "Unauthorized",
+        });
+    }
+
+    if (!orderId && !processOrderId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderId or processOrderId is required",
+        });
+    }
+
+    try {
+        const result = await packageReviewDao.cancelOrderBeforeConfirmDao({
+            orderId,
+            processOrderId,
+            userId,
+        });
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+            data: result,
+        });
+    } catch (error) {
+        console.error("❌ [cancelOrderBeforeConfirm] Error:", error);
+        return res.status(400).json({
+            status: false,
+            message: error.message || "Failed to cancel order",
+        });
+    }
+});
