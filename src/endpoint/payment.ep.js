@@ -264,6 +264,18 @@ exports.handlePaymentsLkWebhook = asyncHandler(async (req, res) => {
           event.userId,
           parseFloat(event.amount)
         );
+      } else if (
+        (event.orderId && (event.orderId.startsWith("SC_") || event.orderId.startsWith("CARDSAVE_"))) ||
+        event.paymentType === "save_card"
+      ) {
+        console.log(
+          `[Payments.lk Webhook] Auto-refunding Rs. 10 card setup verification for payment ${event.paymentId}`
+        );
+        try {
+          await strategy.refundPayment(event.paymentId, null, "Card verification auto-refund");
+        } catch (refErr) {
+          console.warn("⚠️ [Payments.lk Webhook] Auto-refund error:", refErr.message);
+        }
       } else if (event.orderId) {
         console.log(
           `[Payments.lk Webhook] Settling order payment for identifier: ${event.orderId}, payment_id: ${event.paymentId}`
@@ -527,9 +539,29 @@ exports.syncCheckout = asyncHandler(async (req, res) => {
         );
         await customerDao.updateCreditBalanceDao(userId, parseFloat(amountInLkr));
       }
+    } else if (
+      (isCompleted || payment.status === "succeeded") &&
+      (reference.startsWith("SC_") || reference.startsWith("CARDSAVE_") || String(checkout?.description || "").includes("Save Card"))
+    ) {
+      // Standalone card setup verification: immediately auto-refund the Rs. 10
+      const paymentIdToRefund = payment.id || checkout?.payment?.id;
+      if (paymentIdToRefund) {
+        console.log(
+          `[Sync Checkout] Auto-refunding Rs. 10 card setup verification for payment ${paymentIdToRefund}`
+        );
+        try {
+          await strategy.refundPayment(
+            paymentIdToRefund,
+            payment.amountCents || 1000,
+            "Card verification auto-refund"
+          );
+        } catch (refErr) {
+          console.warn("⚠️ [Sync Checkout] Auto-refund error:", refErr.message);
+        }
+      }
     } else if (isCompleted || payment.status === "succeeded") {
       const orderIdentifier = checkout?.orderId || checkout?.metadata?.orderId || payment?.orderId;
-      if (orderIdentifier) {
+      if (orderIdentifier && !orderIdentifier.startsWith("SC_") && !orderIdentifier.startsWith("CARDSAVE_")) {
         console.log(
           `[Sync Checkout] Auto-marking order paid for ${orderIdentifier} by Rs. ${amountInLkr}`
         );

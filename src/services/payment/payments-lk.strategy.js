@@ -186,6 +186,40 @@ class PaymentsLkStrategy extends PaymentStrategy {
   }
 
   /**
+   * Issues a refund for a payment via Payments.lk API
+   * POST /v1/refunds
+   */
+  async refundPayment(paymentId, amountCents = null, reason = "verification_reversal") {
+    this._ensureSecretKey();
+    if (!paymentId) throw new Error("paymentId is required for refund");
+
+    const body = { paymentId, reason };
+    if (amountCents !== null && Number(amountCents) > 0) {
+      body.amountCents = Number(amountCents);
+    }
+
+    const idempotencyKey = `ref-${paymentId}-${Date.now()}`;
+    const response = await fetch(`${this.apiUrl}/refunds`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.secretKey}`,
+        "Idempotency-Key": idempotencyKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      console.warn("⚠️ [Payments.lk Refund Failed]:", data);
+      throw new Error(data?.message || `Refund failed with status ${response.status}`);
+    }
+
+    console.log(`[Payments.lk Refund] Refund successfully created: ${data.id} for payment ${paymentId}`);
+    return data;
+  }
+
+  /**
    * Fetches real checkout details directly from Payments.lk API and verifies card saving
    */
   async verifyAndSyncCheckout(checkoutId, userId, clientCardHolder = null) {

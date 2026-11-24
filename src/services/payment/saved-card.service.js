@@ -45,10 +45,6 @@ class SavedCardService {
    */
   async getCard(userId, userEmail = null) {
     const email = await this._resolveEmail(userId, userEmail);
-    if (!email) {
-      console.log(`[SavedCardService] No customer email found for user ${userId} — no cards on file.`);
-      return null;
-    }
 
     try {
       const paymentsLkStrategy = paymentGatewayFactory.getGateway("payments_lk");
@@ -57,29 +53,68 @@ class SavedCardService {
       const secretKey = paymentsLkStrategy.secretKey;
       const apiUrl = paymentsLkStrategy.apiUrl;
 
-      // Query Payments.lk API: newest first, filtered by customer email
-      const queryUrl = `${apiUrl}/cards?customerEmail=${encodeURIComponent(email)}&limit=5`;
-      const response = await fetch(queryUrl, {
-        headers: { Authorization: `Bearer ${secretKey}` },
-      });
+      let activeCard = null;
 
-      if (!response.ok) {
-        console.warn(`⚠️ [SavedCardService] Payments.lk GET /cards returned HTTP ${response.status}`);
-        return null;
+      // 1. Direct search by customerEmail (fastest)
+      if (email) {
+        const queryUrl = `${apiUrl}/cards?customerEmail=${encodeURIComponent(email)}&limit=5`;
+        const response = await fetch(queryUrl, {
+          headers: { Authorization: `Bearer ${secretKey}` },
+        });
+
+        if (response.ok) {
+          const listData = await response.json();
+          const cards = listData?.data || [];
+          activeCard = cards.find((c) => c.active !== false && !c.retiredAt);
+        }
       }
 
-      const listData = await response.json();
-      const cards = listData?.data || [];
+      // 2. Fallback search: If email was different or not found, match by payment reference in recent active cards
+      if (!activeCard && userId) {
+        console.log(`[SavedCardService] Checking recent cards vault by payment reference for userId ${userId}...`);
+        try {
+          const allCardsRes = await fetch(`${apiUrl}/cards?limit=25`, {
+            headers: { Authorization: `Bearer ${secretKey}` },
+          });
+          if (allCardsRes.ok) {
+            const allCardsData = await allCardsRes.json();
+            const candidateCards = (allCardsData?.data || []).filter((c) => c.active !== false && !c.retiredAt);
+            for (const cand of candidateCards) {
+              if (cand.paymentId) {
+                const pRes = await fetch(`${apiUrl}/payments/${cand.paymentId}`, {
+                  headers: { Authorization: `Bearer ${secretKey}` },
+                });
+                if (pRes.ok) {
+                  const paymentData = await pRes.json();
+                  const ref = String(paymentData.reference || "");
+                  const orderId = String(paymentData.orderId || "");
+                  if (
+                    ref.includes(`_${userId}_`) ||
+                    ref.startsWith(`CARDSAVE_${userId}`) ||
+                    ref.startsWith(`SC_${userId}`) ||
+                    ref.startsWith(`ORD_${userId}`) ||
+                    orderId.includes(`_${userId}_`)
+                  ) {
+                    activeCard = cand;
+                    console.log(`[SavedCardService] Found active card via payment reference ${ref}: ${cand.id}`);
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        } catch (fbErr) {
+          console.warn("⚠️ [SavedCardService] Fallback vault search error:", fbErr.message);
+        }
+      }
 
-      // Find the active card on file (exclude retired/removed cards)
-      const activeCard = cards.find((c) => c.active !== false && !c.retiredAt);
       if (!activeCard) {
-        console.log(`[SavedCardService] No active card on file in Payments.lk for ${email}`);
+        console.log(`[SavedCardService] No active card on file in Payments.lk for user ${userId} (${email || "no-email"})`);
         return null;
       }
 
       console.log(
-        `[SavedCardService] Active card on file in Payments.lk: ${activeCard.id} (${activeCard.scheme} •••• ${activeCard.last4}) for ${email}`
+        `[SavedCardService] Active card on file in Payments.lk: ${activeCard.id} (${activeCard.scheme} •••• ${activeCard.last4}) for user ${userId}`
       );
 
       return {
@@ -89,7 +124,7 @@ class SavedCardService {
         userId: userId || "current",
         scheme: (activeCard.scheme || "visa").toLowerCase(),
         last4: String(activeCard.last4 || "0000"),
-        cardHolder: activeCard.customerName || activeCard.cardHolder || activeCard.customerEmail || email,
+        cardHolder: activeCard.customerName || activeCard.cardHolder || activeCard.customerEmail || email || "Cardholder",
         expiryMonth: String(activeCard.expiry?.month || "01").padStart(2, "0"),
         expiryYear: String(activeCard.expiry?.year || "39").slice(-2),
         isDefault: true,
@@ -154,7 +189,13 @@ class SavedCardService {
       return await paymentsLkStrategy.deleteSavedCard(cardIdOrToken);
     }
 
-    // 2. Otherwise, resolve customer email and delete all active cards on file for that customer in Payments.lk
+    // 2. Otherwise, find active card for this user using getCard (which handles both email & payment ref)
+    const existing = await this.getCard(userId, userEmail);
+    if (existing && existing.id) {
+      console.log(`[SavedCardService] Deleting user's active card ${existing.id} from Payments.lk vault...`);
+      return await paymentsLkStrategy.deleteSavedCard(existing.id);
+    }
+
     const email = await this._resolveEmail(userId, userEmail);
     if (!email) {
       console.warn("⚠️ [SavedCardService] Cannot remove card: customer email not found.");
