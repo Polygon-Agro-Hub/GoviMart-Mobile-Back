@@ -1981,12 +1981,17 @@ exports.markOrderPaidDao = async (identifier, arg1 = null, arg2 = null) => {
     try {
         connection = await db.collectionofficer.promise().getConnection();
         const [result] = await connection.query(
-            `UPDATE processorders 
-             SET isPaid = 1, 
-                 paymentMethod = 'Card', 
-                 moneyPaid = CASE WHEN moneyPaid > 0 THEN moneyPaid ELSE COALESCE(?, fullTotal, amount) END,
-                 amount = CASE WHEN amount > 0 THEN amount ELSE COALESCE(?, fullTotal, amount) END
-             WHERE invNo = ? OR orderId = ? OR id = ?`,
+            `UPDATE processorders po
+             LEFT JOIN orders o ON po.orderId = o.id
+             SET po.isPaid = 1, 
+                 po.paymentMethod = 'Card', 
+                 po.moneyPaid = CASE WHEN po.moneyPaid > 0 THEN po.moneyPaid ELSE COALESCE(?, po.fullTotal, po.amount) END,
+                 po.amount = CASE WHEN po.amount > 0 THEN po.amount ELSE COALESCE(?, po.fullTotal, po.amount) END,
+                 po.isConfirmed = CASE 
+                     WHEN COALESCE(o.isPackage, 0) = 0 OR COALESCE(o.isFinalizeImdt, 0) = 1 THEN 1 
+                     ELSE po.isConfirmed 
+                 END
+             WHERE po.invNo = ? OR po.orderId = ? OR po.id = ?`,
             [
                 amount,
                 amount,
