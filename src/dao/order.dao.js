@@ -411,7 +411,7 @@ exports.createProcessOrderWithTransactionDao = (
                             const is100PercentCredit =
                                 rawCreditPaid > 0 &&
                                 rawAmount > 0 &&
-                                rawCreditPaid >= rawAmount;
+                                rawCreditPaid >= rawAmount - 0.01;
                             const isCardMethod =
                                 normalized === "card" ||
                                 normalized === "payhere" ||
@@ -425,7 +425,7 @@ exports.createProcessOrderWithTransactionDao = (
                                 finalMoneyPaid = 0;
                             } else if (isCardMethod) {
                                 finalMethod = "Card";
-                                if (Number(isPaid) === 1 && rawMoneyPaid > 0) {
+                                if (Number(isPaid) === 1) {
                                     finalIsPaid = 1;
                                     finalAmount = rawAmount;
                                     finalCreditPaid = rawCreditPaid;
@@ -445,18 +445,17 @@ exports.createProcessOrderWithTransactionDao = (
                                 finalMoneyPaid = 0;
                             }
 
-                            // 20 columns, invNo is @new_inv_no => 19 placeholders / 19 values
+                            // 19 columns, invNo is @new_inv_no => 18 placeholders / 18 values
                             const sql = `
                             INSERT INTO processorders (
-                                orderId, invNo, transactionId, paymentMethod,
+                                orderId, invNo, paymentMethod,
                                 isPaid, amount, creditPaid, moneyPaid, status, reportStatus, qrCode, sheduleDate,
                                 isConfirmed,
                                 isCoupon, couponType, couponValue, total, fullTotal, discount, deliveryCharge
-                            ) VALUES (?, @new_inv_no, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ) VALUES (?, @new_inv_no, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         `;
                             const values = [
                                 orderId,
-                                null,
                                 finalMethod,
                                 finalIsPaid,
                                 finalAmount,
@@ -1967,21 +1966,35 @@ exports.getDeliveredOrdersTotal = async (userId) => {
 /**
  * Marks processorders record as paid via PayHere webhook or direct card settlement.
  * Accepts invNo, orderId, or processorders.id as identifier.
+ * Note: transactionId is intentionally omitted and never written to the DB.
  */
-exports.markOrderPaidDao = async (identifier, transactionId, amount = null) => {
+exports.markOrderPaidDao = async (identifier, arg1 = null, arg2 = null) => {
+    // Resolve amount whether called as (id, amount) or (id, ignoredPaymentId, amount)
+    let amount = null;
+    if (arg2 !== null && arg2 !== undefined && !isNaN(arg2)) {
+        amount = parseFloat(arg2);
+    } else if (arg1 !== null && arg1 !== undefined && !isNaN(arg1) && typeof arg1 !== "string") {
+        amount = parseFloat(arg1);
+    }
+
     let connection;
     try {
         connection = await db.collectionofficer.promise().getConnection();
         const [result] = await connection.query(
-            `UPDATE processorders 
-             SET isPaid = 1, 
-                 paymentMethod = 'Card', 
-                 transactionId = COALESCE(?, transactionId),
-                 moneyPaid = CASE WHEN moneyPaid > 0 THEN moneyPaid ELSE COALESCE(?, fullTotal, amount) END,
-                 amount = CASE WHEN amount > 0 THEN amount ELSE COALESCE(?, fullTotal, amount) END
-             WHERE invNo = ? OR orderId = ? OR id = ?`,
+            `UPDATE processorders po
+             LEFT JOIN orders o ON po.orderId = o.id
+             SET po.isPaid = 1, 
+                 po.paymentMethod = 'Card', 
+                 po.moneyPaid = CASE WHEN po.moneyPaid > 0 THEN po.moneyPaid ELSE COALESCE(?, po.fullTotal, po.amount) END,
+                 po.amount = CASE WHEN po.amount > 0 THEN po.amount ELSE COALESCE(?, po.fullTotal, po.amount) END,
+                 po.isConfirmed = CASE 
+                     WHEN COALESCE(o.isPackage, 0) = 0 THEN 1
+                     WHEN COALESCE(o.isPackage, 0) = 1 AND COALESCE(o.isFinalizeImdt, 0) = 0 THEN 0
+                     WHEN COALESCE(o.isPackage, 0) = 1 AND COALESCE(o.isFinalizeImdt, 0) = 1 THEN 1
+                     ELSE po.isConfirmed 
+                 END
+             WHERE po.invNo = ? OR po.orderId = ? OR po.id = ?`,
             [
-                transactionId || null,
                 amount,
                 amount,
                 identifier,
@@ -2113,3 +2126,94 @@ async function getLatestScheduleDateForUser(userId) {
 
 exports.getOrdersForSheduleDate = getOrdersForSheduleDate;
 exports.getLatestScheduleDateForUser = getLatestScheduleDateForUser;
+
+/**
+ * Updates processorders for orders paid via Payment Reminder:
+ *  - isPaid = 1
+ *  - amount = fulltotal (card pay amount + credit, or passed amount)
+ *  - moneyPaid = card pay amount
+ *  - paymentMethod = 'Card'
+ *  - isConfirmed = 1 (when orders.isPackage = 0 OR (orders.isPackage = 1 AND orders.isFinalizeImdt = 0) OR orders.isFinalizeImdt = 1)
+ */
+exports.payReminderOrderDao = async ({
+    orderId,
+    processOrderId,
+    amount,
+    moneyPaid,
+    userId = null,
+}) => {
+    const promiseDb = db.collectionofficer.promise();
+    const searchId = processOrderId || orderId;
+
+    if (!searchId) {
+        throw new Error("orderId or processOrderId is required");
+    }
+
+    let userClause = "";
+    const queryParams = [searchId, searchId, searchId];
+    if (userId) {
+        userClause = " AND (o.userId = ? OR ? IS NULL)";
+        queryParams.push(userId, userId);
+    }
+    queryParams.push(searchId);
+
+    const [rows] = await promiseDb.query(
+        `SELECT po.id AS processOrderId, po.invNo, po.orderId, po.fullTotal, po.amount, 
+                po.moneyPaid, po.creditPaid, po.isPaid, po.isConfirmed, 
+                o.isPackage, o.isFinalizeImdt, o.userId
+         FROM collection_officer.processorders po
+         INNER JOIN collection_officer.orders o ON po.orderId = o.id
+         WHERE (po.id = ? OR po.orderId = ? OR o.id = ?)
+           ${userClause}
+         ORDER BY (po.id = ?) DESC
+         LIMIT 1`,
+        queryParams,
+    );
+
+    if (!rows || rows.length === 0) {
+        throw new Error("Order not found.");
+    }
+
+    const order = rows[0];
+    const realProcessOrderId = order.processOrderId;
+
+    const orderFullTotal = parseFloat(order.fullTotal) || 0;
+    const existingCreditPaid = parseFloat(order.creditPaid) || 0;
+
+    // Card pay amount (money paid via gateway)
+    const cardPaidAmount = moneyPaid != null
+        ? parseFloat(moneyPaid)
+        : (amount != null ? parseFloat(amount) : Math.max(0, orderFullTotal - existingCreditPaid));
+
+    // Full total paid amount for this order
+    const totalAmount = amount != null
+        ? parseFloat(amount)
+        : (orderFullTotal > 0 ? orderFullTotal : cardPaidAmount + existingCreditPaid);
+
+    await promiseDb.query(
+        `UPDATE collection_officer.processorders po
+         JOIN collection_officer.orders o ON po.orderId = o.id
+         SET po.isPaid = 1,
+             po.paymentMethod = 'Card',
+             po.amount = ?,
+             po.moneyPaid = ?,
+             po.isConfirmed = CASE 
+                 WHEN COALESCE(o.isPackage, 0) = 0 THEN 1
+                 WHEN COALESCE(o.isPackage, 0) = 1 AND COALESCE(o.isFinalizeImdt, 0) = 0 THEN 0
+                 WHEN COALESCE(o.isPackage, 0) = 1 AND COALESCE(o.isFinalizeImdt, 0) = 1 THEN 1
+                 ELSE po.isConfirmed 
+             END
+         WHERE po.id = ?`,
+        [totalAmount, cardPaidAmount, realProcessOrderId],
+    );
+
+    return {
+        success: true,
+        message: "Payment reminder order updated successfully.",
+        processOrderId: realProcessOrderId,
+        invNo: order.invNo,
+        orderId: order.orderId,
+        userId: order.userId,
+    };
+};
+

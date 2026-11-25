@@ -1,8 +1,9 @@
-const savedCardDao = require("../../dao/saved-card.dao");
+const customerDao = require("../../dao/customer.dao");
+const paymentGatewayFactory = require("./payment.factory");
 const fs = require("fs");
 const path = require("path");
 
-// Automatically purge legacy local files
+// Purge any legacy local data files
 const DATA_DIR = path.join(__dirname, "../../data");
 try {
   const cardsTxt = path.join(DATA_DIR, "saved_cards.txt");
@@ -10,123 +11,303 @@ try {
   if (fs.existsSync(cardsTxt)) fs.unlinkSync(cardsTxt);
   if (fs.existsSync(cardsJson)) fs.unlinkSync(cardsJson);
 } catch (e) {
-  // Ignore file purge errors
+  // Ignore
 }
 
 /**
- * Saved Card Service (Backed by MySQL user_saved_cards in collection_officer DB)
+ * Saved Card Service (Powered directly by Payments.lk Cloud Vault)
+ * Payments.lk acts as the Single Source of Truth — Zero MySQL desynchronization.
  */
 class SavedCardService {
   /**
-   * Retrieves the active saved card for user from MySQL DB
+   * Resolves the customer's email address from token, params, or customer profile
    */
-  async getCard(userId) {
-    if (!userId) return null;
-    const card = await savedCardDao.getActiveCardByUserId(userId);
-    if (!card) return null;
-
-    return {
-      id: card.cardToken,
-      cardId: card.id,
-      userId: card.userId,
-      scheme: card.cardScheme,
-      last4: card.last4,
-      cardHolder: card.cardHolder,
-      expiryMonth: card.expiryMonth,
-      expiryYear: card.expiryYear,
-      isDefault: Boolean(card.isDefault),
-      status: card.status,
-      paymentId: card.paymentId,
-      mode: card.mode,
-      addedAt: new Date(card.createdAt).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      }),
-    };
+  async _resolveEmail(userId, fallbackEmail = null) {
+    if (fallbackEmail && typeof fallbackEmail === "string" && fallbackEmail.includes("@")) {
+      return fallbackEmail.trim();
+    }
+    if (userId) {
+      try {
+        const rows = await customerDao.getCustomerProfileDao(userId);
+        if (rows && rows.length > 0 && rows[0].email) {
+          return rows[0].email.trim();
+        }
+      } catch (e) {
+        console.warn("⚠️ [SavedCardService] Error looking up email for user:", e.message);
+      }
+    }
+    return null;
   }
 
   /**
-   * Saves or replaces user active card in MySQL DB (user_saved_cards)
+   * Retrieves the active saved card directly from Payments.lk vault
+   * Lists cards by customerEmail (sorted newest first) and returns the single active card on file.
    */
-  async saveCard(userId, cardData, rawEvent = null) {
-    if (!userId) {
-      console.warn("⚠️ [SavedCardService] Cannot save card without userId");
+  async getCard(userId, userEmail = null) {
+    const email = await this._resolveEmail(userId, userEmail);
+
+    try {
+      const paymentsLkStrategy = paymentGatewayFactory.getGateway("payments_lk");
+      if (!paymentsLkStrategy) return null;
+
+      const secretKey = paymentsLkStrategy.secretKey;
+      const apiUrl = paymentsLkStrategy.apiUrl;
+
+      let activeCard = null;
+
+      // 1. Direct search by customerEmail (fastest)
+      if (email) {
+        const queryUrl = `${apiUrl}/cards?customerEmail=${encodeURIComponent(email)}&limit=5`;
+        const response = await fetch(queryUrl, {
+          headers: { Authorization: `Bearer ${secretKey}` },
+        });
+
+        if (response.ok) {
+          const listData = await response.json();
+          const cards = listData?.data || [];
+          activeCard = cards.find((c) => c.active !== false && !c.retiredAt);
+        }
+      }
+
+      // 2. Fallback search: If email was different or not found, match by payment reference in recent active cards
+      if (!activeCard && userId) {
+        console.log(`[SavedCardService] Checking recent cards vault by payment reference for userId ${userId}...`);
+        try {
+          const allCardsRes = await fetch(`${apiUrl}/cards?limit=25`, {
+            headers: { Authorization: `Bearer ${secretKey}` },
+          });
+          if (allCardsRes.ok) {
+            const allCardsData = await allCardsRes.json();
+            const candidateCards = (allCardsData?.data || []).filter((c) => c.active !== false && !c.retiredAt);
+            for (const cand of candidateCards) {
+              if (cand.paymentId) {
+                const pRes = await fetch(`${apiUrl}/payments/${cand.paymentId}`, {
+                  headers: { Authorization: `Bearer ${secretKey}` },
+                });
+                if (pRes.ok) {
+                  const paymentData = await pRes.json();
+                  const ref = String(paymentData.reference || "");
+                  const orderId = String(paymentData.orderId || "");
+                  if (
+                    ref.includes(`_${userId}_`) ||
+                    ref.startsWith(`CARDSAVE_${userId}`) ||
+                    ref.startsWith(`SC_${userId}`) ||
+                    ref.startsWith(`ORD_${userId}`) ||
+                    orderId.includes(`_${userId}_`)
+                  ) {
+                    activeCard = cand;
+                    console.log(`[SavedCardService] Found active card via payment reference ${ref}: ${cand.id}`);
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        } catch (fbErr) {
+          console.warn("⚠️ [SavedCardService] Fallback vault search error:", fbErr.message);
+        }
+      }
+
+      if (!activeCard) {
+        console.log(`[SavedCardService] No active card on file in Payments.lk for user ${userId} (${email || "no-email"})`);
+        return null;
+      }
+
+      console.log(
+        `[SavedCardService] Active card on file in Payments.lk: ${activeCard.id} (${activeCard.scheme} •••• ${activeCard.last4}) for user ${userId}`
+      );
+
+      return {
+        id: activeCard.id,
+        cardId: activeCard.id,
+        token: activeCard.id,
+        userId: userId || "current",
+        scheme: (activeCard.scheme || "visa").toLowerCase(),
+        last4: String(activeCard.last4 || "0000"),
+        cardHolder: activeCard.customerName || activeCard.cardHolder || activeCard.customerEmail || email || "Cardholder",
+        expiryMonth: String(activeCard.expiry?.month || "01").padStart(2, "0"),
+        expiryYear: String(activeCard.expiry?.year || "39").slice(-2),
+        isDefault: true,
+        status: "active",
+        paymentId: activeCard.paymentId || null,
+        mode: activeCard.mode || "test",
+        customerEmail: activeCard.customerEmail || email,
+        addedAt: activeCard.createdAt
+          ? new Date(activeCard.createdAt).toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })
+          : "Recently Added",
+      };
+    } catch (err) {
+      console.error("❌ [SavedCardService] Failed to query Payments.lk vault:", err.message);
       return null;
     }
+  }
 
-    const saved = await savedCardDao.saveUserCard(userId, cardData);
-    console.log(
-      `[SavedCardService] Card ${saved.cardScheme.toUpperCase()} ending in ${saved.last4} saved in MySQL DB for user ${userId}`
-    );
+  /**
+   * Enforces single saved card policy: deletes any previous active cards for this customer in Payments.lk
+   */
+  async cleanupPreviousCards(userId, currentCardToken, customerEmail = null) {
+    try {
+      const paymentsLkStrategy = paymentGatewayFactory.getGateway("payments_lk");
+      if (!paymentsLkStrategy) return;
+
+      const secretKey = paymentsLkStrategy.secretKey;
+      const apiUrl = paymentsLkStrategy.apiUrl;
+      const email = await this._resolveEmail(userId, customerEmail);
+
+      const cardsToDelete = new Set();
+
+      // 1. Check cards matching customerEmail
+      if (email) {
+        try {
+          const listRes = await fetch(`${apiUrl}/cards?customerEmail=${encodeURIComponent(email)}&limit=10`, {
+            headers: { Authorization: `Bearer ${secretKey}` },
+          });
+          if (listRes.ok) {
+            const listData = await listRes.json();
+            const cards = listData?.data || [];
+            for (const c of cards) {
+              if (c.id !== currentCardToken && c.active !== false && !c.retiredAt) {
+                cardsToDelete.add(c.id);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("⚠️ [SavedCardService] Error listing cards by email for cleanup:", e.message);
+        }
+      }
+
+      // 2. Also check recent cards that belong to this userId via payment reference
+      if (userId) {
+        try {
+          const allCardsRes = await fetch(`${apiUrl}/cards?limit=25`, {
+            headers: { Authorization: `Bearer ${secretKey}` },
+          });
+          if (allCardsRes.ok) {
+            const allCardsData = await allCardsRes.json();
+            const candidateCards = (allCardsData?.data || []).filter(
+              (c) => c.id !== currentCardToken && c.active !== false && !c.retiredAt && c.paymentId
+            );
+            for (const cand of candidateCards) {
+              try {
+                const pRes = await fetch(`${apiUrl}/payments/${cand.paymentId}`, {
+                  headers: { Authorization: `Bearer ${secretKey}` },
+                });
+                if (pRes.ok) {
+                  const paymentData = await pRes.json();
+                  const ref = String(paymentData.reference || "");
+                  const orderId = String(paymentData.orderId || "");
+                  if (
+                    ref.includes(`_${userId}_`) ||
+                    ref.startsWith(`CARDSAVE_${userId}`) ||
+                    ref.startsWith(`SC_${userId}`) ||
+                    ref.startsWith(`ORD_${userId}`) ||
+                    orderId.includes(`_${userId}_`)
+                  ) {
+                    cardsToDelete.add(cand.id);
+                  }
+                }
+              } catch {}
+            }
+          }
+        } catch (e) {
+          console.warn("⚠️ [SavedCardService] Error scanning vault for cleanup:", e.message);
+        }
+      }
+
+      // 3. Delete previous cards from Payments.lk processor vault
+      for (const oldCardId of cardsToDelete) {
+        console.log(`[SavedCardService] Single-card policy: Deleting previous card ${oldCardId} for user ${userId}...`);
+        await paymentsLkStrategy.deleteSavedCard(oldCardId);
+      }
+    } catch (err) {
+      console.warn("⚠️ [SavedCardService] cleanupPreviousCards error:", err.message);
+    }
+  }
+
+  /**
+   * Normalizes and confirms card saved in Payments.lk vault
+   */
+  async saveCard(userId, cardData, rawEvent = null) {
+    const token = cardData.cardToken || cardData.id || cardData.token;
+    console.log(`[SavedCardService] Confirmed card token ${token} on file in Payments.lk vault.`);
+
+    // Enforce single-card policy: delete any previous active card(s)
+    const cardEmail = cardData.customerEmail || rawEvent?.customer?.email || rawEvent?.customerEmail;
+    await this.cleanupPreviousCards(userId, token, cardEmail);
 
     return {
-      id: saved.cardToken,
-      cardId: saved.id,
-      userId: saved.userId,
-      scheme: saved.cardScheme,
-      last4: saved.last4,
-      cardHolder: saved.cardHolder,
-      expiryMonth: saved.expiryMonth,
-      expiryYear: saved.expiryYear,
-      isDefault: Boolean(saved.isDefault),
-      status: saved.status,
-      paymentId: saved.paymentId,
-      mode: saved.mode,
-      addedAt: new Date(saved.createdAt).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      }),
+      id: token,
+      cardId: token,
+      token: token,
+      userId: userId,
+      scheme: (cardData.scheme || cardData.cardScheme || "visa").toLowerCase(),
+      last4: String(cardData.last4 || "0000"),
+      cardHolder: cardData.cardHolder || cardData.customerName || "Cardholder",
+      expiryMonth: cardData.expiryMonth || "01",
+      expiryYear: cardData.expiryYear || "39",
+      isDefault: true,
+      status: "active",
+      paymentId: cardData.paymentId,
+      mode: cardData.mode || "test",
+      addedAt: "Recently Added",
     };
   }
 
   /**
-   * Removes saved card for user from both Payments.lk vault and MySQL DB
+   * Removes card directly from Payments.lk processor vault
    */
-  async removeCard(userId, cardIdOrToken = null) {
-    if (!userId) return false;
+  async removeCard(userId, cardIdOrToken = null, userEmail = null) {
+    const paymentsLkStrategy = paymentGatewayFactory.getGateway("payments_lk");
+    if (!paymentsLkStrategy) return false;
 
-    // 1. Gather tokens to delete from Payments.lk
-    let tokensToDelete = [];
-    if (cardIdOrToken && cardIdOrToken !== "current") {
-      const card = await savedCardDao.getCardForUser(userId, cardIdOrToken);
-      if (card && card.cardToken) {
-        tokensToDelete.push(card.cardToken);
-      } else if (
-        typeof cardIdOrToken === "string" &&
-        (cardIdOrToken.startsWith("card_") || cardIdOrToken.startsWith("crd_"))
-      ) {
-        tokensToDelete.push(cardIdOrToken);
-      }
-    } else {
-      // Deleting current/all cards for this user
-      const userCards = await savedCardDao.getAllCardsByUserId(userId);
-      tokensToDelete = userCards
-        .map((c) => c.cardToken)
-        .filter((token) => Boolean(token));
+    // 1. If a specific card token was provided:
+    if (
+      cardIdOrToken &&
+      cardIdOrToken !== "current" &&
+      typeof cardIdOrToken === "string" &&
+      (cardIdOrToken.startsWith("card_") || cardIdOrToken.startsWith("crd_"))
+    ) {
+      console.log(`[SavedCardService] Deleting card token ${cardIdOrToken} from Payments.lk vault...`);
+      return await paymentsLkStrategy.deleteSavedCard(cardIdOrToken);
     }
 
-    // 2. Call Payments.lk DELETE /cards/{id} for each token
-    if (tokensToDelete.length > 0) {
-      try {
-        const paymentGatewayFactory = require("./payment.factory");
-        const paymentsLkStrategy = paymentGatewayFactory.getGateway("payments_lk");
-        if (paymentsLkStrategy && typeof paymentsLkStrategy.deleteSavedCard === "function") {
-          for (const token of tokensToDelete) {
-            console.log(`[SavedCardService] Requesting Payments.lk to delete card token: ${token}`);
-            await paymentsLkStrategy.deleteSavedCard(token);
-          }
+    // 2. Otherwise, find active card for this user using getCard (which handles both email & payment ref)
+    const existing = await this.getCard(userId, userEmail);
+    if (existing && existing.id) {
+      console.log(`[SavedCardService] Deleting user's active card ${existing.id} from Payments.lk vault...`);
+      return await paymentsLkStrategy.deleteSavedCard(existing.id);
+    }
+
+    const email = await this._resolveEmail(userId, userEmail);
+    if (!email) {
+      console.warn("⚠️ [SavedCardService] Cannot remove card: customer email not found.");
+      return false;
+    }
+
+    try {
+      const secretKey = paymentsLkStrategy.secretKey;
+      const apiUrl = paymentsLkStrategy.apiUrl;
+      const listRes = await fetch(`${apiUrl}/cards?customerEmail=${encodeURIComponent(email)}&limit=10`, {
+        headers: { Authorization: `Bearer ${secretKey}` },
+      });
+
+      if (listRes.ok) {
+        const listData = await listRes.json();
+        const activeCards = (listData?.data || []).filter((c) => c.active !== false && !c.retiredAt);
+        for (const card of activeCards) {
+          console.log(`[SavedCardService] Deleting card ${card.id} from Payments.lk for ${email}`);
+          await paymentsLkStrategy.deleteSavedCard(card.id);
         }
-      } catch (err) {
-        console.warn(`⚠️ [SavedCardService] Error during Payments.lk card deletion:`, err.message);
       }
+      return true;
+    } catch (e) {
+      console.warn("⚠️ [SavedCardService] Error during Payments.lk card deletion:", e.message);
+      return false;
     }
-
-    // 3. Remove permanently from MySQL DB
-    const result = await savedCardDao.removeUserCard(userId, cardIdOrToken);
-    console.log(`[SavedCardService] Card permanently removed from MySQL DB for user ${userId}`);
-    return result;
   }
 }
 

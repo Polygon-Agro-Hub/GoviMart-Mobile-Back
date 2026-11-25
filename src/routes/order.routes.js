@@ -11,6 +11,7 @@ router.post("/package/replace-item", authMiddleware, packageReviewEp.replacePack
 router.post("/package/reset-item", authMiddleware, packageReviewEp.resetPackageItem);
 router.post("/package/confirm-review", authMiddleware, packageReviewEp.confirmPackageReview);
 router.post("/confirm-order", authMiddleware, packageReviewEp.confirmOrderWithLivePrices);
+router.post("/pay-reminder-order", authMiddleware, orderEp.payReminderOrder);
 router.post("/package/cancel-order", authMiddleware, packageReviewEp.cancelPackageOrder);
 router.post("/package/cancel-before-confirm", authMiddleware, packageReviewEp.cancelOrderBeforeConfirm);
 
