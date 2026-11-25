@@ -1988,7 +1988,9 @@ exports.markOrderPaidDao = async (identifier, arg1 = null, arg2 = null) => {
                  po.moneyPaid = CASE WHEN po.moneyPaid > 0 THEN po.moneyPaid ELSE COALESCE(?, po.fullTotal, po.amount) END,
                  po.amount = CASE WHEN po.amount > 0 THEN po.amount ELSE COALESCE(?, po.fullTotal, po.amount) END,
                  po.isConfirmed = CASE 
-                     WHEN COALESCE(o.isPackage, 0) = 0 OR COALESCE(o.isFinalizeImdt, 0) = 1 THEN 1 
+                     WHEN COALESCE(o.isPackage, 0) = 0 THEN 1
+                     WHEN COALESCE(o.isPackage, 0) = 1 AND COALESCE(o.isFinalizeImdt, 0) = 0 THEN 0
+                     WHEN COALESCE(o.isPackage, 0) = 1 AND COALESCE(o.isFinalizeImdt, 0) = 1 THEN 1
                      ELSE po.isConfirmed 
                  END
              WHERE po.invNo = ? OR po.orderId = ? OR po.id = ?`,
@@ -2124,3 +2126,94 @@ async function getLatestScheduleDateForUser(userId) {
 
 exports.getOrdersForSheduleDate = getOrdersForSheduleDate;
 exports.getLatestScheduleDateForUser = getLatestScheduleDateForUser;
+
+/**
+ * Updates processorders for orders paid via Payment Reminder:
+ *  - isPaid = 1
+ *  - amount = fulltotal (card pay amount + credit, or passed amount)
+ *  - moneyPaid = card pay amount
+ *  - paymentMethod = 'Card'
+ *  - isConfirmed = 1 (when orders.isPackage = 0 OR (orders.isPackage = 1 AND orders.isFinalizeImdt = 0) OR orders.isFinalizeImdt = 1)
+ */
+exports.payReminderOrderDao = async ({
+    orderId,
+    processOrderId,
+    amount,
+    moneyPaid,
+    userId = null,
+}) => {
+    const promiseDb = db.collectionofficer.promise();
+    const searchId = processOrderId || orderId;
+
+    if (!searchId) {
+        throw new Error("orderId or processOrderId is required");
+    }
+
+    let userClause = "";
+    const queryParams = [searchId, searchId, searchId];
+    if (userId) {
+        userClause = " AND (o.userId = ? OR ? IS NULL)";
+        queryParams.push(userId, userId);
+    }
+    queryParams.push(searchId);
+
+    const [rows] = await promiseDb.query(
+        `SELECT po.id AS processOrderId, po.invNo, po.orderId, po.fullTotal, po.amount, 
+                po.moneyPaid, po.creditPaid, po.isPaid, po.isConfirmed, 
+                o.isPackage, o.isFinalizeImdt, o.userId
+         FROM collection_officer.processorders po
+         INNER JOIN collection_officer.orders o ON po.orderId = o.id
+         WHERE (po.id = ? OR po.orderId = ? OR o.id = ?)
+           ${userClause}
+         ORDER BY (po.id = ?) DESC
+         LIMIT 1`,
+        queryParams,
+    );
+
+    if (!rows || rows.length === 0) {
+        throw new Error("Order not found.");
+    }
+
+    const order = rows[0];
+    const realProcessOrderId = order.processOrderId;
+
+    const orderFullTotal = parseFloat(order.fullTotal) || 0;
+    const existingCreditPaid = parseFloat(order.creditPaid) || 0;
+
+    // Card pay amount (money paid via gateway)
+    const cardPaidAmount = moneyPaid != null
+        ? parseFloat(moneyPaid)
+        : (amount != null ? parseFloat(amount) : Math.max(0, orderFullTotal - existingCreditPaid));
+
+    // Full total paid amount for this order
+    const totalAmount = amount != null
+        ? parseFloat(amount)
+        : (orderFullTotal > 0 ? orderFullTotal : cardPaidAmount + existingCreditPaid);
+
+    await promiseDb.query(
+        `UPDATE collection_officer.processorders po
+         JOIN collection_officer.orders o ON po.orderId = o.id
+         SET po.isPaid = 1,
+             po.paymentMethod = 'Card',
+             po.amount = ?,
+             po.moneyPaid = ?,
+             po.isConfirmed = CASE 
+                 WHEN COALESCE(o.isPackage, 0) = 0 THEN 1
+                 WHEN COALESCE(o.isPackage, 0) = 1 AND COALESCE(o.isFinalizeImdt, 0) = 0 THEN 0
+                 WHEN COALESCE(o.isPackage, 0) = 1 AND COALESCE(o.isFinalizeImdt, 0) = 1 THEN 1
+                 ELSE po.isConfirmed 
+             END
+         WHERE po.id = ?`,
+        [totalAmount, cardPaidAmount, realProcessOrderId],
+    );
+
+    return {
+        success: true,
+        message: "Payment reminder order updated successfully.",
+        processOrderId: realProcessOrderId,
+        invNo: order.invNo,
+        orderId: order.orderId,
+        userId: order.userId,
+    };
+};
+
