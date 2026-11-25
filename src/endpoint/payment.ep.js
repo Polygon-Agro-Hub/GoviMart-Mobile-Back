@@ -216,6 +216,22 @@ exports.handlePaymentsLkWebhook = asyncHandler(async (req, res) => {
           resolvedUserId = Number(parts[1]);
         }
       }
+      if (!resolvedUserId && cardData.paymentId) {
+        try {
+          const strategy = paymentGatewayFactory.getGateway("payments_lk");
+          const pRes = await strategy.verifyPayment(cardData.paymentId);
+          const ref = String(pRes?.payment?.reference || "");
+          const refParts = ref.split("_");
+          if (refParts.length >= 2 && !isNaN(refParts[1])) {
+            resolvedUserId = Number(refParts[1]);
+            console.log(
+              `[Payments.lk Webhook] Resolved userId ${resolvedUserId} from payment reference ${ref}`
+            );
+          }
+        } catch (e) {
+          console.warn("⚠️ [Payments.lk Webhook] Could not resolve userId from paymentId:", e.message);
+        }
+      }
       if (!resolvedUserId && customerEmail) {
         try {
           const userRow = await customerDao.getCustomerByEmailDao(customerEmail);
