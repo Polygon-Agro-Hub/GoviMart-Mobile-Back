@@ -1135,3 +1135,60 @@ exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
         orders: result.orders,
     });
 });
+
+/**
+ * POST /api/order/pay-reminder-order
+ * Updates processorders when customer pays via payment reminder:
+ *   - isPaid = 1
+ *   - amount = fullTotal
+ *   - moneyPaid = card amount paid
+ *   - isConfirmed = 1 only for isPackage = 0 OR (isPackage = 1 and isFinalizeImdt = 0); isFinalizeImdt = 1 sets isConfirmed = 0
+ */
+exports.payReminderOrder = asyncHandler(async (req, res) => {
+    const { orderId, processOrderId, amount, moneyPaid, isPaid } = req.body;
+    const userId = req.user?.id || req.user?.userId;
+
+    if (!orderId && !processOrderId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderId or processOrderId is required",
+        });
+    }
+
+    try {
+        const result = await RetailOrderDao.payReminderOrderDao({
+            orderId,
+            processOrderId,
+            amount,
+            moneyPaid,
+            userId,
+        });
+
+        // Best effort "Order Confirmed" SMS if invoice number is present
+        if (result?.invNo) {
+            (async () => {
+                try {
+                    const smsRes = await orderSmsService.sendOrderConfirmedSms({
+                        userId: result.userId || userId,
+                        invNo: result.invNo,
+                    });
+                    console.log(`[payReminderOrder] Confirmed SMS for ${result.invNo}:`, smsRes);
+                } catch (smsErr) {
+                    console.warn("⚠️ [payReminderOrder] Confirmation SMS error:", smsErr.message);
+                }
+            })();
+        }
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+            data: result,
+        });
+    } catch (error) {
+        console.error("❌ [payReminderOrder] Error:", error);
+        return res.status(500).json({
+            status: false,
+            message: error.message || "Failed to update reminder order payment",
+        });
+    }
+});
