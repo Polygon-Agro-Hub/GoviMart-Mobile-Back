@@ -147,11 +147,97 @@ class SavedCardService {
   }
 
   /**
+   * Enforces single saved card policy: deletes any previous active cards for this customer in Payments.lk
+   */
+  async cleanupPreviousCards(userId, currentCardToken, customerEmail = null) {
+    try {
+      const paymentsLkStrategy = paymentGatewayFactory.getGateway("payments_lk");
+      if (!paymentsLkStrategy) return;
+
+      const secretKey = paymentsLkStrategy.secretKey;
+      const apiUrl = paymentsLkStrategy.apiUrl;
+      const email = await this._resolveEmail(userId, customerEmail);
+
+      const cardsToDelete = new Set();
+
+      // 1. Check cards matching customerEmail
+      if (email) {
+        try {
+          const listRes = await fetch(`${apiUrl}/cards?customerEmail=${encodeURIComponent(email)}&limit=10`, {
+            headers: { Authorization: `Bearer ${secretKey}` },
+          });
+          if (listRes.ok) {
+            const listData = await listRes.json();
+            const cards = listData?.data || [];
+            for (const c of cards) {
+              if (c.id !== currentCardToken && c.active !== false && !c.retiredAt) {
+                cardsToDelete.add(c.id);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("⚠️ [SavedCardService] Error listing cards by email for cleanup:", e.message);
+        }
+      }
+
+      // 2. Also check recent cards that belong to this userId via payment reference
+      if (userId) {
+        try {
+          const allCardsRes = await fetch(`${apiUrl}/cards?limit=25`, {
+            headers: { Authorization: `Bearer ${secretKey}` },
+          });
+          if (allCardsRes.ok) {
+            const allCardsData = await allCardsRes.json();
+            const candidateCards = (allCardsData?.data || []).filter(
+              (c) => c.id !== currentCardToken && c.active !== false && !c.retiredAt && c.paymentId
+            );
+            for (const cand of candidateCards) {
+              try {
+                const pRes = await fetch(`${apiUrl}/payments/${cand.paymentId}`, {
+                  headers: { Authorization: `Bearer ${secretKey}` },
+                });
+                if (pRes.ok) {
+                  const paymentData = await pRes.json();
+                  const ref = String(paymentData.reference || "");
+                  const orderId = String(paymentData.orderId || "");
+                  if (
+                    ref.includes(`_${userId}_`) ||
+                    ref.startsWith(`CARDSAVE_${userId}`) ||
+                    ref.startsWith(`SC_${userId}`) ||
+                    ref.startsWith(`ORD_${userId}`) ||
+                    orderId.includes(`_${userId}_`)
+                  ) {
+                    cardsToDelete.add(cand.id);
+                  }
+                }
+              } catch {}
+            }
+          }
+        } catch (e) {
+          console.warn("⚠️ [SavedCardService] Error scanning vault for cleanup:", e.message);
+        }
+      }
+
+      // 3. Delete previous cards from Payments.lk processor vault
+      for (const oldCardId of cardsToDelete) {
+        console.log(`[SavedCardService] Single-card policy: Deleting previous card ${oldCardId} for user ${userId}...`);
+        await paymentsLkStrategy.deleteSavedCard(oldCardId);
+      }
+    } catch (err) {
+      console.warn("⚠️ [SavedCardService] cleanupPreviousCards error:", err.message);
+    }
+  }
+
+  /**
    * Normalizes and confirms card saved in Payments.lk vault
    */
   async saveCard(userId, cardData, rawEvent = null) {
     const token = cardData.cardToken || cardData.id || cardData.token;
     console.log(`[SavedCardService] Confirmed card token ${token} on file in Payments.lk vault.`);
+
+    // Enforce single-card policy: delete any previous active card(s)
+    const cardEmail = cardData.customerEmail || rawEvent?.customer?.email || rawEvent?.customerEmail;
+    await this.cleanupPreviousCards(userId, token, cardEmail);
 
     return {
       id: token,
