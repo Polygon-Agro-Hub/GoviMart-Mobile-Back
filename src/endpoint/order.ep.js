@@ -3,6 +3,8 @@ const RetailOrderDao = require("../dao/order.dao");
 const cartDao = require("../dao/cart.dao");
 const customerDao = require("../dao/customer.dao");
 const orderSmsService = require("../services/sms/order-sms.service");
+// Risk 4-C: server-side payment verification via gateway (do not trust client isPaid)
+const paymentGatewayFactory = require("../services/payment/payment.factory");
 
 const {
     couponValidationSchema,
@@ -302,6 +304,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     const {
         cartId, paymentMethod, grandTotal, discountAmount, deliveryCharge,
         creditPaid, moneyPaid, isFinalizeImdt, checkoutDetails,
+        checkoutSessionId, paymentId,
     } = value;
 
     const {
@@ -499,6 +502,14 @@ exports.createOrder = asyncHandler(async (req, res) => {
         });
     }
 
+    // ── Risk 4-C: Server-side payment verification ────────────────────────────
+    // For card orders: verify payment status directly with the gateway.
+    // Never trust isPaid=1 from the client — a malicious actor could send it
+    // without completing the actual payment (deep-link hijacking).
+    // For cash/credit orders: use the client-supplied value as before (no gateway).
+    const isCardPayment = String(paymentMethod || "").toLowerCase() === "card";
+    let serverVerifiedIsPaid = 0;
+
     // Verify user credit balance if paying with credit
     const requestedCredit = parseFloat(creditPaid) || 0;
     if (requestedCredit > 0) {
@@ -510,6 +521,94 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 message: `Insufficient credit balance. Available: Rs. ${availableCredit.toFixed(2)}, requested: Rs. ${requestedCredit.toFixed(2)}.`,
             });
         }
+    }
+
+    // Never apply more credit than the order total
+    const effectiveCredit = Math.min(requestedCredit, calculatedGrandTotal);
+
+    // Expected card money amount (order total minus wallet credit applied)
+    const expectedCardAmount = Math.max(0, calculatedGrandTotal - effectiveCredit);
+
+    // Whole order covered by wallet credit (server-verified balance, no gateway needed)
+    const isFullyPaidByCredit =
+        effectiveCredit > 0 && effectiveCredit >= calculatedGrandTotal - 0.01;
+
+    // Determine effective payment/checkout identifier
+    const effectivePaymentId = paymentId || (typeof checkoutSessionId === "string" && checkoutSessionId.startsWith("pay_") ? checkoutSessionId : null);
+    const effectiveCheckoutId = (typeof checkoutSessionId === "string" && !checkoutSessionId.startsWith("pay_")) ? checkoutSessionId : null;
+
+    if (isFullyPaidByCredit) {
+        serverVerifiedIsPaid = 1;
+    } else if (isCardPayment && effectivePaymentId) {
+        // Direct saved card 1-click charge verification
+        try {
+            const strategy = paymentGatewayFactory.getGateway("payments_lk");
+            const { isCompleted, payment } = await strategy.verifyPayment(effectivePaymentId);
+            if (isCompleted) {
+                const paidAmountCents = payment?.amountCents || 0;
+                const paidAmountLkr = paidAmountCents / 100;
+                if (
+                    Math.abs(paidAmountLkr - expectedCardAmount) <= 1.0 ||
+                    Math.abs(paidAmountLkr - calculatedGrandTotal) <= 1.0
+                ) {
+                    serverVerifiedIsPaid = 1;
+                    console.log(`✅ [createOrder] Verified saved card payment ${effectivePaymentId} for user ${userId}: Rs. ${paidAmountLkr}`);
+                } else {
+                    console.warn(
+                        `⚠️ [createOrder] Payment amount mismatch for user ${userId}: ` +
+                        `gateway=${paidAmountLkr}, expectedCard=${expectedCardAmount}, order=${calculatedGrandTotal}. Setting isPaid=0.`
+                    );
+                }
+            } else {
+                console.warn(`⚠️ [createOrder] Gateway reports payment NOT completed for paymentId ${effectivePaymentId}.`);
+            }
+        } catch (verifyErr) {
+            console.warn("⚠️ [createOrder] Direct payment verification failed:", verifyErr.message);
+            serverVerifiedIsPaid = 0;
+        }
+    } else if (isCardPayment && effectiveCheckoutId) {
+        try {
+            const strategy = paymentGatewayFactory.getGateway("payments_lk");
+            const { isCompleted, checkout } = await strategy.verifyAndSyncCheckout(
+                effectiveCheckoutId,
+                userId,
+            );
+            if (isCompleted) {
+                // Double-check: gateway-reported amount must match the expected card amount
+                // (or full grand total if no credit was applied) with Rs. 1 tolerance
+                const paidAmountCents = checkout?.payment?.amountCents || 0;
+                const paidAmountLkr = paidAmountCents / 100;
+                if (
+                    Math.abs(paidAmountLkr - expectedCardAmount) <= 1.0 ||
+                    Math.abs(paidAmountLkr - calculatedGrandTotal) <= 1.0
+                ) {
+                    serverVerifiedIsPaid = 1;
+                } else {
+                    console.warn(
+                        `⚠️ [createOrder] Gateway amount mismatch for user ${userId}: ` +
+                        `gateway=${paidAmountLkr}, expectedCard=${expectedCardAmount}, order=${calculatedGrandTotal}. Setting isPaid=0.`,
+                    );
+                }
+            } else {
+                console.warn(
+                    `⚠️ [createOrder] Gateway reports payment NOT completed for user ${userId}, ` +
+                    `checkoutSessionId=${effectiveCheckoutId}. Order will be created as unpaid.`,
+                );
+            }
+        } catch (verifyErr) {
+            // Non-fatal: if the gateway is unreachable, create the order as unpaid.
+            // The webhook/reconcile job will update isPaid once the gateway confirms.
+            console.warn(
+                "⚠️ [createOrder] Gateway verification failed (non-fatal, isPaid=0):",
+                verifyErr.message,
+            );
+            serverVerifiedIsPaid = 0;
+        }
+    } else if (isCardPayment && !checkoutSessionId && !paymentId && Number(req.body.isPaid) === 1) {
+        // Direct card charge (already charged server-side)
+        serverVerifiedIsPaid = 1;
+    } else if (!isCardPayment) {
+        serverVerifiedIsPaid = 0; // cash is never paid up front; full credit is handled above
     }
 
     // Normalize schedule fields
@@ -713,15 +812,17 @@ exports.createOrder = asyncHandler(async (req, res) => {
                     }
 
                     // Create an individual processorders row for each scheduled date
-                    const clientIsPaid = Number(req.body.isPaid) === 1 ? 1 : 0;
+                    // use serverVerifiedIsPaid (gateway-verified) instead of raw client claim
+                    const clientIsPaid = serverVerifiedIsPaid;
 
                     for (let i = 0; i < targetDates.length; i++) {
                         const sDate = targetDates[i];
                         const isFirstOrder = i === 0;
 
                         // Only the 1st order collects the payment today if paying up front; subsequent orders are pending
-                        const rowCreditPaid = isFirstOrder ? requestedCredit : 0;
-                        const rowMoneyPaid = (isFirstOrder && clientIsPaid === 1) ? Math.max(0, calculatedGrandTotal - requestedCredit) : 0;
+                        const rowCreditPaid = isFirstOrder ? effectiveCredit : 0;
+                        const rowMoneyPaid = (isFirstOrder && clientIsPaid === 1)
+                            ? Math.max(0, calculatedGrandTotal - effectiveCredit) : 0;
                         const rowAmount = (isFirstOrder && clientIsPaid === 1) ? calculatedGrandTotal : 0;
                         const rowFinancials = isFirstOrder ? firstOrderFinancials : normalOrderFinancials;
 
@@ -758,8 +859,9 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         targetDate = parseScheduleDate(calculatedOrders[0]?.date || calculatedOrders[0]?.dateStr);
                     }
 
-                    const clientIsPaid = Number(req.body.isPaid) === 1 ? 1 : 0;
-                    const oneTimeMoneyPaid = clientIsPaid === 1 ? Math.max(0, calculatedGrandTotal - requestedCredit) : 0;
+                    //use serverVerifiedIsPaid (gateway-verified) instead of raw client claim
+                    const clientIsPaid = serverVerifiedIsPaid;
+                    const oneTimeMoneyPaid = clientIsPaid === 1 ? Math.max(0, calculatedGrandTotal - effectiveCredit) : 0;
                     const oneTimeAmount = clientIsPaid === 1 ? calculatedGrandTotal : 0;
 
                     const proc = await RetailOrderDao.createProcessOrderWithTransactionDao(connection, {
@@ -767,7 +869,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                         paymentMethod,
                         isPaid: clientIsPaid,
                         amount: oneTimeAmount,
-                        creditPaid: requestedCredit,
+                        creditPaid: effectiveCredit,
                         moneyPaid: oneTimeMoneyPaid,
                         status: "Ordered",
                         sheduleDate: targetDate,
@@ -786,11 +888,11 @@ exports.createOrder = asyncHandler(async (req, res) => {
                 }
 
                 // ── 5e. Deduct credit balance from marketplaceusers if used ────
-                if (requestedCredit > 0) {
+                if (effectiveCredit > 0) {
                     await RetailOrderDao.deductUserCreditBalanceWithTransactionDao(
                         connection,
                         userId,
-                        requestedCredit
+                        effectiveCredit
                     );
 
                 }
@@ -830,11 +932,6 @@ exports.createOrder = asyncHandler(async (req, res) => {
 
                             // A la carte only OR package with isFinalizeImdt = 1
                             const isAlaCarteOrFinalizedPackage = !hasPackages || Number(isFinalizeImdt) === 1;
-
-                            // Whole order paid with credit (no card / cash money needed)
-                            const isFullyPaidByCredit =
-                                requestedCredit > 0 &&
-                                requestedCredit >= calculatedGrandTotal - 0.01;
 
                             console.log(
                                 `[createOrder SMS] scheduled: ${scheduledDateStr}, earliest: ${earliestDateStr}, isType1: ${isType1}, isFinalizeImdt: ${isFinalizeImdt}, hasPackages: ${hasPackages}, packageFlow: ${isPackagePayToConfirmFlow}, alaCarteOrFinalized: ${isAlaCarteOrFinalizedPackage}, fullCredit: ${isFullyPaidByCredit}`
@@ -1037,4 +1134,61 @@ exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
         order: result.orders.length > 0 ? result.orders[0] : null,
         orders: result.orders,
     });
+});
+
+/**
+ * POST /api/order/pay-reminder-order
+ * Updates processorders when customer pays via payment reminder:
+ *   - isPaid = 1
+ *   - amount = fullTotal
+ *   - moneyPaid = card amount paid
+ *   - isConfirmed = 1 only for isPackage = 0 OR (isPackage = 1 and isFinalizeImdt = 0); isFinalizeImdt = 1 sets isConfirmed = 0
+ */
+exports.payReminderOrder = asyncHandler(async (req, res) => {
+    const { orderId, processOrderId, amount, moneyPaid, isPaid } = req.body;
+    const userId = req.user?.id || req.user?.userId;
+
+    if (!orderId && !processOrderId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderId or processOrderId is required",
+        });
+    }
+
+    try {
+        const result = await RetailOrderDao.payReminderOrderDao({
+            orderId,
+            processOrderId,
+            amount,
+            moneyPaid,
+            userId,
+        });
+
+        // Best effort "Order Confirmed" SMS if invoice number is present
+        if (result?.invNo) {
+            (async () => {
+                try {
+                    const smsRes = await orderSmsService.sendOrderConfirmedSms({
+                        userId: result.userId || userId,
+                        invNo: result.invNo,
+                    });
+                    console.log(`[payReminderOrder] Confirmed SMS for ${result.invNo}:`, smsRes);
+                } catch (smsErr) {
+                    console.warn("⚠️ [payReminderOrder] Confirmation SMS error:", smsErr.message);
+                }
+            })();
+        }
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+            data: result,
+        });
+    } catch (error) {
+        console.error("❌ [payReminderOrder] Error:", error);
+        return res.status(500).json({
+            status: false,
+            message: error.message || "Failed to update reminder order payment",
+        });
+    }
 });
