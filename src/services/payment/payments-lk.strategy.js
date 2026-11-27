@@ -63,8 +63,9 @@ class PaymentsLkStrategy extends PaymentStrategy {
         : paymentType === "save_card"
           ? "SC"
           : "ORD";
+    const nonce = Math.random().toString(36).substring(2, 7);
     const orderId =
-      clientOrderId || `${prefix}_${userId}_${Date.now()}`;
+      clientOrderId || `${prefix}_${userId}_${Date.now()}_${nonce}`;
 
     // Callback URLs: Supports deep link scheme for mobile apps
     const successUrl = `${this.appScheme}://payments-lk/return?status=success&orderId=${encodeURIComponent(
@@ -155,12 +156,86 @@ class PaymentsLkStrategy extends PaymentStrategy {
   }
 
   /**
+   * Verifies a direct Payment (e.g. from a 1-click saved card charge) via Payments.lk API
+   */
+  async verifyPayment(paymentId) {
+    this._ensureSecretKey();
+    if (!paymentId) {
+      throw new Error("paymentId is required to verify payment");
+    }
+
+    const response = await fetch(`${this.apiUrl}/payments/${paymentId}`, {
+      headers: {
+        Authorization: `Bearer ${this.secretKey}`,
+      },
+    });
+
+    const paymentData = await response.json();
+    if (!response.ok) {
+      throw new Error(
+        paymentData?.message ||
+        `Failed to retrieve payment from Payments.lk: ${response.status}`
+      );
+    }
+
+    const isCompleted = paymentData.status === "succeeded";
+    return {
+      isCompleted,
+      payment: paymentData,
+    };
+  }
+
+  /**
+   * Issues a refund for a payment via Payments.lk API
+   * POST /v1/refunds
+   */
+  async refundPayment(paymentId, amountCents = null, reason = "verification_reversal") {
+    this._ensureSecretKey();
+    if (!paymentId) throw new Error("paymentId is required for refund");
+
+    const body = { paymentId, reason };
+    if (amountCents !== null && Number(amountCents) > 0) {
+      body.amountCents = Number(amountCents);
+    }
+
+    const idempotencyKey = `ref-${paymentId}-${Date.now()}`;
+    const response = await fetch(`${this.apiUrl}/refunds`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.secretKey}`,
+        "Idempotency-Key": idempotencyKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      console.warn("⚠️ [Payments.lk Refund Failed]:", data);
+      throw new Error(data?.message || `Refund failed with status ${response.status}`);
+    }
+
+    console.log(`[Payments.lk Refund] Refund successfully created: ${data.id} for payment ${paymentId}`);
+    return data;
+  }
+
+  /**
    * Fetches real checkout details directly from Payments.lk API and verifies card saving
    */
   async verifyAndSyncCheckout(checkoutId, userId, clientCardHolder = null) {
     this._ensureSecretKey();
     if (!checkoutId) {
       throw new Error("checkoutId is required to sync checkout session");
+    }
+
+    // Direct payment ID (from 1-click saved card charge) support
+    if (typeof checkoutId === "string" && checkoutId.startsWith("pay_")) {
+      const res = await this.verifyPayment(checkoutId);
+      return {
+        checkout: { payment: res.payment, status: res.payment.status },
+        card: res.payment.card || {},
+        isCompleted: res.isCompleted,
+      };
     }
 
     const response = await fetch(`${this.apiUrl}/checkouts/${checkoutId}`, {
@@ -206,14 +281,17 @@ class PaymentsLkStrategy extends PaymentStrategy {
           if (attempt > 0) {
             await new Promise((resolve) => setTimeout(resolve, 500));
           }
-          // Query vault for all saved cards
-          const queryUrl = `${this.apiUrl}/cards?limit=20`;
+          // Query vault: official docs support filtering by customerEmail, returning newest first
+          const queryUrl = customerEmail
+            ? `${this.apiUrl}/cards?customerEmail=${encodeURIComponent(customerEmail)}&limit=10`
+            : `${this.apiUrl}/cards?limit=20`;
           const listRes = await fetch(queryUrl, {
             headers: { Authorization: `Bearer ${this.secretKey}` },
           });
           if (listRes.ok) {
             const listData = await listRes.json();
-            const cardList = (listData?.data || []).filter((c) => c.active !== false);
+            // Strictly filter out any deleted / retired cards (Payments.lk sets active: false and retiredAt)
+            const cardList = (listData?.data || []).filter((c) => c.active !== false && !c.retiredAt);
 
             console.log(`[Payments.lk Sync] Card vault has ${cardList.length} active card(s). cardWasSaved=${cardWasSaved}`);
 

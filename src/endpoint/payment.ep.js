@@ -216,6 +216,22 @@ exports.handlePaymentsLkWebhook = asyncHandler(async (req, res) => {
           resolvedUserId = Number(parts[1]);
         }
       }
+      if (!resolvedUserId && cardData.paymentId) {
+        try {
+          const strategy = paymentGatewayFactory.getGateway("payments_lk");
+          const pRes = await strategy.verifyPayment(cardData.paymentId);
+          const ref = String(pRes?.payment?.reference || "");
+          const refParts = ref.split("_");
+          if (refParts.length >= 2 && !isNaN(refParts[1])) {
+            resolvedUserId = Number(refParts[1]);
+            console.log(
+              `[Payments.lk Webhook] Resolved userId ${resolvedUserId} from payment reference ${ref}`
+            );
+          }
+        } catch (e) {
+          console.warn("⚠️ [Payments.lk Webhook] Could not resolve userId from paymentId:", e.message);
+        }
+      }
       if (!resolvedUserId && customerEmail) {
         try {
           const userRow = await customerDao.getCustomerByEmailDao(customerEmail);
@@ -264,6 +280,18 @@ exports.handlePaymentsLkWebhook = asyncHandler(async (req, res) => {
           event.userId,
           parseFloat(event.amount)
         );
+      } else if (
+        (event.orderId && (event.orderId.startsWith("SC_") || event.orderId.startsWith("CARDSAVE_"))) ||
+        event.paymentType === "save_card"
+      ) {
+        console.log(
+          `[Payments.lk Webhook] Auto-refunding Rs. 10 card setup verification for payment ${event.paymentId}`
+        );
+        try {
+          await strategy.refundPayment(event.paymentId, null, "Card verification auto-refund");
+        } catch (refErr) {
+          console.warn("⚠️ [Payments.lk Webhook] Auto-refund error:", refErr.message);
+        }
       } else if (event.orderId) {
         console.log(
           `[Payments.lk Webhook] Settling order payment for identifier: ${event.orderId}, payment_id: ${event.paymentId}`
@@ -453,7 +481,8 @@ exports.handlePayHereNotify = asyncHandler(async (req, res) => {
 // =========================================================================
 exports.getSavedCards = asyncHandler(async (req, res) => {
   const userId = req.user.id;
-  const card = await savedCardService.getCard(userId);
+  const userEmail = req.user.email;
+  const card = await savedCardService.getCard(userId, userEmail);
   return res.status(200).json({
     status: true,
     data: card ? [card] : [],
@@ -479,19 +508,19 @@ exports.syncCheckout = asyncHandler(async (req, res) => {
       cardHolder
     );
 
-    // Save the card in MySQL DB (user_saved_cards table)
+    // Confirm card in Payments.lk vault (zero MySQL DB dependency)
     let savedCard = null;
     const cardToken = card?.cardToken || card?.id || card?.token;
     console.log(`[Sync Checkout] Card from strategy: token=${cardToken}, card=${JSON.stringify(card ? { id: card.id, scheme: card.scheme, last4: card.last4 } : null)}`);
     if (card && cardToken) {
       try {
         savedCard = await savedCardService.saveCard(userId, card, checkout);
-        console.log(`[Sync Checkout] Card saved to MySQL: ${savedCard?.scheme} ending ${savedCard?.last4} for user ${userId}`);
+        console.log(`[Sync Checkout] Card active on file in Payments.lk: ${savedCard?.scheme} ending ${savedCard?.last4} for user ${userId}`);
       } catch (saveErr) {
-        console.error("❌ [Sync Checkout] Failed to save card to MySQL:", saveErr.message);
+        console.error("❌ [Sync Checkout] Failed to process card:", saveErr.message);
       }
     } else {
-      console.log(`[Sync Checkout] No card token found — skipping MySQL save.`);
+      console.log(`[Sync Checkout] No card token found in checkout response.`);
     }
 
     // If this was a Clear Balance payment and is completed, auto-update DB credit balance
@@ -526,9 +555,29 @@ exports.syncCheckout = asyncHandler(async (req, res) => {
         );
         await customerDao.updateCreditBalanceDao(userId, parseFloat(amountInLkr));
       }
+    } else if (
+      (isCompleted || payment.status === "succeeded") &&
+      (reference.startsWith("SC_") || reference.startsWith("CARDSAVE_") || String(checkout?.description || "").includes("Save Card"))
+    ) {
+      // Standalone card setup verification: immediately auto-refund the Rs. 10
+      const paymentIdToRefund = payment.id || checkout?.payment?.id;
+      if (paymentIdToRefund) {
+        console.log(
+          `[Sync Checkout] Auto-refunding Rs. 10 card setup verification for payment ${paymentIdToRefund}`
+        );
+        try {
+          await strategy.refundPayment(
+            paymentIdToRefund,
+            payment.amountCents || 1000,
+            "Card verification auto-refund"
+          );
+        } catch (refErr) {
+          console.warn("⚠️ [Sync Checkout] Auto-refund error:", refErr.message);
+        }
+      }
     } else if (isCompleted || payment.status === "succeeded") {
       const orderIdentifier = checkout?.orderId || checkout?.metadata?.orderId || payment?.orderId;
-      if (orderIdentifier) {
+      if (orderIdentifier && !orderIdentifier.startsWith("SC_") && !orderIdentifier.startsWith("CARDSAVE_")) {
         console.log(
           `[Sync Checkout] Auto-marking order paid for ${orderIdentifier} by Rs. ${amountInLkr}`
         );
@@ -577,17 +626,19 @@ exports.saveCardLocally = asyncHandler(async (req, res) => {
 
 exports.deleteSavedCard = asyncHandler(async (req, res) => {
   const userId = req.user.id;
+  const userEmail = req.user.email;
   const { cardId } = req.params;
-  await savedCardService.removeCard(userId, cardId);
+  await savedCardService.removeCard(userId, cardId, userEmail);
   return res.status(200).json({
     status: true,
-    message: "Card removed successfully from database and Payments.lk vault",
+    message: "Card removed successfully from Payments.lk vault",
   });
 });
 
 exports.chargeSavedCard = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
+    const userEmail = req.user.email;
     const {
       cardId,
       amount,
@@ -604,8 +655,9 @@ exports.chargeSavedCard = asyncHandler(async (req, res) => {
     }
 
     // Security check 3: Verify the card belongs to the authenticated user (prevent charging another user's card)
-    const userCard = await savedCardService.getCard(userId);
-    if (!userCard || (userCard.id !== cardId && String(userCard.cardId) !== String(cardId))) {
+    const userCard = await savedCardService.getCard(userId, userEmail);
+    const requestedId = String(cardId || "").trim();
+    if (!userCard || (requestedId !== "current" && userCard.id !== requestedId && String(userCard.cardId) !== requestedId)) {
       return res.status(403).json({
         status: false,
         message: "Unauthorized or invalid payment card",

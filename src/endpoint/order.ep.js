@@ -304,7 +304,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     const {
         cartId, paymentMethod, grandTotal, discountAmount, deliveryCharge,
         creditPaid, moneyPaid, isFinalizeImdt, checkoutDetails,
-        checkoutSessionId,
+        checkoutSessionId, paymentId,
     } = value;
 
     const {
@@ -533,13 +533,44 @@ exports.createOrder = asyncHandler(async (req, res) => {
     const isFullyPaidByCredit =
         effectiveCredit > 0 && effectiveCredit >= calculatedGrandTotal - 0.01;
 
+    // Determine effective payment/checkout identifier
+    const effectivePaymentId = paymentId || (typeof checkoutSessionId === "string" && checkoutSessionId.startsWith("pay_") ? checkoutSessionId : null);
+    const effectiveCheckoutId = (typeof checkoutSessionId === "string" && !checkoutSessionId.startsWith("pay_")) ? checkoutSessionId : null;
+
     if (isFullyPaidByCredit) {
         serverVerifiedIsPaid = 1;
-    } else if (isCardPayment && checkoutSessionId) {
+    } else if (isCardPayment && effectivePaymentId) {
+        // Direct saved card 1-click charge verification
+        try {
+            const strategy = paymentGatewayFactory.getGateway("payments_lk");
+            const { isCompleted, payment } = await strategy.verifyPayment(effectivePaymentId);
+            if (isCompleted) {
+                const paidAmountCents = payment?.amountCents || 0;
+                const paidAmountLkr = paidAmountCents / 100;
+                if (
+                    Math.abs(paidAmountLkr - expectedCardAmount) <= 1.0 ||
+                    Math.abs(paidAmountLkr - calculatedGrandTotal) <= 1.0
+                ) {
+                    serverVerifiedIsPaid = 1;
+                    console.log(`✅ [createOrder] Verified saved card payment ${effectivePaymentId} for user ${userId}: Rs. ${paidAmountLkr}`);
+                } else {
+                    console.warn(
+                        `⚠️ [createOrder] Payment amount mismatch for user ${userId}: ` +
+                        `gateway=${paidAmountLkr}, expectedCard=${expectedCardAmount}, order=${calculatedGrandTotal}. Setting isPaid=0.`
+                    );
+                }
+            } else {
+                console.warn(`⚠️ [createOrder] Gateway reports payment NOT completed for paymentId ${effectivePaymentId}.`);
+            }
+        } catch (verifyErr) {
+            console.warn("⚠️ [createOrder] Direct payment verification failed:", verifyErr.message);
+            serverVerifiedIsPaid = 0;
+        }
+    } else if (isCardPayment && effectiveCheckoutId) {
         try {
             const strategy = paymentGatewayFactory.getGateway("payments_lk");
             const { isCompleted, checkout } = await strategy.verifyAndSyncCheckout(
-                checkoutSessionId,
+                effectiveCheckoutId,
                 userId,
             );
             if (isCompleted) {
@@ -561,7 +592,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
             } else {
                 console.warn(
                     `⚠️ [createOrder] Gateway reports payment NOT completed for user ${userId}, ` +
-                    `checkoutSessionId=${checkoutSessionId}. Order will be created as unpaid.`,
+                    `checkoutSessionId=${effectiveCheckoutId}. Order will be created as unpaid.`,
                 );
             }
         } catch (verifyErr) {
@@ -573,8 +604,8 @@ exports.createOrder = asyncHandler(async (req, res) => {
             );
             serverVerifiedIsPaid = 0;
         }
-    } else if (isCardPayment && !checkoutSessionId && Number(req.body.isPaid) === 1) {
-        // Saved card or direct card charge (already charged server-side)
+    } else if (isCardPayment && !checkoutSessionId && !paymentId && Number(req.body.isPaid) === 1) {
+        // Direct card charge (already charged server-side)
         serverVerifiedIsPaid = 1;
     } else if (!isCardPayment) {
         serverVerifiedIsPaid = 0; // cash is never paid up front; full credit is handled above
@@ -1103,4 +1134,61 @@ exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
         order: result.orders.length > 0 ? result.orders[0] : null,
         orders: result.orders,
     });
+});
+
+/**
+ * POST /api/order/pay-reminder-order
+ * Updates processorders when customer pays via payment reminder:
+ *   - isPaid = 1
+ *   - amount = fullTotal
+ *   - moneyPaid = card amount paid
+ *   - isConfirmed = 1 only for isPackage = 0 OR (isPackage = 1 and isFinalizeImdt = 0); isFinalizeImdt = 1 sets isConfirmed = 0
+ */
+exports.payReminderOrder = asyncHandler(async (req, res) => {
+    const { orderId, processOrderId, amount, moneyPaid, isPaid } = req.body;
+    const userId = req.user?.id || req.user?.userId;
+
+    if (!orderId && !processOrderId) {
+        return res.status(400).json({
+            status: false,
+            message: "orderId or processOrderId is required",
+        });
+    }
+
+    try {
+        const result = await RetailOrderDao.payReminderOrderDao({
+            orderId,
+            processOrderId,
+            amount,
+            moneyPaid,
+            userId,
+        });
+
+        // Best effort "Order Confirmed" SMS if invoice number is present
+        if (result?.invNo) {
+            (async () => {
+                try {
+                    const smsRes = await orderSmsService.sendOrderConfirmedSms({
+                        userId: result.userId || userId,
+                        invNo: result.invNo,
+                    });
+                    console.log(`[payReminderOrder] Confirmed SMS for ${result.invNo}:`, smsRes);
+                } catch (smsErr) {
+                    console.warn("⚠️ [payReminderOrder] Confirmation SMS error:", smsErr.message);
+                }
+            })();
+        }
+
+        return res.status(200).json({
+            status: true,
+            message: result.message,
+            data: result,
+        });
+    } catch (error) {
+        console.error("❌ [payReminderOrder] Error:", error);
+        return res.status(500).json({
+            status: false,
+            message: error.message || "Failed to update reminder order payment",
+        });
+    }
 });
