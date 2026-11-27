@@ -110,6 +110,8 @@ const resolveOrderDetails = async (orderIdOrProcessOrderId, fallbackUserId = nul
 };
 
 // ─── Processing Date Gap Constants ──────────────────────────────────────────
+// Retail orders with only alacarte items: pay-by / confirmation date = delivery - 2 (scheduled date minus 2 days)
+const RETAIL_ALACARTE_GAP_DAYS = 2;
 const RETAIL_GAP_DAYS = 3;
 const WHOLESALE_GAP_DAYS = 2;
 
@@ -118,18 +120,20 @@ const isWholesaleBuyer = (buyerType) =>
 
 /**
  * Processing Date calculation:
- * - Retail: delivery date - 3 days (e.g. delivery 20 -> 17)
+ * - Retail (alacarte only): delivery date - 2 days (scheduled date minus 2 days, e.g. delivery 20 -> 18)
  * - Wholesale: delivery date - 2 days (e.g. delivery 20 -> 18)
  *
  * @param {string|Date} deliveryDate
  * @param {string|null} [buyerType=null]
+ * @param {boolean} [isAlaCarteOnly=false]
  * @returns {string} 'YYYY-MM-DD'
  */
-const calculateProcessingDate = (deliveryDate, buyerType = null) => {
+const calculateProcessingDate = (deliveryDate, buyerType = null, isAlaCarteOnly = false) => {
   const d = toLocalDate(deliveryDate);
-  d.setDate(
-    d.getDate() - (isWholesaleBuyer(buyerType) ? WHOLESALE_GAP_DAYS : RETAIL_GAP_DAYS)
-  );
+  const gap = isWholesaleBuyer(buyerType)
+    ? WHOLESALE_GAP_DAYS
+    : (isAlaCarteOnly ? RETAIL_ALACARTE_GAP_DAYS : RETAIL_GAP_DAYS);
+  d.setDate(d.getDate() - gap);
   return formatYmd(clampToToday(d));
 };
 
@@ -199,9 +203,9 @@ const sendOrderConfirmedSms = async ({ userId, phone, invNo }) => {
  * @param {boolean} [params.isCardPayment=false]
  * @returns {Promise<{success: boolean, referenceId?: string, error?: string}>}
  */
-const sendOrderPlacedAfterEpsdSms = async ({ userId, phone, deliveryDate, isCardPayment = false, buyerType = null }) => {
+const sendOrderPlacedAfterEpsdSms = async ({ userId, phone, deliveryDate, isCardPayment = false, buyerType = null, isAlaCarteOnly = false }) => {
   try {
-    const processingDateStr = calculateProcessingDate(deliveryDate, buyerType);
+    const processingDateStr = calculateProcessingDate(deliveryDate, buyerType, isAlaCarteOnly);
     const resolvedPhone = await resolveCustomerPhone(userId, phone);
 
     if (!resolvedPhone) {
@@ -257,9 +261,9 @@ const sendOrderPlacedPayToConfirmSms = async ({ userId, phone, deliveryDate }) =
  *
  * Processing Date = delivery date - 3 (18 -> 15)
  */
-const sendOrderPlacedAfterEpsdCreditSms = async ({ userId, phone, deliveryDate, buyerType = null }) => {
+const sendOrderPlacedAfterEpsdCreditSms = async ({ userId, phone, deliveryDate, buyerType = null, isAlaCarteOnly = false }) => {
   try {
-    const processingDateStr = calculateProcessingDate(deliveryDate, buyerType);
+    const processingDateStr = calculateProcessingDate(deliveryDate, buyerType, isAlaCarteOnly);
     const resolvedPhone = await resolveCustomerPhone(userId, phone);
 
     if (!resolvedPhone) {

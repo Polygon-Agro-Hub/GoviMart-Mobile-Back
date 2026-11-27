@@ -953,15 +953,16 @@ exports.createOrder = asyncHandler(async (req, res) => {
                                 });
                             } else if (isAlaCarteOrFinalizedPackage && isFullyPaidByCredit) {
                                 // Delivery after EPSD, a la carte / finalized package, fully paid with credit
-                                // Shows delivery - 3 (18 -> 15) for retail, delivery - 2 (18 -> 16) for wholesale
+                                // Shows delivery - 2 (scheduled date minus 2 days)
                                 await orderSmsService.sendOrderPlacedAfterEpsdCreditSms({
                                     userId,
                                     phone: resolvedPhone1,
                                     deliveryDate: scheduledDateStr,
                                     buyerType,
+                                    isAlaCarteOnly: !hasPackages,
                                 });
                             } else {
-                                // Delivery after earliest date (shows delivery - 3, 18 -> 15 for retail, delivery - 2, 18 -> 16 for wholesale)
+                                // Delivery after earliest date (shows delivery - 2 for retail alacarte, delivery - 2 for wholesale)
                                 const isCard = String(paymentMethod).toLowerCase() === "card";
                                 await orderSmsService.sendOrderPlacedAfterEpsdSms({
                                     userId,
@@ -969,6 +970,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
                                     deliveryDate: scheduledDateStr,
                                     isCardPayment: isCard,
                                     buyerType,
+                                    isAlaCarteOnly: !hasPackages,
                                 });
                             }
                         } catch (smsErr) {
