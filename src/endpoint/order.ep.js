@@ -1099,10 +1099,14 @@ const getColomboDatePlus = (days) => {
 };
 
 /**
- * GET /api/order/schedule-orders/:sheduleDate?
- * Default sheduleDate:
- *   - Wholesale: today + 2 days (2-day gap: today 12 -> 14)
- *   - Retail:    today + 3 days (3-day gap: today 12 -> 15)
+ * GET /api/order/schedule-orders
+ *
+ * Retail:
+ *   - Ala carte (isPackage = 0)                       -> today + 2 days
+ *   - Package + imdt (isPackage = 1, isFinalizeImdt=1) -> today + 3 days
+ * Wholesale: both types use today + 2 days.
+ *
+ * Add ?exact=1&sheduleDate=YYYY-MM-DD to fetch one specific day for both types.
  */
 exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
     const userId = req.user?.id || req.user?.userId;
@@ -1119,16 +1123,31 @@ exports.getOrdersForSheduleDateEndpoint = asyncHandler(async (req, res) => {
         }
     }
 
-    const isWholesale = String(buyerType || "").trim().toLowerCase() === "wholesale";
-    const defaultGap = isWholesale ? 2 : 3;
-    const sheduleDate =
-        req.query.sheduleDate || req.params.sheduleDate || getColomboDatePlus(defaultGap);
+    const isWholesale =
+        String(buyerType || "").trim().toLowerCase() === "wholesale";
 
-    const result = await RetailOrderDao.getOrdersForSheduleDate(sheduleDate, userId);
+    const alaCarteGap = 2;
+    const packageGap = isWholesale ? 2 : 3;
+
+    // The client date is ignored unless exact=1 is sent
+    const explicitDate = req.query.sheduleDate || req.params.sheduleDate;
+    const useExact = String(req.query.exact || "") === "1" && !!explicitDate;
+
+    const alaCarteDate = useExact ? explicitDate : getColomboDatePlus(alaCarteGap);
+    const packageDate = useExact ? explicitDate : getColomboDatePlus(packageGap);
+
+    console.log("[schedule-orders]", { userId, isWholesale, alaCarteDate, packageDate });
+
+    const result = await RetailOrderDao.getOrdersForSheduleDate(
+        alaCarteDate,
+        userId,
+        packageDate,
+    );
 
     return res.status(200).json({
         status: true,
-        sheduleDate: result.sheduleDate,
+        sheduleDate: result.sheduleDate,          // ala carte date
+        packageSheduleDate: result.packageDate,   // package date
         orderDate: result.orderDate,
         count: result.count,
         order: result.orders.length > 0 ? result.orders[0] : null,
