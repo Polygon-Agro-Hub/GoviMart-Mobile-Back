@@ -2012,18 +2012,21 @@ exports.markOrderPaidDao = async (identifier, arg1 = null, arg2 = null) => {
 };
 
 /**
- * Fetch orders for a specific schedule date according to 2-day gap & order window rules.
- *
- * Rules:
- *  - DATE(po.sheduleDate) = sheduleDate
- *  - po.status = 'Ordered'
- *  - both types: ala carte (o.isPackage = 0) OR package + imdt (o.isPackage = 1 AND o.isFinalizeImdt = 1)
- *  - placed 2 days before the schedule date, 8AM to 9PM
+ * Fetch orders for the schedule dates.
+ *  - Ala carte (o.isPackage = 0)                        -> sheduleDate      (today + 2)
+ *  - Package + imdt (o.isPackage = 1, isFinalizeImdt=1) -> packageDate      (today + 3)
  */
-async function getOrdersForSheduleDate(sheduleDate, userId = null) {
+async function getOrdersForSheduleDate(
+    sheduleDate,
+    userId = null,
+    packageDate = null,
+) {
     const promiseDb = db.collectionofficer.promise();
+    const alaCarteDate = sheduleDate;
+    const pkgDate = packageDate || sheduleDate;
+
     let userCondition = "";
-    const params = [sheduleDate];
+    const params = [alaCarteDate, pkgDate];
     if (userId) {
         userCondition = "AND o.userId = ? AND COALESCE(po.isFinalized, 0) = 0";
         params.push(userId);
@@ -2051,15 +2054,17 @@ async function getOrdersForSheduleDate(sheduleDate, userId = null) {
             END AS orderType
         FROM collection_officer.processorders po
         JOIN collection_officer.orders o ON o.id = po.orderId
-        WHERE DATE(po.sheduleDate) = ?
-            AND po.status = 'Ordered'
+        WHERE po.status = 'Ordered'
             AND COALESCE(po.isConfirmed, 0) = 0
             AND (
-                (o.isPackage = 1 AND o.isFinalizeImdt = 1)
-                OR (o.isPackage = 0 AND o.isFinalizeImdt = 0)
+                (o.isPackage = 0
+                    AND DATE_FORMAT(po.sheduleDate, '%Y-%m-%d') = ?)
+                OR
+                (o.isPackage = 1 AND o.isFinalizeImdt = 1
+                    AND DATE_FORMAT(po.sheduleDate, '%Y-%m-%d') = ?)
             )
             ${userCondition}
-        ORDER BY po.id ASC
+        ORDER BY po.sheduleDate ASC, po.id ASC
         `,
         params,
     );
@@ -2067,17 +2072,20 @@ async function getOrdersForSheduleDate(sheduleDate, userId = null) {
     const resolvedOrderDate =
         rows.length > 0 && rows[0].createdAt
             ? new Date(rows[0].createdAt).toISOString().slice(0, 10)
-            : new Date(new Date(sheduleDate).getTime() - 3 * 86400000)
-                .toISOString()
-                .slice(0, 10);
+            : new Date(new Date(alaCarteDate).getTime() - 2 * 86400000)
+                  .toISOString()
+                  .slice(0, 10);
 
     return {
-        sheduleDate,
+        sheduleDate: alaCarteDate,
+        packageDate: pkgDate,
         orderDate: resolvedOrderDate,
         count: rows.length,
         orders: rows,
     };
 }
+
+exports.getOrdersForSheduleDate = getOrdersForSheduleDate;
 
 /**
  * Fetch earliest upcoming unfinalized and unconfirmed scheduled date for a user's ordered process order.
